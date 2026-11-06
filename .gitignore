@@ -1,0 +1,12 @@
+node_modules/
+.npm-cache/
+dist/
+.env
+.env.*
+!.env.example
+*.crt
+*.pem
+*.key
+*.pfx
+*.p12
+coverage/

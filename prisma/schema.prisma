@@ -1,0 +1,180 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ReferenceKind {
+  GRUPO
+  MARCA
+  COR
+  DEPARTAMENTO
+}
+
+enum MovementKind {
+  INITIAL
+  PURCHASE
+  OUT
+  ADJUSTMENT
+  KIT_OUT
+  INVENTORY
+}
+
+model Profile {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  permissions String[]
+  users       User[]
+}
+
+model User {
+  id                String     @id @default(uuid())
+  name              String
+  email             String     @unique
+  passwordHash      String?
+  activationHash    String?
+  activationExpires DateTime?
+  active            Boolean    @default(true)
+  profileId         String
+  profile           Profile    @relation(fields: [profileId], references: [id])
+  sessions          Session[]
+  movements         Movement[]
+  inventoryBatches  InventoryBatch[]
+  imports           InitialImport[]
+}
+
+model Session {
+  tokenHash String   @id
+  expiresAt DateTime
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([expiresAt])
+}
+
+model Reference {
+  id          String        @id @default(uuid())
+  kind        ReferenceKind
+  name        String
+  groups      Product[]     @relation("ProductGroup")
+  brands      Product[]     @relation("ProductBrand")
+  colors      Product[]     @relation("ProductColor")
+  departments Product[]     @relation("ProductDepartment")
+  @@unique([kind, name])
+}
+
+model UnitFamily {
+  id    String @id @default(uuid())
+  name  String @unique
+  units Unit[]
+}
+
+model Unit {
+  id           String         @id @default(uuid())
+  symbol       String         @unique
+  factor       Decimal        @db.Decimal(24, 12)
+  isBase       Boolean        @default(false)
+  familyId     String
+  family       UnitFamily     @relation(fields: [familyId], references: [id])
+  products     Product[]
+}
+
+model Product {
+  id            String          @id @default(uuid())
+  sku           String          @unique
+  name          String
+  unitId        String
+  unit          Unit            @relation(fields: [unitId], references: [id])
+  groupId       String?
+  group         Reference?      @relation("ProductGroup", fields: [groupId], references: [id])
+  brandId       String?
+  brand         Reference?      @relation("ProductBrand", fields: [brandId], references: [id])
+  colorId       String?
+  color         Reference?      @relation("ProductColor", fields: [colorId], references: [id])
+  departmentId  String?
+  department    Reference?      @relation("ProductDepartment", fields: [departmentId], references: [id])
+  quantity      Decimal         @default(0) @db.Decimal(30, 12)
+  currentCost   Decimal?        @db.Decimal(30, 12)
+  revision      Int             @default(0)
+  movements     Movement[]
+  kitComponents KitComponent[]
+  inventoryRows InventoryRow[]
+}
+
+model Movement {
+  id        String       @id @default(uuid())
+  kind      MovementKind
+  quantity  Decimal      @db.Decimal(30, 12)
+  unitCost  Decimal?     @db.Decimal(30, 12)
+  createdAt DateTime     @default(now())
+  reason    String
+  productId String
+  product   Product      @relation(fields: [productId], references: [id])
+  userId    String
+  user      User         @relation(fields: [userId], references: [id])
+  kitId     String?
+  kit       Kit?         @relation(fields: [kitId], references: [id])
+  @@index([productId, createdAt])
+}
+
+model Kit {
+  id         String         @id @default(uuid())
+  sku        String         @unique
+  name       String
+  components KitComponent[]
+  movements  Movement[]
+}
+
+model KitComponent {
+  kitId     String
+  kit       Kit     @relation(fields: [kitId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Decimal @db.Decimal(30, 12)
+  @@id([kitId, productId])
+}
+
+model InventoryBatch {
+  id          String         @id @default(uuid())
+  createdAt   DateTime       @default(now())
+  confirmedAt DateTime?
+  userId      String
+  user        User           @relation(fields: [userId], references: [id])
+  rows        InventoryRow[]
+}
+
+model InventoryRow {
+  batchId   String
+  batch     InventoryBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product        @relation(fields: [productId], references: [id])
+  expected  Decimal        @db.Decimal(30, 12)
+  counted   Decimal        @db.Decimal(30, 12)
+  revision  Int
+  @@id([batchId, productId])
+}
+
+model InitialImport {
+  id          String    @id @default(uuid())
+  createdAt   DateTime  @default(now())
+  confirmedAt DateTime?
+  data        Json
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+}
+
+model BankBalance {
+  provider  String   @id
+  available Decimal  @db.Decimal(24, 2)
+  updatedAt DateTime
+}
+
+model BankDay {
+  provider  String
+  date      String
+  entries   Json
+  updatedAt DateTime
+  @@id([provider, date])
+}

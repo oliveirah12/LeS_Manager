@@ -1,0 +1,18 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: les
+      POSTGRES_PASSWORD: les_dev
+      POSTGRES_DB: les_manager
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - les_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U les -d les_manager"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+volumes:
+  les_db:
