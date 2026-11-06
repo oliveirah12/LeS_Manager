@@ -23,9 +23,11 @@ Para desenvolvimento com recarregamento automático, execute `npm run dev:api` e
 
 ## Instalar o aplicativo
 
-A instalação está disponível no **build de produção** em `localhost` ou em um endereço **HTTPS**. Em outro dispositivo, acesse o endereço HTTPS da empresa. Use **Instalar aplicativo** no aviso do canto inferior direito ou a opção de instalação do navegador. No Safari do iPhone, escolha **Compartilhar → Adicionar à Tela de Início**. O app instalado abre em janela própria. As operações precisam de conexão com a API. O cache offline contém somente a página pública de aviso.
+A instalação está disponível no **build de produção** em `localhost` ou em um endereço **HTTPS**. Em outro dispositivo, acesse o endereço HTTPS da empresa. Use **Instalar aplicativo** no aviso do canto inferior direito ou a opção de instalação do navegador. Ao dispensar o aviso, o botão discreto **Instalar app** permanece disponível enquanto o app estiver disponível para instalação. No Safari do iPhone, escolha **Compartilhar → Adicionar à Tela de Início**. O app instalado abre em janela própria. As operações precisam de conexão com a API. O cache offline contém somente a página pública de aviso.
 
 Abra o menu da conta no cabeçalho para alternar entre os temas claro e escuro ou acessar as configurações pessoais. Administradores também encontram **Minha conta** no menu **Acessos**. A troca de senha encerra todas as sessões da conta. O menu lateral memoriza se está aberto ou fechado neste navegador.
+
+**Início** mostra os atalhos autorizados pelo perfil. Clique no logo para voltar a essa tela. **Catálogo** reúne as consultas de produtos e kits. Para incluir ou editar esses itens, abra **Cadastros → Produtos** ou **Cadastros → Kits** e use os formulários em modal.
 
 Para hospedar o painel, mantenha frontend e API na mesma origem. Configure HTTPS no proxy, `COOKIE_SECURE=true` e um endereço de escuta apropriado em `HOST`. Restrinja o acesso ao banco e faça backup da base antes de atualizar versões.
 
@@ -36,11 +38,17 @@ Para hospedar o painel, mantenha frontend e API na mesma origem. Configure HTTPS
 3. Gere a prévia e confirme. Registre uma saída do item por peso em `g` e confira quantidade, custo por grama e usuário no histórico.
 4. Use a contagem em lote ou o segundo modelo XLSX para inventário. Confirme somente depois de conferir as diferenças. Uma movimentação posterior à prévia exige uma nova conferência.
 
-## Configurar o Inter Empresas
+## Financeiro e conciliação
 
 Crie uma integração no Inter com permissão de consulta de extrato. Comece com `INTER_ENV=sandbox` e preencha as variáveis comentadas em `.env.example`. Aponte para os arquivos PEM do certificado e da chave privada fora do repositório. `INTER_ACCOUNT` é opcional quando a integração identifica uma única conta. Reinicie a API e use **Financeiro → Extrato → Atualizar saldo e extrato do período**. O sandbox usa dados fictícios. [Portal do Inter Empresas](https://developers.inter.co/sandbox)
 
 A atualização consulta todas as páginas antes de gravar. Cada dia completo substitui a versão anterior daquele dia em uma transação única. Se o banco falhar durante a consulta, o painel mantém o último saldo e extrato gravados.
+
+O Inter é o provedor disponível nesta versão. Para integrar outro banco, implemente o contrato `BankReader` e registre o adaptador em `api/finance/providers.ts`. Saldo, extrato e conciliações são separados por provedor. Em **Financeiro → Conciliação**, um operador pode conferir um lançamento e informar uma referência interna opcional. Lançamentos sem identificador único ficam disponíveis para consulta. As reimportações preservam a conferência dos lançamentos identificados.
+
+## Auditoria
+
+O menu **Auditoria** está disponível a administradores. O histórico começa com a ativação do recurso e registra as operações da API, incluindo consultas, alterações e tentativas negadas. Cada evento mostra o resultado, o usuário identificado e o ID do registro quando disponível. Senhas, códigos de acesso e conteúdo dos formulários ficam fora do histórico.
 
 ## Testes
 

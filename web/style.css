@@ -58,6 +58,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .header-inner { min-height: var(--header-height); padding: .55rem clamp(.75rem, 2vw, 1.5rem); display: flex; align-items: center; justify-content: space-between; gap: .65rem; }
 .header-start, .brand { display: flex; align-items: center; gap: .65rem; }
 .brand { font-size: 1.15rem; white-space: nowrap; }
+.brand:link, .brand:visited { color: inherit; text-decoration: none; }
 .brand img, .intro img, .install-heading img { border-radius: .55rem; object-fit: cover; }
 .brand img { border: 1px solid #ffffff70; }
 .sidebar-toggle { display: grid; place-items: center; padding: .5rem; background: transparent; border-color: #ffffff60; }
@@ -149,11 +150,54 @@ th { font-size: .85rem; background: var(--surface-soft); white-space: nowrap; }
 .preview { background: var(--surface-soft); border: 1px solid var(--line); }
 .download { display: inline-block; color: var(--accent-ink); font-weight: 700; }
 .balance { font-size: 2rem; font-weight: 750; }
+.home-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 1rem; align-items: start; }
+.home-card { margin: 0; }
+.shortcuts { display: grid; gap: .45rem; margin-top: .75rem; }
+.shortcuts button { display: flex; align-items: center; justify-content: space-between; gap: 1rem; text-align: left; }
+.provider-label { color: var(--muted); margin: -.2rem 0 .9rem; }
+.provider-select { max-width: 18rem; margin-bottom: 1rem; }
+.reconciliation-status { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.table-wrap code { white-space: normal; overflow-wrap: anywhere; }
+.page-heading, .section, .table-wrap, .preview, .loading { animation: appear var(--motion) ease-out both; }
+.loading { display: flex; align-items: center; gap: .55rem; color: var(--muted); }
+.spinner {
+  display: inline-block; width: .95em; height: .95em; border: 2px solid currentColor;
+  border-right-color: transparent; border-radius: 50%; vertical-align: -.12em; animation: spin 650ms linear infinite;
+}
+button .spinner { margin-right: .45em; }
+@keyframes spin { to { transform: rotate(360deg); } }
+select {
+  appearance: none; padding-right: 2rem;
+  background-image: linear-gradient(45deg, transparent 50%, var(--accent-ink) 50%),
+    linear-gradient(135deg, var(--accent-ink) 50%, transparent 50%);
+  background-position: calc(100% - 1rem) 50%, calc(100% - .65rem) 50%;
+  background-size: .35rem .35rem; background-repeat: no-repeat;
+}
+select option { color: var(--text); background: var(--surface); }
+.file-field { flex: 1 1 100%; }
+.file-field input[type='file'] { background: var(--surface-soft); border-style: dashed; padding: .6rem; overflow: hidden; }
+.file-field input::file-selector-button {
+  font: inherit; color: var(--accent-ink); background: var(--accent-soft); font-weight: 650;
+  border: 1px solid var(--line); border-radius: .45rem; margin-right: .6rem; padding: .35rem .6rem; cursor: pointer;
+}
+.modal {
+  color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 1rem; box-shadow: var(--shadow);
+  width: min(52rem, calc(100vw - 1.25rem)); max-width: none; max-height: calc(100dvh - 1.25rem); padding: 0; overflow: auto;
+}
+.modal[open] { animation: appear var(--motion) ease-out both; }
+.modal::backdrop { background: #23141b90; }
+.modal-heading { display: flex; justify-content: space-between; align-items: start; gap: 1rem; padding: 1rem 1.15rem; border-bottom: 1px solid var(--line); }
+.modal-heading h2 { margin: 0; }
+.modal-content { padding: .75rem 1.15rem 1.15rem; overflow-wrap: anywhere; }
+.modal-content fieldset > label:not(.check) { flex: 1 1 12rem; }
+.modal-content fieldset > p { flex-basis: 100%; margin: .25rem 0; }
 .install-toast {
   position: fixed; right: 1rem; bottom: max(1rem, env(safe-area-inset-bottom)); z-index: 3;
   width: min(20rem, calc(100vw - 2rem)); max-height: calc(100dvh - var(--header-height) - 2rem); overflow-y: auto;
   animation: appear var(--motion) ease-out both;
 }
+.install-quiet { position: fixed; right: 1rem; bottom: max(1rem, env(safe-area-inset-bottom)); z-index: 3; }
+.install-quiet button { font-size: .8rem; padding: .33rem .6rem; }
 @keyframes appear { from { opacity: 0; transform: translateY(.35rem); } to { opacity: 1; transform: translateY(0); } }
 .install-heading { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: .6rem; margin-bottom: .65rem; }
 .install-heading p { color: var(--muted); font-size: .88rem; margin: .1rem 0 0; }
@@ -168,11 +212,13 @@ th { font-size: .85rem; background: var(--surface-soft); white-space: nowrap; }
     transition: opacity var(--motion) ease, visibility 0s linear var(--motion);
   }
   .sidebar-open .sidebar-backdrop { opacity: 1; visibility: visible; transition-delay: 0s; }
-  .sidebar-open + .install-toast { visibility: hidden; }
+  .sidebar-open + :is(.install-toast, .install-quiet) { visibility: hidden; }
   .signin { grid-template-columns: 1fr; gap: .8rem; }
+  .signin + :is(.install-toast, .install-quiet) { position: static; margin: 0 1rem 1rem auto; width: fit-content; max-width: calc(100vw - 2rem); }
+  .dashboard:has(+ .install-toast) .content { padding-bottom: 10rem; }
 }
 @media (max-width: 360px) { .account-label { display: none; } }
 @media (prefers-reduced-motion: reduce) {
   :root { --motion: 0ms; }
-  .account-menu[open] .account-popover, .install-toast { animation: none; }
+  .account-menu[open] .account-popover, .install-toast, .modal[open], .page-heading, .section, .table-wrap, .preview, .loading, .spinner { animation: none; }
 }

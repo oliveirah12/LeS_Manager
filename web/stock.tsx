@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  api, baseUnit, brl, dateTime, decimal, Field, fields, Form, message, Product, productOptions, Section, Select,
+  api, baseUnit, brl, dateTime, decimal, Field, fields, FileField, Form, Loading, message, Modal, ModalForm, Product, productOptions, Section, Select,
   StockView, Table, unitOptions, useData,
 } from './ui';
 
@@ -16,24 +16,31 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
   const stock = useData<StockView>('stock');
   const history = useData<History[]>('stock/movements');
   const [notice, setNotice] = useState('');
+  const [dialog, setDialog] = useState<'movement' | 'kit' | 'inventory' | 'initial'>();
   const data = stock.data;
-  if (!data) return message(stock.error) || <p className="empty">Carregando estoque…</p>;
+  if (!data) return message(stock.error) || <Loading label="Carregando estoque…" />;
   async function saved(text: string) {
     setNotice(text);
+    setDialog(undefined);
     await Promise.all([stock.reload(), history.reload()]);
   }
 
   return <>
     {message(stock.error)}{notice && <p className="success" role="status">{notice}</p>}
     <Section title="Saldos de estoque" subtitle="Quantidades e custos exibidos na unidade base de cada família de medida.">
+      <div className="actions">
+        {edit && <button type="button" onClick={() => setDialog('movement')}>Registrar movimentação</button>}
+        {edit && <button type="button" className="secondary" onClick={() => setDialog('inventory')}>Inventário físico</button>}
+        {importInitial && <button type="button" className="secondary" onClick={() => setDialog('initial')}>Carga inicial por planilha</button>}
+      </div>
       <Table columns={['SKU', 'Produto', 'Saldo', 'Último custo por unidade base']} rows={data.products.map(item => [
         item.sku, item.name, decimal(item.quantity) + ' ' + baseUnit(item).symbol, brl(item.currentCost),
       ])} />
-      {edit && <details open><summary>Registrar movimentação</summary><MovementForm data={data} saved={saved} /></details>}
     </Section>
     <Section title="Disponibilidade de kits">
       <Table columns={['SKU', 'Kit', 'Disponível']} rows={data.kits.map(item => [item.sku, item.name, decimal(item.available)])} />
-      {edit && data.kits.length > 0 && <Form label="Dar saída em kit" reset action={async values => {
+      {edit && data.kits.length > 0 && <button type="button" onClick={() => setDialog('kit')}>Dar saída em kit</button>}
+      {edit && dialog === 'kit' && <ModalForm title="Saída de kit" label="Confirmar saída" close={() => setDialog(undefined)} action={async values => {
         const { kit, quantity, reason } = fields(values);
         await api('stock/kits/' + kit + '/out', { quantity, reason });
         await saved('Saída do kit registrada.');
@@ -41,16 +48,18 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
         <Select name="kit" label="Kit" options={data.kits} />
         <Field name="quantity" label="Quantidade de kits" />
         <Field name="reason" label="Motivo" />
-      </Form>}
+      </ModalForm>}
     </Section>
-    {edit && <Inventory data={data} saved={saved} />}
-    {importInitial && <InitialImport saved={saved} />}
+    {edit && dialog === 'movement' && <Modal title="Registrar movimentação" close={() => setDialog(undefined)}><MovementForm data={data} saved={saved} /></Modal>}
+    {edit && dialog === 'inventory' && <Modal title="Inventário físico" close={() => setDialog(undefined)}><Inventory data={data} saved={saved} /></Modal>}
+    {importInitial && dialog === 'initial' && <Modal title="Carga inicial por planilha" close={() => setDialog(undefined)}><InitialImport saved={saved} /></Modal>}
     <Section title="Histórico" subtitle="Últimas 200 movimentações.">
       {message(history.error)}
-      <Table columns={['Data', 'SKU', 'Movimento', 'Quantidade', 'Custo na data', 'Usuário', 'Motivo']} rows={(history.data ?? []).map(item => [
+      {history.loading && <Loading label="Carregando movimentações…" />}
+      {history.data && <Table columns={['Data', 'SKU', 'Movimento', 'Quantidade', 'Custo na data', 'Usuário', 'Motivo']} rows={history.data.map(item => [
         dateTime(item.createdAt), item.product.sku, labels[item.kind], decimal(item.quantity) + ' ' + baseUnit(item.product).symbol,
         brl(item.unitCost), item.user.name, item.reason + (item.kit ? ' · ' + item.kit.sku : ''),
-      ])} />
+      ])} />}
     </Section>
   </>;
 }
@@ -74,22 +83,30 @@ function MovementForm({ data, saved }: { data: StockView; saved: (message: strin
   </Form>;
 }
 
-function Upload({ action }: { action: (file: FormData) => Promise<void> }) {
-  return <Form label="Gerar prévia da planilha" action={action}>
-    <label>Arquivo Excel<input type="file" name="file" accept=".xlsx" required /></label>
+function Upload({ action, disabled }: { action: (file: FormData) => Promise<void>; disabled?: boolean }) {
+  return <Form label="Gerar prévia da planilha" action={action} disabled={disabled}>
+    <FileField name="file" label="Arquivo Excel" accept=".xlsx" />
   </Form>;
 }
 
 function Inventory({ data, saved }: { data: StockView; saved: (text: string) => Promise<void> }) {
   const [items, setItems] = useState<{ key: number; sku: string }[]>([{ key: 0, sku: '' }]);
   const [preview, setPreview] = useState<CountPreview>();
-  return <Section title="Inventário físico" subtitle="Informe apenas os SKUs contados. Confira as diferenças antes de aplicar o inventário.">
+  const [previewing, setPreviewing] = useState(false);
+  async function generate(path: string, payload: unknown) {
+    setPreview(undefined);
+    setPreviewing(true);
+    try { setPreview(await api<CountPreview>(path, payload)); }
+    finally { setPreviewing(false); }
+  }
+  return <>
+    <p className="muted">Informe apenas os SKUs contados. Confira as diferenças antes de aplicar o inventário.</p>
     <div className="columns">
-      <Form label="Conferir contagem manual" action={async values => {
+      <Form label="Conferir contagem manual" disabled={previewing} action={async values => {
         const input = fields(values);
-        setPreview(await api<CountPreview>('stock/inventory/preview', {
+        await generate('stock/inventory/preview', {
           rows: items.map(({ key }) => ({ sku: input['sku' + key], quantity: input['qty' + key], unit: input['unit' + key] })),
-        }));
+        });
       }}>
         {items.map(({ key, sku }, index) => {
           const product = data.products.find(item => item.sku === sku);
@@ -109,7 +126,7 @@ function Inventory({ data, saved }: { data: StockView; saved: (text: string) => 
       </Form>
       <div>
         <a className="download" href="/api/stock/inventory/template">Baixar modelo de inventário</a>
-        <Upload action={async file => setPreview(await api<CountPreview>('stock/inventory/upload', file))} />
+        <Upload disabled={previewing} action={file => generate('stock/inventory/upload', file)} />
       </div>
     </div>
     {preview && <div className="preview">
@@ -121,14 +138,18 @@ function Inventory({ data, saved }: { data: StockView; saved: (text: string) => 
         await api('stock/inventory/' + preview.id + '/confirm', {}); setPreview(undefined); await saved('Inventário aplicado.');
       }}><button type="button" className="secondary" onClick={() => setPreview(undefined)}>Descartar prévia</button></Form>
     </div>}
-  </Section>;
+  </>;
 }
 
 function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
   const [preview, setPreview] = useState<InitialPreview>();
-  return <Section title="Carga inicial por planilha" subtitle="Use SKUs novos, unidades e classificações já cadastradas. O custo é por unidade informada.">
+  return <>
+    <p className="muted">Use SKUs novos, unidades e classificações já cadastradas. O custo é por unidade informada.</p>
     <a className="download" href="/api/stock/initial/template">Baixar modelo de carga inicial</a>
-    <Upload action={async file => setPreview(await api<InitialPreview>('stock/initial/preview', file))} />
+    <Upload action={async file => {
+      setPreview(undefined);
+      setPreview(await api<InitialPreview>('stock/initial/preview', file));
+    }} />
     {preview && <div className="preview">
       <h3>Prévia da carga inicial</h3>
       <Table columns={['SKU', 'Produto', 'Saldo informado', 'Custo']} rows={preview.rows.map(row => [
@@ -138,5 +159,5 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
         await api('stock/initial/' + preview.id + '/confirm', {}); setPreview(undefined); await saved('Produtos e saldos iniciais cadastrados.');
       }}><button type="button" className="secondary" onClick={() => setPreview(undefined)}>Descartar prévia</button></Form>
     </div>}
-  </Section>;
+  </>;
 }

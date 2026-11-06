@@ -2,26 +2,30 @@
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AccountSettings, Administration, SignIn } from './access';
+import { Audit } from './audit';
 import { Catalog } from './catalog';
 import { Finance } from './finance';
 import { InstallApp } from './pwa';
 import { referenceKinds, Registrations } from './registrations';
 import { Stock } from './stock';
-import { accessible, api, Form, Identity, Section } from './ui';
+import { accessible, api, Identity, Loading, ModalForm } from './ui';
 import './style.css';
 
 const groups = [
+  { id: 'home', label: 'Início', permission: null, pages: [{ id: 'home', label: 'Início' }] },
   { id: 'catalog', label: 'Catálogo', permission: 'catalog:view', pages: [
     { id: 'products', label: 'Produtos' }, { id: 'kits', label: 'Kits' },
   ] },
   { id: 'registrations', label: 'Cadastros', permission: 'registrations:view', pages: [
+    { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' },
     ...referenceKinds.map(({ id, label }) => ({ id, label })),
     { id: 'families', label: 'Famílias de medida' }, { id: 'units', label: 'Unidades de medida' },
   ] },
   { id: 'stock', label: 'Estoque', permission: 'stock:view', pages: [{ id: 'stock', label: 'Estoque' }] },
   { id: 'finance', label: 'Financeiro', permission: 'finance:view', pages: [
-    { id: 'balance', label: 'Saldo' }, { id: 'statement', label: 'Extrato' },
+    { id: 'balance', label: 'Saldo' }, { id: 'statement', label: 'Extrato' }, { id: 'reconciliation', label: 'Conciliação' },
   ] },
+  { id: 'audit', label: 'Auditoria', permission: 'admin', pages: [{ id: 'audit', label: 'Auditoria' }] },
   { id: 'admin', label: 'Acessos', permission: 'admin', pages: [
     { id: 'admin', label: 'Usuários e perfis' }, { id: 'admin-account', label: 'Minha conta' },
   ] },
@@ -30,12 +34,16 @@ type Group = typeof groups[number];
 type Page = Group['pages'][number]['id'] | 'account';
 
 const pageDescriptions: Record<Page, string> = {
-  products: 'Consulte e organize os itens do catálogo.', kits: 'Monte kits com os produtos cadastrados.',
+  home: 'Acesse os atalhos dos módulos disponíveis para o seu perfil.',
+  products: 'Consulte os itens do catálogo.', kits: 'Consulte os kits e suas composições.',
+  'register-products': 'Cadastre ou edite produtos.', 'register-kits': 'Cadastre ou edite a composição de kits.',
   GRUPO: 'Organize os produtos por grupos.', MARCA: 'Gerencie as marcas do catálogo.',
   COR: 'Mantenha a lista de cores disponíveis.', DEPARTAMENTO: 'Organize os departamentos do catálogo.',
   families: 'Configure as famílias e suas unidades base.', units: 'Consulte as unidades e os fatores de conversão.',
   stock: 'Acompanhe saldos, movimentações, inventário e cargas iniciais.',
-  balance: 'Consulte o saldo da conta Inter Empresas.', statement: 'Consulte as transações por período.',
+  balance: 'Consulte o saldo da conta bancária.', statement: 'Consulte as transações por período.',
+  reconciliation: 'Confira e concilie lançamentos importados por provedor.',
+  audit: 'Acompanhe as operações e os acessos ao sistema.',
   admin: 'Gerencie os usuários e os perfis de acesso.', 'admin-account': 'Atualize seus dados e sua senha.',
   account: 'Atualize seus dados e sua senha.',
 };
@@ -71,6 +79,7 @@ function App() {
   const [selected, setSelected] = useState<Page>();
   const [expanded, setExpanded] = useState<Partial<Record<Group['id'], boolean>>>({});
   const [notice, setNotice] = useState('');
+  const [logout, setLogout] = useState(false);
   const [theme, setTheme] = useState(() => readPreference('theme') ??
     (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
   const sidebar = useSidebar();
@@ -85,7 +94,13 @@ function App() {
   useEffect(() => { void signIn().catch(() => setIdentity(null)); }, []);
   const can = (permission: string) => accessible(identity?.permissions ?? [], permission);
   const admin = can('admin');
-  const allowed = groups.filter(group => can(group.permission));
+  const allowed = groups.map(group => ({
+    ...group,
+    pages: [...group.pages].filter(page => {
+      if (page.id === 'register-products' || page.id === 'register-kits') return can('catalog:operate');
+      return !group.permission || can(group.permission);
+    }),
+  })).filter(group => group.pages.length);
   const allowedPages = allowed.flatMap(group => [...group.pages]);
   const screen = allowedPages.find(page => page.id === selected) ??
     (selected === 'account' && !admin ? { id: 'account' as const, label: 'Minha conta' } : allowedPages[0]);
@@ -103,7 +118,7 @@ function App() {
     menuToggle.current?.focus();
   }
   function signedOut(message = '') {
-    setIdentity(null); setSelected(undefined); setExpanded({}); setNotice(message);
+    setIdentity(null); setSelected(undefined); setExpanded({}); setNotice(message); setLogout(false);
   }
   function toggleTheme() {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -120,7 +135,9 @@ function App() {
           onKeyDown={event => { if (event.key === 'Escape' && sidebar.mobile && sidebar.open) closeMobileMenu(); }}>
           <svg aria-hidden="true" viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
         </button>}
-        <div className="brand"><img src="/brand.png" alt="" width="36" height="36" /><span>LeS <strong>Manager</strong></span></div>
+        <a href="/" className="brand" aria-label="LeS Manager · Início" onClick={event => {
+          if (identity && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); navigate('home'); }
+        }}><img src="/brand.png" alt="" width="36" height="36" /><span>LeS <strong>Manager</strong></span></a>
       </div>
       {identity ? <details className="account-menu">
         <summary aria-label={'Conta de ' + identity.name}><span className="avatar" aria-hidden="true">{identity.name.trim().slice(0, 1).toUpperCase()}</span>
@@ -133,13 +150,11 @@ function App() {
             navigate(admin ? 'admin-account' : 'account');
           }}>Configurações da conta</button>
           {themeButton}
-          <Form label="Sair" className="compact" action={async () => {
-            await api('access/logout', {}); signedOut();
-          }} />
+          <button type="button" onClick={() => setLogout(true)}>Sair</button>
         </div>
       </details> : themeButton}
     </div></header>
-    {identity === undefined ? <main className="layout"><p role="status">Carregando…</p></main> :
+    {identity === undefined ? <main className="layout"><Loading /></main> :
       identity === null ? <SignIn signedIn={signIn} notice={notice} /> :
       <div className={'dashboard' + (sidebar.open ? ' sidebar-open' : '')} onKeyDown={event => {
         if (event.key === 'Escape' && sidebar.mobile && sidebar.open) closeMobileMenu();
@@ -149,7 +164,7 @@ function App() {
         <aside className="sidebar" id="app-sidebar" aria-hidden={!sidebar.open} inert={!sidebar.open}>
           <p className="eyebrow">Painel interno</p>
           <nav aria-label="Módulos">{allowed.map(group => {
-            if (group.pages.length === 1) return <button type="button" className="nav-group" key={group.id}
+            if (group.pages.length === 1 && group.id !== 'registrations') return <button type="button" className="nav-group" key={group.id}
               aria-current={screen?.id === group.pages[0].id ? 'page' : undefined} onClick={() => navigate(group.pages[0].id)}>{group.label}</button>;
             const open = expanded[group.id] ?? (currentGroup?.id === group.id);
             return <div key={group.id}>
@@ -167,23 +182,39 @@ function App() {
           })}</nav>
         </aside>
         <main className="content" inert={sidebar.mobile && sidebar.open}>
-          <div className="page-heading">
+          <div className="page-heading" key={screen?.id}>
             {currentGroup && currentGroup.label !== screen?.label && <span className="eyebrow">{currentGroup.label}</span>}
             <h1 ref={heading} tabIndex={-1}>{screen?.label ?? 'Bem-vindo'}</h1>
             {screen && <p>{pageDescriptions[screen.id]}</p>}
           </div>
-          {(screen?.id === 'products' || screen?.id === 'kits') && <Catalog page={screen.id} edit={can('catalog:operate')} />}
+          {screen?.id === 'home' && <div className="home-grid">
+            {allowed.filter(group => group.id !== 'home').map(group => <section className="section home-card" key={group.id}>
+              <h2>{group.label}</h2>
+              <div className="shortcuts">{group.pages.map(page => <button type="button" key={page.id}
+                className="secondary" onClick={() => navigate(page.id)}>{page.label}<span aria-hidden="true">→</span></button>)}</div>
+            </section>)}
+            {!admin && <section className="section home-card"><h2>Conta</h2><div className="shortcuts">
+              <button type="button" className="secondary" onClick={() => navigate('account')}>Minha conta<span aria-hidden="true">→</span></button>
+            </div></section>}
+          </div>}
+          {(screen?.id === 'products' || screen?.id === 'kits') && <Catalog key={screen.id} page={screen.id} edit={false} />}
+          {(screen?.id === 'register-products' || screen?.id === 'register-kits') &&
+            <Catalog key={screen.id} page={screen.id === 'register-products' ? 'products' : 'kits'} edit={can('catalog:operate')} />}
           {(screen?.id === 'GRUPO' || screen?.id === 'MARCA' || screen?.id === 'COR' || screen?.id === 'DEPARTAMENTO' ||
             screen?.id === 'families' || screen?.id === 'units') && <Registrations key={screen.id} page={screen.id} edit={can('registrations:operate')} admin={admin} />}
           {screen?.id === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}
-          {(screen?.id === 'balance' || screen?.id === 'statement') && <Finance page={screen.id} edit={can('finance:operate')} openStatement={() => navigate('statement')} />}
+          {(screen?.id === 'balance' || screen?.id === 'statement' || screen?.id === 'reconciliation') &&
+            <Finance page={screen.id} edit={can('finance:operate')} openStatement={() => navigate('statement')} />}
           {screen?.id === 'admin' && <Administration onUserChanged={async id => { if (id === identity.id) await signIn(); }} />}
+          {screen?.id === 'audit' && <Audit />}
           {(screen?.id === 'account' || screen?.id === 'admin-account') && <AccountSettings identity={identity} changed={setIdentity}
             passwordChanged={() => signedOut('Senha atualizada. Entre com a nova senha.')} />}
-          {!screen && <Section title="Perfil sem módulos"><p>Peça ao administrador para configurar seu perfil.</p></Section>}
         </main>
       </div>}
     {import.meta.env.PROD && <InstallApp />}
+    {logout && <ModalForm title="Sair do LeS Manager" label="Sair" close={() => setLogout(false)} action={async () => {
+      await api('access/logout', {}); signedOut();
+    }}><p>Deseja encerrar esta sessão?</p></ModalForm>}
   </>;
 }
 

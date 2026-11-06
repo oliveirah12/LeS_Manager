@@ -1,4 +1,5 @@
-import { FormEvent, ReactNode, useEffect, useRef, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 export async function api<T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST'): Promise<T> {
   const response = await fetch('/api/' + path, {
@@ -15,8 +16,14 @@ export async function api<T>(path: string, body?: unknown, method = body === und
 export function useData<T>(path: string) {
   const [result, setResult] = useState<{ path: string; data?: T; error?: string }>();
   const request = useRef(0);
+  const activePath = useRef(path);
+  const mounted = useRef(false);
+  activePath.current = path;
+  const [loading, setLoading] = useState(true);
   async function reload() {
+    if (!mounted.current || path !== activePath.current) return;
     const id = ++request.current;
+    setLoading(true);
     try {
       const data = await api<T>(path);
       if (id === request.current) setResult({ path, data });
@@ -24,21 +31,62 @@ export function useData<T>(path: string) {
       if (id === request.current) setResult(previous => ({
         path, data: previous?.path === path ? previous.data : undefined, error: (err as Error).message,
       }));
+    } finally {
+      if (id === request.current) setLoading(false);
     }
   }
   useEffect(() => {
+    mounted.current = true;
     void reload();
-    return () => { request.current++; };
+    return () => { mounted.current = false; request.current++; };
   }, [path]);
-  return { data: result?.path === path ? result.data : undefined, error: result?.path === path ? result.error ?? '' : '', reload };
+  return { data: result?.path === path ? result.data : undefined, error: result?.path === path ? result.error ?? '' : '',
+    loading: loading || result?.path !== path, reload };
+}
+
+export function Loading({ label = 'Carregando…' }: { label?: string }) {
+  return <p className="loading" role="status"><span className="spinner" aria-hidden="true" />{label}</p>;
+}
+
+export function Modal({ title, close, children }: { title: string; close: () => void; children: ReactNode }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const heading = useId();
+  useLayoutEffect(() => {
+    const element = dialog.current!;
+    element.showModal();
+    element.querySelector<HTMLElement>('input:not([type="hidden"]), select, textarea')?.focus();
+    return () => { if (element.open) element.close(); };
+  }, []);
+  function requestClose() {
+    if (!dialog.current?.querySelector('[aria-busy="true"]')) close();
+  }
+  return createPortal(<dialog ref={dialog} className="modal" aria-labelledby={heading}
+    onCancel={event => { event.preventDefault(); requestClose(); }}>
+    <div className="modal-heading"><h2 id={heading}>{title}</h2>
+      <button type="button" className="secondary icon-close" onClick={requestClose} aria-label="Fechar janela">×</button>
+    </div>
+    <div className="modal-content">{children}</div>
+  </dialog>, document.body);
+}
+
+export function ModalForm({ title, close, ...form }: { title: string; close: () => void } & Parameters<typeof Form>[0]) {
+  return <Modal title={title} close={close}>
+    <Form {...form} action={async data => { await form.action(data); close(); }} />
+  </Modal>;
+}
+
+export function FileField({ name, label, accept }: { name: string; label: string; accept: string }) {
+  return <label className="file-field">{label}
+    <input type="file" name={name} accept={accept} required />
+  </label>;
 }
 
 export function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return <section className="section"><h2>{title}</h2>{subtitle && <p className="muted">{subtitle}</p>}{children}</section>;
 }
 
-export function Form({ children, action, label, className, reset = false }: {
-  children?: ReactNode; action: (data: FormData) => Promise<unknown>; label: string; className?: string; reset?: boolean;
+export function Form({ children, action, label, className, reset = false, disabled = false }: {
+  children?: ReactNode; action: (data: FormData) => Promise<unknown>; label: string; className?: string; reset?: boolean; disabled?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -52,8 +100,8 @@ export function Form({ children, action, label, className, reset = false }: {
     catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
   }
-  return <form onSubmit={submit} className={className}>
-    <fieldset disabled={busy}>{children}<button type="submit">{busy ? 'Aguarde…' : label}</button></fieldset>
+  return <form onSubmit={submit} className={className} aria-busy={busy}>
+    <fieldset disabled={busy || disabled}>{children}<button type="submit">{busy && <span className="spinner" aria-hidden="true" />}{busy ? 'Aguarde…' : label}</button></fieldset>
     {error && <p role="alert" className="alert">{error}</p>}
   </form>;
 }
