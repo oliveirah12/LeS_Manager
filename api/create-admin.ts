@@ -21,8 +21,12 @@ async function main() {
         throw new Error('O e-mail já pertence a uma conta que não pode ser reativada por este comando.');
       }
       const activation = { activationHash: hashToken(code), activationExpires };
-      if (existing) await tx.user.update({ where: { id: existing.id }, data: activation });
-      else await tx.user.create({ data: { name, email: email.data, profileId: profile.id, ...activation } });
+      const account = existing ? await tx.user.update({ where: { id: existing.id }, data: activation }) :
+        await tx.user.create({ data: { name, email: email.data, profileId: profile.id, ...activation } });
+      await tx.auditEvent.create({ data: {
+        action: existing ? 'Renovar código de administrador (CLI)' : 'Criar administrador (CLI)',
+        targetId: account.id, status: 200, completedAt: new Date(),
+      } });
     });
     console.log('E-mail:', email.data, '\nCódigo de primeiro acesso (24h):', code);
   } finally {

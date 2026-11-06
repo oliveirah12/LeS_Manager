@@ -183,6 +183,13 @@ test('API REST com PostgreSQL', {
       assert.equal('currentCost' in row, false);
     }
     assert.equal('available' in kitItem, false);
+    const encodedProduct = '%' + product.id.charCodeAt(0).toString(16) + product.id.slice(1);
+    expectStatus(await catalog('/catalog/products/' + encodedProduct, { method: 'PATCH', body: { name: 'Produto editado' } }), 200);
+    expectStatus(await catalog('/audit'), 403);
+    const audit = expectStatus(await admin('/audit'), 200);
+    assert.ok(audit.events.some(event => event.action === 'Alterar produto' && event.actorId === user.id &&
+      event.targetId === product.id && event.status === 200));
+    assert.equal(JSON.stringify(audit).includes(password), false);
     expectStatus(await catalog('/catalog/registrations'), 403);
     expectStatus(await catalog('/catalog/references', { method: 'POST', body: { kind: 'COR', name: sku('COR') } }), 403);
     expectStatus(await catalog('/stock'), 403);
@@ -200,6 +207,34 @@ test('API REST com PostgreSQL', {
     expectStatus(await catalog('/catalog/families', { method: 'POST', body: { name: sku('OUTRA'), baseSymbol: sku('X') } }), 403);
     assert.equal('balance' in expectStatus(await catalog('/finance/balance'), 200), true);
     expectStatus(await catalog('/finance/refresh', { method: 'POST' }), 403);
+  });
+
+  await t.test('conciliação persiste na reimportação e isola provedores', async () => {
+    const { FinanceService } = require('../dist/api/finance/finance.js');
+    const finance = app.get(FinanceService);
+    const date = '2099-01-01';
+    const range = { from: date, to: date };
+    const entry = { id: randomUUID(), date, amount: '19.90', direction: 'C', type: 'PIX', title: 'Teste', description: '' };
+    const duplicate = { ...entry, id: 'duplicate-' + run };
+    let entries = [entry, duplicate, duplicate, { ...entry, id: null }];
+    const source = id => ({ id, name: id, open: () => ({ balance: async () => '50.00', statement: async () => entries }) });
+    await finance.refresh(range, source('inter'));
+    const read = await admin('/finance?' + new URLSearchParams({ ...range, provider: 'inter' }));
+    const { transactions } = expectStatus(read, 200);
+    const [{ key }] = transactions;
+    assert.ok(key);
+    assert.ok(transactions.slice(1).every(row => row.key === null));
+
+    const update = { provider: 'inter', date, key, matched: true, reference: 'Documento QA' };
+    expectStatus(await post('/finance/reconciliation', update), 201);
+    entries = [...entries].reverse();
+    const refreshed = await finance.refresh(range, source('inter'));
+    assert.equal(refreshed.transactions.at(-1).reconciliation.reference, 'Documento QA');
+    const other = await finance.refresh(range, source('qa-' + run));
+    assert.equal(other.transactions.at(-1).reconciliation, null);
+    expectStatus(await post('/finance/reconciliation', { ...update, matched: false }), 201);
+    const unlinked = await finance.view(range, 'inter');
+    assert.equal(unlinked.transactions.at(-1).reconciliation, null);
   });
 
   await t.test('conversão exata e preservação do custo registrado em cada saída', async () => {

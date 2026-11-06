@@ -1,6 +1,7 @@
 import { Agent, request } from 'node:https';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
+import { BankEntry, BankReader } from './bank';
 
 const sandbox = 'https://cdpj-sandbox.partners.uatinter.co';
 const production = 'https://cdpj.partners.bancointer.com.br';
@@ -16,11 +17,6 @@ const pageFields = z.object({
 });
 const tokenFields = z.object({ access_token: z.string().min(1), expires_in: z.number().positive() });
 
-export type BankEntry = { id: string | null; date: string; amount: string; direction: string; type: string; title: string; description: string };
-export interface BankReader {
-  balance(): Promise<string>;
-  statement(from: string, to: string): Promise<BankEntry[]>;
-}
 type Transport = (path: string, headers?: Record<string, string>, body?: string) => Promise<unknown>;
 type Config = { clientId: string; secret: string; account?: string };
 

@@ -6,6 +6,7 @@ import { Global, Module } from '@nestjs/common';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AccessController, AccessGuard, AccessService } from './access/access';
+import { AuditController, AuditInterceptor, auditRequests } from './audit/audit';
 import { CatalogController, CatalogService } from './catalog/catalog';
 import { FinanceController, FinanceService } from './finance/finance';
 import { Database, DatabaseErrors } from './shared';
@@ -28,17 +29,22 @@ class StockModule {}
 @Module({ controllers: [FinanceController], providers: [FinanceService] })
 class FinanceModule {}
 
-@Module({ imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule] })
+@Module({ controllers: [AuditController] })
+class AuditModule {}
+
+@Module({ imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, AuditModule] })
 class AppModule {}
 
 export async function createApp() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: ['error', 'warn'] });
   app.setGlobalPrefix('api');
   app.useGlobalFilters(new DatabaseErrors());
+  app.useGlobalInterceptors(new AuditInterceptor());
   app.use('/api', (_request: Request, response: Response, next: NextFunction) => {
     response.setHeader('Cache-Control', 'no-store');
     next();
   });
+  app.use('/api', auditRequests(app.get(Database)));
   app.getHttpAdapter().getInstance().disable('x-powered-by');
   const web = resolve(__dirname, '../web');
   if (existsSync(resolve(web, 'index.html'))) app.useStaticAssets(web);

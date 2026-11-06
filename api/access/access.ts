@@ -97,7 +97,12 @@ export class AccessService {
 
   async logout(request: Request, response: Response) {
     const token = sessionToken(request);
-    if (token) await this.db.session.deleteMany({ where: { tokenHash: hashToken(token) } });
+    if (token) {
+      const where = { tokenHash: hashToken(token) };
+      const session = await this.db.session.findUnique({ where, include: { user: { select: { id: true, name: true } } } });
+      response.locals.auditActor = session?.user;
+      await this.db.session.deleteMany({ where });
+    }
     response.clearCookie(cookieName, cookieOptions);
     return { ok: true };
   }
@@ -105,14 +110,16 @@ export class AccessService {
   private async openSession(userId: string, passwordHash: string, response: Response) {
     const token = newToken();
     const expiresAt = new Date(Date.now() + sessionAge);
-    await this.db.$transaction(async tx => {
+    const actor = await this.db.$transaction(async tx => {
       // Serialize session creation with password changes and account deactivation.
-      const [user] = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "User"
+      const [user] = await tx.$queryRaw<{ id: string; name: string }[]>`SELECT "id", "name" FROM "User"
         WHERE "id" = ${userId} AND "active" AND "passwordHash" = ${passwordHash} FOR UPDATE`;
       if (!user) throw new UnauthorizedException('A conta foi alterada. Entre novamente.');
       await tx.session.deleteMany({ where: { userId, expiresAt: { lte: new Date() } } });
       await tx.session.create({ data: { userId, tokenHash: hashToken(token), expiresAt } });
+      return user;
     });
+    response.locals.auditActor = actor;
     response.cookie(cookieName, token, { ...cookieOptions, maxAge: sessionAge });
     return { ok: true };
   }

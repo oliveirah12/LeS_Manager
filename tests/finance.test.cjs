@@ -31,13 +31,15 @@ function memoryDatabase() {
   const days = new Map();
   let writes = 0;
   const tx = {
+    bankReconciliation: { findMany: async () => [] },
     bankBalance: {
       findUnique: async () => balance,
       upsert: async ({ create }) => { balance = create; writes++; },
     },
     bankDay: {
-      findMany: async () => [...days.values()],
-      upsert: async ({ create }) => { days.set(create.date, create); writes++; },
+      findMany: async ({ where }) => [...days.values()].filter(day =>
+        day.provider === where.provider && (!where.updatedAt || day.updatedAt > where.updatedAt.gt)),
+      upsert: async ({ create }) => { days.set(create.provider + ':' + create.date, create); writes++; },
     },
   };
   return { $transaction: async work => work(tx), get writes() { return writes; } };
@@ -54,8 +56,9 @@ test('refresh fetches every page and reuses its read-only token', async () => {
 test('reimport replaces the day and preserves legitimately identical rows', async () => {
   const finance = new FinanceService(memoryDatabase());
   const { reader } = provider();
-  await finance.refresh(range, reader);
-  const result = await finance.refresh(range, reader);
+  const source = { id: 'inter', name: 'Inter', open: () => reader };
+  await finance.refresh(range, source);
+  const result = await finance.refresh(range, source);
   assert.equal(result.balance.available, '50.00');
   assert.equal(result.transactions.length, 2);
   assert.deepEqual(result.transactions[0], result.transactions[1]);
@@ -65,9 +68,11 @@ test('reimport replaces the day and preserves legitimately identical rows', asyn
 test('failure on a later page leaves the last successful update intact', async () => {
   const db = memoryDatabase();
   const finance = new FinanceService(db);
-  const saved = await finance.refresh(range, provider().reader);
+  const good = { id: 'inter', name: 'Inter', open: () => provider().reader };
+  const broken = { ...good, open: () => provider(true).reader };
+  const saved = await finance.refresh(range, good);
   const writes = db.writes;
-  await assert.rejects(finance.refresh(range, provider(true).reader), { status: 502 });
+  await assert.rejects(new FinanceService(db).refresh(range, broken), { status: 502 });
   assert.equal(db.writes, writes);
   assert.deepEqual(await finance.view(range), saved);
 });

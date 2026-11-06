@@ -44,6 +44,7 @@ model User {
   movements         Movement[]
   inventoryBatches  InventoryBatch[]
   imports           InitialImport[]
+  bankReconciliations BankReconciliation[]
 }
 
 model Session {
@@ -177,4 +178,27 @@ model BankDay {
   entries   Json
   updatedAt DateTime
   @@id([provider, date])
+}
+
+model AuditEvent {
+  id          String    @id @default(uuid())
+  action      String
+  actorId     String?
+  actorName   String?
+  targetId    String?
+  status      Int?
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+  @@index([createdAt, id])
+}
+
+model BankReconciliation {
+  provider  String
+  date      String
+  key       String
+  reference String?
+  updatedAt DateTime @updatedAt
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  @@id([provider, date, key])
 }
