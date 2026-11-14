@@ -1,0 +1,42 @@
+# Production stack: the app and its database. Put an HTTPS proxy in front of port 3000.
+# Usage: docker compose -f compose.prod.yaml --env-file .env.prod up -d --build
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://les:${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD}@postgres:5432/les_manager
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-365}
+      INTER_ENV: ${INTER_ENV:-}
+      INTER_CLIENT_ID: ${INTER_CLIENT_ID:-}
+      INTER_CLIENT_SECRET: ${INTER_CLIENT_SECRET:-}
+      INTER_ACCOUNT: ${INTER_ACCOUNT:-}
+      INTER_CERT_PATH: /run/secrets/inter/cert.pem
+      INTER_KEY_PATH: /run/secrets/inter/key.pem
+    volumes:
+      # Inter certificate and private key, kept outside the image.
+      - ${INTER_CERT_DIR:-./certs}:/run/secrets/inter:ro
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000"
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: les
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD}
+      POSTGRES_DB: les_manager
+    volumes:
+      - les_db_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U les -d les_manager"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  les_db_prod:

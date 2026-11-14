@@ -10,6 +10,7 @@ import { AuditController } from './audit/audit';
 import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
 import { FinanceController, FinanceService } from './finance/finance';
+import { HealthController } from './health';
 import { Database, DatabaseErrors } from './shared';
 import { StockController } from './stock/controller';
 import { StockService } from './stock/stock';
@@ -33,7 +34,7 @@ class FinanceModule {}
 @Module({ controllers: [AuditController], providers: [AuditRetention] })
 class AuditModule {}
 
-@Module({ imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, AuditModule] })
+@Module({ imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, AuditModule], controllers: [HealthController] })
 class AppModule {}
 
 export async function createApp() {

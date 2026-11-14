@@ -14,7 +14,7 @@ import {
 } from './security';
 
 export const Require = (...permissions: string[]) => SetMetadata('permissions', permissions);
-const Public = () => SetMetadata('public', true);
+export const Public = () => SetMetadata('public', true);
 const cookieName = 'les_session';
 const sessionAge = 8 * 60 * 60 * 1000;
 const activationAge = 24 * 60 * 60 * 1000;

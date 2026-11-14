@@ -33,6 +33,21 @@ Cada tela tem seu próprio endereço, como `/#/estoque` ou `/#/financeiro/concil
 
 Para hospedar o painel, mantenha frontend e API na mesma origem. Configure HTTPS no proxy, `COOKIE_SECURE=true` e um endereço de escuta apropriado em `HOST`. Restrinja o acesso ao banco e faça backup da base antes de atualizar versões.
 
+## Produção com Docker
+
+O `Dockerfile` gera uma imagem com a API e o painel, e o `compose.prod.yaml` sobe essa imagem com o PostgreSQL. O banco não fica exposto fora do Docker, e o app escuta em `127.0.0.1:3000` para ficar atrás de um proxy HTTPS, como Caddy ou Nginx.
+
+```powershell
+Copy-Item .env.prod.example .env.prod   # defina POSTGRES_PASSWORD e, se usar, o Inter
+docker compose -f compose.prod.yaml --env-file .env.prod up -d --build
+docker compose -f compose.prod.yaml --env-file .env.prod exec app npm run db:migrate
+docker compose -f compose.prod.yaml --env-file .env.prod exec app npm run admin:create:prod -- "Seu nome" admin@empresa.com
+```
+
+Coloque `cert.pem` e `key.pem` do Inter na pasta indicada em `INTER_CERT_DIR` (padrão `./certs`). Ela é montada somente para leitura e fica fora da imagem. O contêiner verifica `/api/health`, que confirma a API e o banco.
+
+Para atualizar, faça backup da base, rode `git pull`, repita o `up -d --build` e depois o `db:migrate`. As migrações são aplicadas manualmente para que nenhuma alteração no banco aconteça sem um backup antes.
+
 ## Conferir o primeiro fluxo
 
 1. Em **Cadastros → Famílias de medida**, crie Peças com base `un` e Peso com base `g`. Em **Cadastros → Unidades de medida**, cadastre `kg` com fator `1000`.
