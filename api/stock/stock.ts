@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { MovementKind, Prisma, Product } from '@prisma/client';
 import { z } from 'zod';
 import { CatalogService, inBase, productInclude } from '../catalog/catalog';
-import { auditChange } from '../audit/recorder';
+import { auditChange, auditContext } from '../audit/recorder';
 import { averageCost } from './cost';
 import { Database, decimalField, idField, money, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal } from '../shared';
 
@@ -59,7 +59,7 @@ export class StockService {
     if ((data.kind === 'PURCHASE') !== (data.unitCost !== undefined)) {
       throw new BadRequestException('Informe o custo por unidade somente em entradas de compra.');
     }
-    auditChange(null, { Tipo: data.kind, Motivo: data.reason });
+    auditContext({ Tipo: ({ PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste' } as const)[data.kind], Motivo: data.reason });
     return serial(this.db, async tx => {
       const product = await tx.product.findUnique({ where: { id: data.productId }, include: { unit: true } });
       const unit = await tx.unit.findUnique({ where: { id: data.unitId } });
@@ -71,7 +71,7 @@ export class StockService {
   }
 
   kitOut(id: string, data: z.infer<typeof kitOutFields>, userId: string) {
-    auditChange(null, { 'Quantidade de kits': data.quantity, Motivo: data.reason });
+    auditContext({ 'Quantidade de kits': data.quantity, Motivo: data.reason });
     return serial(this.db, async tx => {
       const kit = await tx.kit.findUnique({
         where: { id }, include: { components: { orderBy: { productId: 'asc' }, include: { product: true } } },

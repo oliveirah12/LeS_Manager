@@ -3,7 +3,7 @@ import { BadGatewayException, BadRequestException, Body, ConflictException, Cont
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
-import { Audit, auditChange, auditTarget } from '../audit/recorder';
+import { Audit, auditChange, auditContext, auditTarget } from '../audit/recorder';
 import { Database, parse, serial } from '../shared';
 import { BankEntry, BankReader } from './bank';
 import { BankProvider, bankProvider, providers } from './providers';
@@ -174,7 +174,7 @@ export class FinanceController {
   @Post('refresh')
   refresh(@Body() body: unknown) {
     const range = dateRange(body);
-    auditChange(null, { Provedor: bankProvider(range.provider).id, De: range.from, 'Até': range.to });
+    auditContext({ Provedor: bankProvider(range.provider).name, De: range.from, 'Até': range.to });
     return this.finance.refresh(range, bankProvider(range.provider));
   }
 
