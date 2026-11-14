@@ -85,14 +85,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 button[aria-busy='true'] { cursor: progress; }
-.btn, button:not([class]) {
+.btn {
   display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
   height: 40px; padding: 0 16px; border-radius: var(--radius-sm); border: 1px solid transparent;
   background: var(--brand); color: #fff; font-weight: 600; white-space: nowrap;
   transition: background-color var(--fast), border-color var(--fast), color var(--fast), transform var(--fast);
 }
-.btn:hover:not(:disabled), button:not([class]):hover:not(:disabled) { background: var(--brand-hover); }
-.btn:active:not(:disabled), button:not([class]):active:not(:disabled) { transform: translateY(1px); }
+.btn:hover:not(:disabled) { background: var(--brand-hover); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
 .btn.secondary, button.secondary { background: var(--surface); color: var(--text); border-color: var(--line); }
 .btn.secondary:hover:not(:disabled), button.secondary:hover:not(:disabled) { background: var(--hover); }
 .btn.ghost { background: transparent; color: var(--muted); }
