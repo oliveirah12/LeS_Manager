@@ -19,11 +19,13 @@
     "admin:create:prod": "node dist/api/create-admin.js"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "5.3.0",
     "@nestjs/common": "^11.1.0",
     "@nestjs/core": "^11.1.0",
     "@nestjs/platform-express": "^11.1.0",
     "@prisma/client": "^6.19.0",
     "exceljs": "^4.4.0",
+    "lucide-react": "1.64.0",
     "prisma": "^6.19.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

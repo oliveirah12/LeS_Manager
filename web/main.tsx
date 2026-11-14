@@ -1,51 +1,54 @@
 /// <reference types="vite/client" />
-import { useEffect, useRef, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import {
+  ChevronDown, Home as HomeIcon, Layers, LogOut, Menu, Moon, MoreHorizontal, Package, PanelLeftClose, PanelLeftOpen,
+  ShieldCheck, Sun, Tag, UserRound, Users, Wallet,
+} from 'lucide-react';
 import { AccountSettings, Administration, SignIn } from './access';
 import { Audit } from './audit';
 import { Catalog } from './catalog';
 import { Finance } from './finance';
+import { Home } from './home';
 import { InstallApp } from './pwa';
 import { referenceKinds, Registrations } from './registrations';
 import { Stock } from './stock';
-import { accessible, api, Identity, Loading, ModalForm } from './ui';
+import { accessible, api, Identity, Loading, ModalForm, PageActionsProvider, Toaster } from './ui';
 import './style.css';
 
 const groups = [
-  { id: 'home', label: 'Início', permission: null, pages: [{ id: 'home', label: 'Início' }] },
-  { id: 'catalog', label: 'Catálogo', permission: 'catalog:view', pages: [
+  { id: 'home', label: 'Início', icon: HomeIcon, section: 'ops', permission: null, pages: [{ id: 'home', label: 'Início' }] },
+  { id: 'stock', label: 'Estoque', icon: Package, section: 'ops', permission: 'stock:view', pages: [{ id: 'stock', label: 'Estoque' }] },
+  { id: 'catalog', label: 'Catálogo', icon: Tag, section: 'ops', permission: 'catalog:view', pages: [
     { id: 'products', label: 'Produtos' }, { id: 'kits', label: 'Kits' },
   ] },
-  { id: 'registrations', label: 'Cadastros', permission: 'registrations:view', pages: [
+  { id: 'finance', label: 'Financeiro', icon: Wallet, section: 'ops', permission: 'finance:view', pages: [
+    { id: 'balance', label: 'Saldo' }, { id: 'statement', label: 'Extrato' }, { id: 'reconciliation', label: 'Conciliação' },
+  ] },
+  { id: 'registrations', label: 'Cadastros', icon: Layers, section: 'admin', permission: 'registrations:view', pages: [
     { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' },
     ...referenceKinds.map(({ id, label }) => ({ id, label })),
     { id: 'families', label: 'Famílias de medida' }, { id: 'units', label: 'Unidades de medida' },
   ] },
-  { id: 'stock', label: 'Estoque', permission: 'stock:view', pages: [{ id: 'stock', label: 'Estoque' }] },
-  { id: 'finance', label: 'Financeiro', permission: 'finance:view', pages: [
-    { id: 'balance', label: 'Saldo' }, { id: 'statement', label: 'Extrato' }, { id: 'reconciliation', label: 'Conciliação' },
-  ] },
-  { id: 'audit', label: 'Auditoria', permission: 'admin', pages: [{ id: 'audit', label: 'Auditoria' }] },
-  { id: 'admin', label: 'Acessos', permission: 'admin', pages: [
+  { id: 'audit', label: 'Auditoria', icon: ShieldCheck, section: 'admin', permission: 'admin', pages: [{ id: 'audit', label: 'Auditoria' }] },
+  { id: 'admin', label: 'Acessos', icon: Users, section: 'admin', permission: 'admin', pages: [
     { id: 'admin', label: 'Usuários e perfis' }, { id: 'admin-account', label: 'Minha conta' },
   ] },
 ] as const;
 type Group = typeof groups[number];
-type Page = Group['pages'][number]['id'] | 'account';
+export type Page = Group['pages'][number]['id'] | 'account';
 
 const pageDescriptions: Record<Page, string> = {
-  home: 'Acesse os atalhos dos módulos disponíveis para o seu perfil.',
-  products: 'Consulte os itens do catálogo.', kits: 'Consulte os kits e suas composições.',
-  'register-products': 'Cadastre ou edite produtos.', 'register-kits': 'Cadastre ou edite a composição de kits.',
+  home: '', products: 'Consulte os produtos do catálogo.', kits: 'Consulte os kits e suas composições.',
+  'register-products': 'Cadastre, edite e inative produtos.', 'register-kits': 'Monte e edite a composição dos kits.',
   GRUPO: 'Organize os produtos por grupos.', MARCA: 'Gerencie as marcas do catálogo.',
   COR: 'Mantenha a lista de cores disponíveis.', DEPARTAMENTO: 'Organize os departamentos do catálogo.',
-  families: 'Configure as famílias e suas unidades base.', units: 'Consulte as unidades e os fatores de conversão.',
-  stock: 'Acompanhe saldos, movimentações, inventário e cargas iniciais.',
-  balance: 'Consulte o saldo da conta bancária.', statement: 'Consulte as transações por período.',
-  reconciliation: 'Confira e concilie lançamentos importados por provedor.',
-  audit: 'Acompanhe as operações e os acessos ao sistema.',
-  admin: 'Gerencie os usuários e os perfis de acesso.', 'admin-account': 'Atualize seus dados e sua senha.',
-  account: 'Atualize seus dados e sua senha.',
+  families: 'Cada família tem uma unidade base, como g para peso.', units: 'Unidades e fatores de conversão para a unidade base.',
+  stock: 'Saldos e custos na unidade base de cada produto.',
+  balance: 'Saldo da conta bancária na última sincronização.', statement: 'Transações bancárias por período.',
+  reconciliation: 'Confira os lançamentos do banco com as referências internas.',
+  audit: 'Inclusões, alterações, acessos e tentativas negadas dos últimos 12 meses.',
+  admin: 'Perfis de acesso e contas da equipe.', 'admin-account': 'Seus dados e sua senha.', account: 'Seus dados e sua senha.',
 };
 
 // Each screen has its own address so reload, back/forward and shared links keep the page.
@@ -83,22 +86,45 @@ function savePreference(key: string, value: string) {
   try { localStorage.setItem('les-manager.' + key, value); } catch { /* Preferences remain available in memory. */ }
 }
 
-const mobileQuery = '(max-width: 740px)';
-function useSidebar() {
-  const [mobile, setMobile] = useState(() => matchMedia(mobileQuery).matches);
-  const [desktopOpen, setDesktopOpen] = useState(() => readPreference('sidebar.desktop') !== 'closed');
-  const [mobileOpen, setMobileOpen] = useState(() => readPreference('sidebar.mobile') === 'open');
+function useMediaQuery(query: string) {
+  const [match, setMatch] = useState(() => matchMedia(query).matches);
   useEffect(() => {
-    const query = matchMedia(mobileQuery);
-    const changed = (event: MediaQueryListEvent) => setMobile(event.matches);
-    query.addEventListener('change', changed);
-    return () => query.removeEventListener('change', changed);
-  }, []);
-  function setOpen(open: boolean) {
-    (mobile ? setMobileOpen : setDesktopOpen)(open);
-    savePreference(mobile ? 'sidebar.mobile' : 'sidebar.desktop', open ? 'open' : 'closed');
-  }
-  return { mobile, open: mobile ? mobileOpen : desktopOpen, setOpen };
+    const list = matchMedia(query);
+    const changed = (event: MediaQueryListEvent) => setMatch(event.matches);
+    list.addEventListener('change', changed);
+    return () => list.removeEventListener('change', changed);
+  }, [query]);
+  return match;
+}
+
+function AccountMenu({ identity, theme, toggleTheme, openAccount, signOut }: {
+  identity: Identity; theme: string; toggleTheme: () => void; openAccount: () => void; signOut: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); };
+  }, [open]);
+  const choose = (action: () => void) => () => { setOpen(false); action(); };
+  return <div className="account" ref={root}>
+    <button type="button" aria-expanded={open} aria-haspopup="menu" aria-label={'Conta de ' + identity.name} onClick={() => setOpen(!open)}>
+      <span className="avatar" aria-hidden="true">{identity.name.trim().slice(0, 1).toUpperCase()}</span>
+      <span className="account-name"><strong>{identity.name}</strong><small>{identity.profileName}</small></span>
+      <ChevronDown size={16} aria-hidden="true" className="muted" />
+    </button>
+    {open && <div className="menu" role="menu">
+      <div className="menu-head"><strong>{identity.name}</strong><br /><small>{identity.email}</small></div>
+      <button type="button" role="menuitem" onClick={choose(openAccount)}><UserRound size={16} aria-hidden="true" />Minha conta</button>
+      <button type="button" role="menuitem" onClick={choose(toggleTheme)}>
+        {theme === 'dark' ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}{theme === 'dark' ? 'Tema claro' : 'Tema escuro'}</button>
+      <button type="button" role="menuitem" onClick={choose(signOut)}><LogOut size={16} aria-hidden="true" />Sair</button>
+    </div>}
+  </div>;
 }
 
 function App() {
@@ -109,16 +135,28 @@ function App() {
   const [logout, setLogout] = useState(false);
   const [theme, setTheme] = useState(() => readPreference('theme') ??
     (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
-  const sidebar = useSidebar();
+  const mobile = useMediaQuery('(max-width: 760px)');
+  const [collapsed, setCollapsed] = useState(() => readPreference('sidebar.desktop') === 'closed');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+  const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
-  const menuToggle = useRef<HTMLButtonElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const shownPage = useRef<Page | undefined>(undefined);
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#27181e' : '#a52d40');
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#121011' : '#f6f5f4');
   }, [theme]);
+  useEffect(() => {
+    const changed = () => setScrolled(scrollY > 4);
+    addEventListener('scroll', changed, { passive: true });
+    return () => removeEventListener('scroll', changed);
+  }, []);
+  useEffect(() => { if (!mobile) setMenuOpen(false); }, [mobile]);
   async function signIn() { setIdentity(await api<Identity>('access/me')); setNotice(''); }
   useEffect(() => { void signIn().catch(() => setIdentity(null)); }, []);
+
   const can = (permission: string) => accessible(identity?.permissions ?? [], permission);
   const admin = can('admin');
   const allowed = groups.map(group => ({
@@ -139,20 +177,19 @@ function App() {
   useEffect(() => {
     if (!identity || !screen) return;
     if (location.hash !== hashOf(screen.id)) history.replaceState(null, '', hashOf(screen.id));
-    if (shownPage.current && shownPage.current !== screen.id) heading.current?.focus();
+    if (shownPage.current && shownPage.current !== screen.id) {
+      heading.current?.focus({ preventScroll: true });
+      scrollTo({ top: 0 });
+    }
     shownPage.current = screen.id;
   }, [identity, screen?.id]);
 
   function navigate(page: Page) {
     const group = allowed.find(item => item.pages.some(itemPage => itemPage.id === page));
-    if (group) setExpanded(previous => ({ ...previous, [group.id]: true }));
-    if (sidebar.mobile) sidebar.setOpen(false);
+    if (group && group.pages.length > 1) setExpanded(previous => ({ ...previous, [group.id]: true }));
+    setMenuOpen(false);
     if (location.hash === hashOf(page)) requestAnimationFrame(() => heading.current?.focus());
     else location.hash = hashOf(page);
-  }
-  function closeMobileMenu() {
-    sidebar.setOpen(false);
-    menuToggle.current?.focus();
   }
   function signedOut(message = '') {
     setIdentity(null); setExpanded({}); setNotice(message); setLogout(false);
@@ -164,98 +201,128 @@ function App() {
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next); savePreference('theme', next);
   }
-  const themeLabel = theme === 'dark' ? 'Modo claro' : 'Modo escuro';
-  const themeButton = <button type="button" className="secondary theme-toggle" onClick={toggleTheme}>{themeLabel}</button>;
+  function toggleCollapsed() {
+    setCollapsed(!collapsed); savePreference('sidebar.desktop', collapsed ? 'open' : 'closed');
+  }
+  function closeMenu() { setMenuOpen(false); menuButton.current?.focus(); }
 
-  return <>
-    <header className="header"><div className="header-inner">
-      <div className="header-start">
-        {identity && <button ref={menuToggle} type="button" className="sidebar-toggle" aria-controls="app-sidebar" aria-expanded={sidebar.open}
-          aria-label={sidebar.open ? 'Fechar menu' : 'Abrir menu'} onClick={() => sidebar.setOpen(!sidebar.open)}
-          onKeyDown={event => { if (event.key === 'Escape' && sidebar.mobile && sidebar.open) closeMobileMenu(); }}>
-          <svg aria-hidden="true" viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
-        </button>}
-        <a href={hashOf('home')} className="brand" aria-label="LeS Manager · Início" onClick={event => {
-          if (identity && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); navigate('home'); }
-        }}><img src="/brand.png" alt="" width="36" height="36" /><span>LeS <strong>Manager</strong></span></a>
-      </div>
-      {identity ? <details className="account-menu">
-        <summary aria-label={'Conta de ' + identity.name}><span className="avatar" aria-hidden="true">{identity.name.trim().slice(0, 1).toUpperCase()}</span>
-          <span className="account-label"><strong>{identity.name}</strong><small>{identity.profileName}</small></span><span aria-hidden="true">⌄</span>
-        </summary>
-        <div className="account-popover">
-          <p className="account-email">{identity.email}</p>
-          <button type="button" className="secondary" onClick={event => {
-            event.currentTarget.closest('details')?.removeAttribute('open');
-            navigate(admin ? 'admin-account' : 'account');
-          }}>Configurações da conta</button>
-          {themeButton}
-          <button type="button" onClick={() => setLogout(true)}>Sair</button>
-        </div>
-      </details> : themeButton}
-    </div></header>
-    {identity === undefined ? <main className="layout"><Loading /></main> :
-      identity === null ? <SignIn signedIn={signIn} notice={notice} /> :
-      <div className={'dashboard' + (sidebar.open ? ' sidebar-open' : '')} onKeyDown={event => {
-        if (event.key === 'Escape' && sidebar.mobile && sidebar.open) closeMobileMenu();
-      }}>
-        {sidebar.mobile && <button type="button" className="sidebar-backdrop" aria-label="Fechar menu lateral"
-          aria-hidden={!sidebar.open} inert={!sidebar.open} onClick={closeMobileMenu} />}
-        <aside className="sidebar" id="app-sidebar" aria-hidden={!sidebar.open} inert={!sidebar.open}>
-          <p className="eyebrow">Painel interno</p>
-          <nav aria-label="Módulos">{allowed.map(group => {
-            if (group.pages.length === 1 && group.id !== 'registrations') return <button type="button" className="nav-group" key={group.id}
-              aria-current={screen?.id === group.pages[0].id ? 'page' : undefined} onClick={() => navigate(group.pages[0].id)}>{group.label}</button>;
-            const open = expanded[group.id] ?? (currentGroup?.id === group.id);
-            return <div key={group.id}>
-              <button type="button" className="nav-group" aria-expanded={open} aria-controls={'menu-' + group.id}
-                onClick={() => setExpanded(previous => ({ ...previous, [group.id]: !open }))}>
-                {group.label}<span aria-hidden="true">{open ? '−' : '+'}</span>
-              </button>
-              <div id={'menu-' + group.id} className="nav-submenu" aria-hidden={!open} inert={!open}>
-                <div className="nav-clip"><div className="nav-children">
-                  {group.pages.map(page => <button type="button" key={page.id} aria-current={screen?.id === page.id ? 'page' : undefined}
-                    onClick={() => navigate(page.id)}>{page.label}</button>)}
-                </div></div>
-              </div>
-            </div>;
-          })}</nav>
-        </aside>
-        <main className="content" inert={sidebar.mobile && sidebar.open}>
-          <div className="page-heading" key={screen?.id}>
-            {currentGroup && currentGroup.label !== screen?.label && <span className="eyebrow">{currentGroup.label}</span>}
-            <h1 ref={heading} tabIndex={-1}>{screen?.label ?? 'Bem-vindo'}</h1>
-            {screen && <p>{pageDescriptions[screen.id]}</p>}
+  if (identity === undefined) return <div className="signin"><Loading /></div>;
+  if (identity === null) return <><SignIn signedIn={signIn} notice={notice} />{import.meta.env.PROD && <InstallApp />}<Toaster /></>;
+
+  const rail = collapsed && !mobile;
+  const navSection = (section: 'ops' | 'admin', label?: string) => {
+    const items = allowed.filter(group => group.section === section);
+    if (!items.length) return null;
+    return <div className="nav">
+      {label && <div className="nav-label">{label}</div>}
+      {items.map(group => {
+        const Icon = group.icon;
+        const active = currentGroup?.id === group.id;
+        if (group.pages.length === 1) return <button type="button" className="nav-item" key={group.id} title={rail ? group.label : undefined}
+          aria-current={active ? 'page' : undefined} onClick={() => navigate(group.pages[0].id)}>
+          <Icon size={18} aria-hidden="true" /><span className="label">{group.label}</span></button>;
+        const open = !rail && (expanded[group.id] ?? active);
+        return <div key={group.id}>
+          <button type="button" className={'nav-item' + (active && !open ? ' current' : '')} aria-expanded={open} aria-controls={'menu-' + group.id}
+            title={rail ? group.label : undefined} onClick={() => {
+              if (rail) { toggleCollapsed(); setExpanded(previous => ({ ...previous, [group.id]: true })); return; }
+              setExpanded(previous => ({ ...previous, [group.id]: !open }));
+            }}>
+            <Icon size={18} aria-hidden="true" /><span className="label">{group.label}</span><ChevronDown className="chevron" size={16} aria-hidden="true" />
+          </button>
+          <div id={'menu-' + group.id} className="nav-sub" data-open={open} inert={!open}>
+            <div><ul>{group.pages.map(page => <li key={page.id}>
+              <button type="button" aria-current={screen?.id === page.id ? 'page' : undefined} onClick={() => navigate(page.id)}>{page.label}</button>
+            </li>)}</ul></div>
           </div>
-          {screen?.id === 'home' && <div className="home-grid">
-            {allowed.filter(group => group.id !== 'home').map(group => <section className="section home-card" key={group.id}>
-              <h2>{group.label}</h2>
-              <div className="shortcuts">{group.pages.map(page => <button type="button" key={page.id}
-                className="secondary" onClick={() => navigate(page.id)}>{page.label}<span aria-hidden="true">→</span></button>)}</div>
-            </section>)}
-            {!admin && <section className="section home-card"><h2>Conta</h2><div className="shortcuts">
-              <button type="button" className="secondary" onClick={() => navigate('account')}>Minha conta<span aria-hidden="true">→</span></button>
-            </div></section>}
-          </div>}
-          {(screen?.id === 'products' || screen?.id === 'kits') && <Catalog key={screen.id} page={screen.id} edit={false} />}
-          {(screen?.id === 'register-products' || screen?.id === 'register-kits') &&
-            <Catalog key={screen.id} page={screen.id === 'register-products' ? 'products' : 'kits'} edit={can('catalog:operate')} />}
-          {(screen?.id === 'GRUPO' || screen?.id === 'MARCA' || screen?.id === 'COR' || screen?.id === 'DEPARTAMENTO' ||
-            screen?.id === 'families' || screen?.id === 'units') && <Registrations key={screen.id} page={screen.id} edit={can('registrations:operate')} admin={admin} />}
-          {screen?.id === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}
-          {(screen?.id === 'balance' || screen?.id === 'statement' || screen?.id === 'reconciliation') &&
-            <Finance page={screen.id} edit={can('finance:operate')} openStatement={() => navigate('statement')} />}
-          {screen?.id === 'admin' && <Administration onUserChanged={async id => { if (id === identity.id) await signIn(); }} />}
-          {screen?.id === 'audit' && <Audit />}
-          {(screen?.id === 'account' || screen?.id === 'admin-account') && <AccountSettings identity={identity} changed={setIdentity}
-            passwordChanged={() => signedOut('Senha atualizada. Entre com a nova senha.')} />}
-        </main>
+        </div>;
+      })}
+    </div>;
+  };
+
+  // Phone bottom bar: the main operational areas plus "Mais", which opens the full menu.
+  const bottomItems = allowed.filter(group => group.section === 'ops').slice(0, 4);
+  const page = screen?.id;
+  const content: ReactNode = <>
+    {page === 'home' && <Home identity={identity} can={can} navigate={navigate} />}
+    {(page === 'products' || page === 'kits') && <Catalog key={page} page={page} edit={false} />}
+    {(page === 'register-products' || page === 'register-kits') &&
+      <Catalog key={page} page={page === 'register-products' ? 'products' : 'kits'} edit={can('catalog:operate')} />}
+    {(page === 'GRUPO' || page === 'MARCA' || page === 'COR' || page === 'DEPARTAMENTO' || page === 'families' || page === 'units') &&
+      <Registrations key={page} page={page} edit={can('registrations:operate')} admin={admin} />}
+    {page === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}
+    {(page === 'balance' || page === 'statement' || page === 'reconciliation') &&
+      <Finance key={page} page={page} edit={can('finance:operate')} openStatement={() => navigate('statement')} />}
+    {page === 'admin' && <Administration onUserChanged={async id => { if (id === identity.id) await signIn(); }} />}
+    {page === 'audit' && <Audit />}
+    {(page === 'account' || page === 'admin-account') && <AccountSettings identity={identity} changed={setIdentity}
+      passwordChanged={() => signedOut('Senha atualizada. Entre com a nova senha.')} />}
+  </>;
+
+  return <div className={'app' + (rail ? ' collapsed' : '') + (menuOpen ? ' menu-open' : '')}
+    onKeyDown={event => { if (event.key === 'Escape' && menuOpen) closeMenu(); }}>
+    {mobile && <button type="button" className="scrim" aria-label="Fechar menu" tabIndex={menuOpen ? 0 : -1} aria-hidden={!menuOpen} onClick={closeMenu} />}
+    <aside className="sidebar" id="app-sidebar" aria-label="Menu principal" inert={mobile && !menuOpen}>
+      <a href={hashOf('home')} className="brand" onClick={event => { event.preventDefault(); navigate('home'); }}>
+        <img src="/brand.png" alt="" width="34" height="34" /><span>LeS Manager</span></a>
+      <nav aria-label="Módulos" className="stack" style={{ gap: 18 }}>
+        {navSection('ops')}
+        {navSection('admin', 'Administração')}
+      </nav>
+      {!mobile && <div className="sidebar-foot">
+        <button type="button" className="nav-item" onClick={toggleCollapsed} aria-label={rail ? 'Expandir menu' : 'Recolher menu'}>
+          {rail ? <PanelLeftOpen size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}<span className="label">Recolher menu</span>
+        </button>
       </div>}
+    </aside>
+
+    <div className="main-column" inert={mobile && menuOpen}>
+      <header className={'topbar' + (scrolled ? ' scrolled' : '')}>
+        {mobile && <button ref={menuButton} type="button" className="icon-button" aria-label="Abrir menu" aria-controls="app-sidebar"
+          aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><Menu size={20} aria-hidden="true" /></button>}
+        <a href={hashOf('home')} className="brand" onClick={event => { event.preventDefault(); navigate('home'); }}>
+          <img src="/brand.png" alt="" width="30" height="30" /><span>LeS Manager</span></a>
+        <span className="spacer" />
+        <AccountMenu identity={identity} theme={theme} toggleTheme={toggleTheme}
+          openAccount={() => navigate(admin ? 'admin-account' : 'account')} signOut={() => setLogout(true)} />
+      </header>
+      <main className="content">
+        {screen && <div className="page" key={screen.id}>
+          <div className="page-head">
+            <div>
+              {currentGroup && currentGroup.label !== screen.label && <span className="eyebrow">{currentGroup.label}</span>}
+              <h1 ref={heading} tabIndex={-1}>{screen.id === 'home' ? greeting(identity.name) : screen.label}</h1>
+              {pageDescriptions[screen.id] && <p>{pageDescriptions[screen.id]}</p>}
+            </div>
+            <div className="actions" ref={setActionsSlot} />
+          </div>
+          <PageActionsProvider value={actionsSlot}>{content}</PageActionsProvider>
+        </div>}
+      </main>
+    </div>
+
+    {mobile && <nav className="bottom-nav" aria-label="Atalhos">
+      {bottomItems.map(group => {
+        const Icon = group.icon;
+        return <button type="button" key={group.id} aria-current={currentGroup?.id === group.id && !menuOpen ? 'page' : undefined}
+          onClick={() => navigate(group.pages[0].id)}><Icon size={22} aria-hidden="true" />{group.label}</button>;
+      })}
+      <button type="button" aria-current={menuOpen ? 'page' : undefined} aria-expanded={menuOpen} aria-controls="app-sidebar"
+        onClick={() => setMenuOpen(!menuOpen)}><MoreHorizontal size={22} aria-hidden="true" />Mais</button>
+    </nav>}
+
     {import.meta.env.PROD && <InstallApp />}
+    <Toaster />
     {logout && <ModalForm title="Sair do LeS Manager" label="Sair" close={() => setLogout(false)} action={async () => {
       await api('access/logout', {}); signedOut();
-    }}><p>Deseja encerrar esta sessão?</p></ModalForm>}
-  </>;
+    }}><p className="muted">Deseja encerrar esta sessão neste dispositivo?</p></ModalForm>}
+  </div>;
+}
+
+function greeting(name: string) {
+  const hour = Number(new Intl.DateTimeFormat('pt-BR', { hour: 'numeric', hourCycle: 'h23', timeZone: 'America/Sao_Paulo' }).format(new Date()));
+  const first = name.trim().split(/\s+/)[0];
+  return (hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite') + ', ' + first;
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

@@ -1,5 +1,8 @@
-import { FormEvent, ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createContext, FormEvent, ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { CheckCircle2, Inbox, Search, X } from 'lucide-react';
+
+/* ---------- Data ---------- */
 
 export async function api<T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST'): Promise<T> {
   let response: Response;
@@ -22,15 +25,15 @@ export async function api<T>(path: string, body?: unknown, method = body === und
   return data;
 }
 
-export function useData<T>(path: string) {
+export function useData<T>(path: string | null) {
   const [result, setResult] = useState<{ path: string; data?: T; error?: string }>();
   const request = useRef(0);
   const activePath = useRef(path);
   const mounted = useRef(false);
   activePath.current = path;
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(path !== null);
   async function reload() {
-    if (!mounted.current || path !== activePath.current) return;
+    if (!mounted.current || path === null || path !== activePath.current) return;
     const id = ++request.current;
     setLoading(true);
     try {
@@ -50,55 +53,168 @@ export function useData<T>(path: string) {
     return () => { mounted.current = false; request.current++; };
   }, [path]);
   return { data: result?.path === path ? result.data : undefined, error: result?.path === path ? result.error ?? '' : '',
-    loading: loading || result?.path !== path, reload };
+    loading: path !== null && (loading || result?.path !== path), reload };
 }
+
+/* ---------- Formatting ---------- */
+
+/** Formats an exact decimal string in pt-BR without losing digits: thousands with dots, trimmed fraction. */
+export function decimal(value: string | null | undefined) {
+  if (value == null || value === '') return '—';
+  const [sign, digits] = value.startsWith('-') ? ['−', value.slice(1)] : ['', value];
+  const [integer, fraction = ''] = digits.split('.');
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const trimmed = fraction.replace(/0+$/, '');
+  return sign + grouped + (trimmed ? ',' + trimmed : '');
+}
+export const quantity = decimal;
+
+const currency = (digits: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: digits });
+/** Money in reais. Small unit costs keep up to four decimals so per-gram costs stay readable. */
+export function brl(value: string | number | null | undefined) {
+  if (value == null || value === '') return '—';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '—';
+  return currency(Math.abs(number) > 0 && Math.abs(number) < 1 ? 4 : 2).format(number);
+}
+export const dateTime = (value: string) => new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+export const displayDate = (value: string) => value.split('-').reverse().join('/');
+export const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+export function relativeTime(value: string) {
+  const minutes = Math.round((Date.now() - Date.parse(value)) / 60000);
+  if (minutes < 1) return 'agora';
+  if (minutes < 60) return 'há ' + minutes + ' min';
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return 'há ' + hours + ' h';
+  return dateTime(value);
+}
+
+export const accessible = (permissions: string[], permission: string) => permissions.includes('admin') || permissions.includes(permission) ||
+  (permission.endsWith(':view') && permissions.includes(permission.replace(':view', ':operate')));
+
+/* ---------- Feedback ---------- */
+
+export const message = (text: string) => text ? <p role="alert" className="alert">{text}</p> : null;
 
 export function Loading({ label = 'Carregando…' }: { label?: string }) {
   return <p className="loading" role="status"><span className="spinner" aria-hidden="true" />{label}</p>;
 }
 
-export function Modal({ title, close, children }: { title: string; close: () => void; children: ReactNode }) {
+export function Empty({ children, icon }: { children: ReactNode; icon?: ReactNode }) {
+  return <div className="empty">{icon ?? <Inbox size={28} aria-hidden="true" />}<span>{children}</span></div>;
+}
+
+type Toast = { id: number; text: string; leaving?: boolean };
+const toastListeners = new Set<(toast: Toast) => void>();
+let toastId = 0;
+/** Shows a short confirmation that disappears on its own. */
+export function notify(text: string) {
+  const toast = { id: ++toastId, text };
+  toastListeners.forEach(listener => listener(toast));
+}
+
+export function Toaster() {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  useEffect(() => {
+    const add = (toast: Toast) => {
+      setToasts(items => [...items.slice(-2), toast]);
+      setTimeout(() => setToasts(items => items.map(item => item.id === toast.id ? { ...item, leaving: true } : item)), 3200);
+      setTimeout(() => setToasts(items => items.filter(item => item.id !== toast.id)), 3400);
+    };
+    toastListeners.add(add);
+    return () => { toastListeners.delete(add); };
+  }, []);
+  return <div className="toasts" role="status" aria-live="polite">
+    {toasts.map(toast => <div key={toast.id} className={'toast' + (toast.leaving ? ' leaving' : '')}>
+      <CheckCircle2 size={18} aria-hidden="true" />{toast.text}
+    </div>)}
+  </div>;
+}
+
+/* ---------- Page layout ---------- */
+
+const PageActionsSlot = createContext<HTMLElement | null>(null);
+export const PageActionsProvider = PageActionsSlot.Provider;
+
+/** Renders buttons into the current page header, beside the title. */
+export function PageActions({ children }: { children: ReactNode }) {
+  const slot = useContext(PageActionsSlot);
+  return slot ? createPortal(children, slot) : null;
+}
+
+export function Section({ title, subtitle, actions, children }: { title?: string; subtitle?: string; actions?: ReactNode; children: ReactNode }) {
+  return <section className="section">
+    {(title || actions) && <div className="section-head">
+      <div>{title && <h2>{title}</h2>}{subtitle && <p>{subtitle}</p>}</div>
+      {actions && <div className="actions">{actions}</div>}
+    </div>}
+    {children}
+  </section>;
+}
+
+export function Badge({ tone, children }: { tone?: 'ok' | 'warn' | 'brand' | 'danger'; children: ReactNode }) {
+  return <span className={'badge' + (tone ? ' ' + tone : '')}>{children}</span>;
+}
+
+/* ---------- Dialogs ---------- */
+
+/** A side panel on desktop and a bottom sheet on phones. Plays an exit animation before closing. */
+export function Modal({ title, subtitle, close, wide = false, children }: {
+  title: string; subtitle?: string; close: () => void; wide?: boolean; children: ReactNode;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useId();
+  const [closing, setClosing] = useState(false);
   useLayoutEffect(() => {
     const element = dialog.current!;
     element.showModal();
-    element.querySelector<HTMLElement>('input:not([type="hidden"]), select, textarea')?.focus();
+    element.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select, textarea')?.focus();
     return () => { if (element.open) element.close(); };
   }, []);
   function requestClose() {
-    if (!dialog.current?.querySelector('[aria-busy="true"]')) close();
+    if (closing || dialog.current?.querySelector('[aria-busy="true"]')) return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) { close(); return; }
+    setClosing(true);
   }
-  return createPortal(<dialog ref={dialog} className="modal" aria-labelledby={heading}
-    onCancel={event => { event.preventDefault(); requestClose(); }}>
-    <div className="modal-heading"><h2 id={heading}>{title}</h2>
-      <button type="button" className="secondary icon-close" onClick={requestClose} aria-label="Fechar janela">×</button>
+  return createPortal(<dialog ref={dialog} className={'panel' + (wide ? ' wide' : '') + (closing ? ' closing' : '')} aria-labelledby={heading}
+    onCancel={event => { event.preventDefault(); requestClose(); }}
+    onClick={event => { if (event.target === dialog.current) requestClose(); }}
+    onAnimationEnd={event => { if (closing && event.target === dialog.current) close(); }}>
+    <div className="panel-grip" aria-hidden="true" />
+    <div className="panel-head">
+      <div><h2 id={heading}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>
+      <button type="button" className="icon-button" onClick={requestClose} aria-label="Fechar"><X size={20} aria-hidden="true" /></button>
     </div>
-    <div className="modal-content">{children}</div>
+    <div className="panel-body"><CloseContext.Provider value={requestClose}>{children}</CloseContext.Provider></div>
   </dialog>, document.body);
 }
 
-export function ModalForm({ title, close, ...form }: { title: string; close: () => void } & Parameters<typeof Form>[0]) {
-  return <Modal title={title} close={close}>
-    <Form {...form} action={async data => { await form.action(data); close(); }} />
+const CloseContext = createContext<(() => void) | null>(null);
+/** Closes the enclosing panel with its exit animation. */
+export const useClosePanel = () => useContext(CloseContext);
+
+export function ModalForm({ title, subtitle, close, wide, ...form }: {
+  title: string; subtitle?: string; close: () => void; wide?: boolean;
+} & Parameters<typeof Form>[0]) {
+  return <Modal title={title} subtitle={subtitle} close={close} wide={wide}>
+    <PanelForm {...form} />
   </Modal>;
 }
 
-export function FileField({ name, label, accept }: { name: string; label: string; accept: string }) {
-  return <label className="file-field">{label}
-    <input type="file" name={name} accept={accept} required />
-  </label>;
+function PanelForm(form: Parameters<typeof Form>[0]) {
+  const closePanel = useClosePanel();
+  return <Form {...form} cancel={form.cancel ?? 'Cancelar'} action={async data => { await form.action(data); closePanel?.(); }} />;
 }
 
-export function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
-  return <section className="section"><h2>{title}</h2>{subtitle && <p className="muted">{subtitle}</p>}{children}</section>;
-}
+/* ---------- Forms ---------- */
 
-export function Form({ children, action, label, className, reset = false, disabled = false }: {
-  children?: ReactNode; action: (data: FormData) => Promise<unknown>; label: string; className?: string; reset?: boolean; disabled?: boolean;
+export function Form({ children, action, label, reset = false, disabled = false, cancel, extra, danger = false }: {
+  children?: ReactNode; action: (data: FormData) => Promise<unknown>; label: string; reset?: boolean; disabled?: boolean;
+  cancel?: string; extra?: ReactNode; danger?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const closePanel = useClosePanel();
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -109,43 +225,98 @@ export function Form({ children, action, label, className, reset = false, disabl
     catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
   }
-  return <form onSubmit={submit} className={className} aria-busy={busy}>
-    <fieldset disabled={busy || disabled}>{children}<button type="submit">{busy && <span className="spinner" aria-hidden="true" />}{busy ? 'Aguarde…' : label}</button></fieldset>
+  return <form onSubmit={submit} className="form" aria-busy={busy}>
+    <fieldset disabled={busy || disabled}>{children}</fieldset>
     {error && <p role="alert" className="alert">{error}</p>}
+    <div className="form-actions">
+      {extra}
+      {cancel && closePanel && <button type="button" className="btn secondary" disabled={busy} onClick={closePanel}>{cancel}</button>}
+      <button type="submit" className={'btn' + (danger ? ' danger' : '')} disabled={busy || disabled}>
+        {busy && <span className="spinner" aria-hidden="true" />}{busy ? 'Aguarde…' : label}
+      </button>
+    </div>
   </form>;
 }
 
-export function Field({ name, label, type = 'text', defaultValue, required = true, placeholder }: {
-  name: string; label: string; type?: string; defaultValue?: string; required?: boolean; placeholder?: string;
-}) {
-  return <label>{label}<input name={name} type={type} defaultValue={defaultValue} required={required} placeholder={placeholder} /></label>;
+export function FileField({ name, label, accept }: { name: string; label: string; accept: string }) {
+  return <label className="file-field">{label}
+    <input type="file" name={name} accept={accept} required />
+  </label>;
 }
 
-export function Select({ name, label, options, defaultValue, onChange, required = true }: {
+export function Field({ name, label, type = 'text', defaultValue, required = true, placeholder, hint, inputMode }: {
+  name: string; label: string; type?: string; defaultValue?: string; required?: boolean; placeholder?: string; hint?: string;
+  inputMode?: 'decimal' | 'numeric' | 'text' | 'email';
+}) {
+  return <label>{label}<input name={name} type={type} defaultValue={defaultValue} required={required} placeholder={placeholder} inputMode={inputMode} />
+    {hint && <span className="hint">{hint}</span>}</label>;
+}
+
+export function Select({ name, label, options, defaultValue, onChange, required = true, placeholder }: {
   name: string; label: string; options: { id: string; name: string }[]; defaultValue?: string;
-  onChange?: (id: string) => void; required?: boolean;
+  onChange?: (id: string) => void; required?: boolean; placeholder?: string;
 }) {
   return <label>{label}<select name={name} defaultValue={defaultValue ?? ''} required={required} onChange={event => onChange?.(event.target.value)}>
-    <option value="">{required ? 'Selecione' : 'Nenhum'}</option>
+    <option value="">{placeholder ?? (required ? 'Selecione' : 'Nenhum')}</option>
     {options.map(option => <option value={option.id} key={option.id}>{option.name}</option>)}
   </select></label>;
 }
 
-export function Table({ columns, rows, empty = 'Nenhum registro.' }: { columns: string[]; rows: ReactNode[][]; empty?: string }) {
-  if (!rows.length) return <p className="empty">{empty}</p>;
-  return <div className="table-wrap"><table><thead><tr>{columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
-    <tbody>{rows.map((row, index) => <tr key={index}>{row.map((cell, col) => <td key={col}>{cell}</td>)}</tr>)}</tbody>
-  </table></div>;
+export function SearchInput({ value, onChange, label = 'Buscar', placeholder = 'Buscar por SKU ou nome' }: {
+  value: string; onChange: (value: string) => void; label?: string; placeholder?: string;
+}) {
+  return <label className="search"><span className="sr-only">{label}</span>
+    <Search size={16} aria-hidden="true" />
+    <input type="search" value={value} placeholder={placeholder} onChange={event => onChange(event.target.value)} />
+  </label>;
 }
 
+export function Segmented<T extends string>({ label, options, value, onChange }: {
+  label: string; options: { id: T; name: string }[]; value: T; onChange: (value: T) => void;
+}) {
+  return <div className="segmented" role="group" aria-label={label}>
+    {options.map(option => <button type="button" key={option.id} aria-pressed={option.id === value} onClick={() => onChange(option.id)}>{option.name}</button>)}
+  </div>;
+}
+
+/** Case- and accent-insensitive search over the given texts. */
+export function matches(query: string, ...texts: (string | null | undefined)[]) {
+  const normalize = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+  const needle = normalize(query.trim());
+  return !needle || texts.some(text => text && normalize(text).includes(needle));
+}
+
+/* ---------- Tables ---------- */
+
+export type Column = string | { label: string; end?: boolean; hideLabel?: boolean; actions?: boolean };
+
+/** A table on wide screens and a list of cards on phones. The first column is each card's title. */
+export function Table({ columns, rows, empty = 'Nenhum registro.', footer, responsive = true }: {
+  columns: Column[]; rows: ReactNode[][]; empty?: string; footer?: ReactNode; responsive?: boolean;
+}) {
+  const specs = columns.map(column => typeof column === 'string' ? { label: column } : column);
+  if (!rows.length) return <div className="table-card"><Empty>{empty}</Empty></div>;
+  return <div className={'table-card' + (responsive ? ' responsive' : '')}>
+    <div className="table-scroll"><table>
+      <thead><tr>{specs.map(column => <th key={column.label} className={column.end ? 'end' : undefined}>
+        {column.actions ? <span className="sr-only">{column.label}</span> : column.label}</th>)}</tr></thead>
+      <tbody>{rows.map((row, index) => <tr key={index}>{row.map((cell, col) => {
+        const column = specs[col];
+        const className = [column?.end && 'end', (column?.hideLabel || column?.actions) && 'no-label', column?.actions && 'actions-cell'].filter(Boolean).join(' ');
+        return <td key={col} data-label={column?.label} className={className || undefined}>{cell}</td>;
+      })}</tr>)}</tbody>
+    </table></div>
+    {footer && <div className="table-footer">{footer}</div>}
+  </div>;
+}
+
+/** Title and code stacked in the first cell of a row. */
+export const Title = ({ name, code }: { name: string; code?: string | null }) =>
+  <><span className="cell-title">{name}</span>{code && <span className="cell-sub mono">{code}</span>}</>;
+
+/* ---------- Domain types ---------- */
+
 export const fields = (data: FormData) => Object.fromEntries([...data].map(([key, value]) => [key, String(value)]));
-export const decimal = (value: string) => value.replace('.', ',');
-export const brl = (value: string | null) => value == null ? '—' : 'R$ ' + decimal(value);
-export const dateTime = (value: string) => new Date(value).toLocaleString('pt-BR');
-export const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
-export const accessible = (permissions: string[], permission: string) => permissions.includes('admin') || permissions.includes(permission) ||
-  (permission.endsWith(':view') && permissions.includes(permission.replace(':view', ':operate')));
-export const message = (text: string) => text && <p role="alert" className="alert">{text}</p>;
 
 export type Identity = { id: string; name: string; email: string; profileName: string; permissions: string[] };
 export type Unit = { id: string; symbol: string; factor: string; familyId: string; isBase: boolean };
@@ -161,3 +332,5 @@ export type StockView = { products: Product[]; kits: Kit[]; units: Unit[] };
 export const baseUnit = (product: Pick<Product, 'unit'>) => product.unit.family.units[0] ?? product.unit;
 export const productOptions = (products: Product[]) => products.map(product => ({ id: product.id, name: product.sku + ' · ' + product.name }));
 export const unitOptions = (units: Unit[], bySymbol = false) => units.map(unit => ({ id: bySymbol ? unit.symbol : unit.id, name: unit.symbol }));
+/** Stock value at average cost. For display only: the backend keeps the exact decimals. */
+export const stockValue = (product: Pick<Product, 'quantity' | 'currentCost'>) => Number(product.quantity) * Number(product.currentCost ?? 0);
