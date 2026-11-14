@@ -23,13 +23,13 @@ Para desenvolvimento com recarregamento automático, execute `npm run dev:api` e
 
 ## Instalar o aplicativo
 
-A instalação está disponível no **build de produção** em `localhost` ou em um endereço **HTTPS**. Em outro dispositivo, acesse o endereço HTTPS da empresa. Use **Instalar aplicativo** no aviso do canto inferior direito ou a opção de instalação do navegador. Ao dispensar o aviso, o botão discreto **Instalar app** permanece disponível enquanto o app estiver disponível para instalação. No Safari do iPhone, escolha **Compartilhar → Adicionar à Tela de Início**. O app instalado abre em janela própria. As operações precisam de conexão com a API. O cache offline contém somente a página pública de aviso.
+A instalação está disponível no **build de produção** em `localhost` ou em um endereço **HTTPS**. Em outro dispositivo, acesse o endereço HTTPS da empresa. Use **Instalar** no aviso do canto inferior ou a opção de instalação do navegador. Depois de dispensado, o aviso não volta neste navegador. No Safari do iPhone, escolha **Compartilhar → Adicionar à Tela de Início**. O app instalado abre em janela própria. As operações precisam de conexão com a API. O cache offline contém somente a página pública de aviso.
 
-Abra o menu da conta no cabeçalho para alternar entre os temas claro e escuro ou acessar as configurações pessoais. Administradores também encontram **Minha conta** no menu **Acessos**. A troca de senha encerra todas as sessões da conta. O menu lateral memoriza se está aberto ou fechado neste navegador.
+Abra o menu da conta, no canto superior direito, para alternar entre os temas claro e escuro, acessar **Minha conta** ou sair. A troca de senha encerra todas as sessões da conta. No computador, o menu lateral pode ser recolhido em uma barra de ícones, e a escolha fica memorizada neste navegador. No celular, a barra inferior leva às áreas principais, e **Mais** abre o menu completo. Quando a sessão expira, o painel volta ao login e, depois de entrar, abre a mesma tela.
 
 Cada tela tem seu próprio endereço, como `/#/estoque` ou `/#/financeiro/conciliacao`. Atualizar a página mantém a tela, os botões voltar e avançar do navegador funcionam, e um link aberto sem sessão leva à tela pedida depois do login. Endereços desconhecidos ou fora do perfil abrem o Início.
 
-**Início** mostra os atalhos autorizados pelo perfil. Clique no logo para voltar a essa tela. **Catálogo** reúne as consultas de produtos e kits. Para incluir ou editar esses itens, abra **Cadastros → Produtos** ou **Cadastros → Kits** e use os formulários em modal. Itens fora de linha podem ser **inativados**: eles saem do estoque e das listas de seleção, e o histórico é preservado. Um produto só pode ser inativado com saldo zerado e fora de kits ativos. Use **Mostrar inativos** para encontrá-los e reativá-los.
+**Início** mostra, em blocos separados, o resumo do **Estoque** (produtos, valor pelo custo médio, kits e movimentações) e do **Financeiro** (saldo bancário, entradas, saídas e lançamentos a conciliar), conforme o perfil. Clique no logo para voltar a essa tela. **Catálogo** reúne as consultas de produtos e kits. Para incluir ou editar esses itens, abra **Cadastros → Produtos** ou **Cadastros → Kits** e use os formulários do painel lateral. Itens fora de linha podem ser **inativados**: eles saem do estoque e das listas de seleção, e o histórico é preservado. Um produto só pode ser inativado com saldo zerado e fora de kits ativos. Use o filtro **Inativos** para encontrá-los e reativá-los.
 
 Para hospedar o painel, mantenha frontend e API na mesma origem. Configure HTTPS no proxy, `COOKIE_SECURE=true` e um endereço de escuta apropriado em `HOST`. Restrinja o acesso ao banco e faça backup da base antes de atualizar versões.
 
@@ -59,7 +59,7 @@ O custo do estoque usa a **média ponderada móvel**. Cada compra ou carga inici
 
 ## Financeiro e conciliação
 
-Crie uma integração no Inter com permissão de consulta de extrato. Comece com `INTER_ENV=sandbox` e preencha as variáveis comentadas em `.env.example`. Aponte para os arquivos PEM do certificado e da chave privada fora do repositório. `INTER_ACCOUNT` é opcional quando a integração identifica uma única conta. Reinicie a API e use **Financeiro → Extrato → Atualizar saldo e extrato do período**. O sandbox usa dados fictícios. [Portal do Inter Empresas](https://developers.inter.co/sandbox)
+Crie uma integração no Inter com permissão de consulta de extrato. Comece com `INTER_ENV=sandbox` e preencha as variáveis comentadas em `.env.example`. Aponte para os arquivos PEM do certificado e da chave privada fora do repositório. `INTER_ACCOUNT` é opcional quando a integração identifica uma única conta. Reinicie a API e use **Financeiro → Extrato → Sincronizar período**. O sandbox usa dados fictícios. [Portal do Inter Empresas](https://developers.inter.co/sandbox)
 
 A atualização consulta todas as páginas antes de gravar. Cada dia completo substitui a versão anterior daquele dia em uma transação única. Se o banco falhar durante a consulta, o painel mantém o último saldo e extrato gravados.
 
