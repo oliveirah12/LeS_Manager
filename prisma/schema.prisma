@@ -98,6 +98,7 @@ model Product {
   department    Reference?      @relation("ProductDepartment", fields: [departmentId], references: [id])
   quantity      Decimal         @default(0) @db.Decimal(30, 12)
   currentCost   Decimal?        @db.Decimal(30, 12)
+  lastPurchaseCost Decimal?     @db.Decimal(30, 12)
   revision      Int             @default(0)
   movements     Movement[]
   kitComponents KitComponent[]
@@ -187,9 +188,12 @@ model AuditEvent {
   actorName   String?
   targetId    String?
   status      Int?
+  details     Json?
   createdAt   DateTime  @default(now())
   completedAt DateTime?
   @@index([createdAt, id])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
 }
 
 model BankReconciliation {

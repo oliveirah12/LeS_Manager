@@ -2,6 +2,8 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { MovementKind, Prisma, Product } from '@prisma/client';
 import { z } from 'zod';
 import { CatalogService, inBase, productInclude } from '../catalog/catalog';
+import { auditChange } from '../audit/recorder';
+import { averageCost } from './cost';
 import { Database, decimalField, idField, money, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal } from '../shared';
 
 export const movementFields = z.object({
@@ -33,10 +35,20 @@ export class StockService {
   ) {
     const balance = storedDecimal(product.quantity.plus(quantity));
     if (balance.lt(0)) throw new ConflictException('Saldo insuficiente para ' + product.sku + '.');
-    const updatedCost = kind === 'PURCHASE' || kind === 'INITIAL' ? unitCost : product.currentCost;
+    // Entries with their own cost update the moving average; other movements keep it.
+    const updatedCost = (kind === 'PURCHASE' || kind === 'INITIAL') && unitCost !== null
+      ? storedDecimal(averageCost(product.quantity, product.currentCost, quantity, unitCost)) : product.currentCost;
     await tx.product.update({
-      where: { id: product.id }, data: { quantity: balance, currentCost: updatedCost, revision: { increment: 1 } },
+      where: { id: product.id },
+      data: {
+        quantity: balance, currentCost: updatedCost, revision: { increment: 1 },
+        ...(kind === 'PURCHASE' ? { lastPurchaseCost: unitCost } : {}),
+      },
     });
+    auditChange(
+      { [product.sku + ' · saldo']: product.quantity, [product.sku + ' · custo médio']: product.currentCost },
+      { [product.sku + ' · saldo']: balance, [product.sku + ' · custo médio']: updatedCost },
+    );
     return tx.movement.create({ data: { productId: product.id, userId, quantity, kind, reason, unitCost, kitId } });
   }
 
@@ -47,6 +59,7 @@ export class StockService {
     if ((data.kind === 'PURCHASE') !== (data.unitCost !== undefined)) {
       throw new BadRequestException('Informe o custo por unidade somente em entradas de compra.');
     }
+    auditChange(null, { Tipo: data.kind, Motivo: data.reason });
     return serial(this.db, async tx => {
       const product = await tx.product.findUnique({ where: { id: data.productId }, include: { unit: true } });
       const unit = await tx.unit.findUnique({ where: { id: data.unitId } });
@@ -58,6 +71,7 @@ export class StockService {
   }
 
   kitOut(id: string, data: z.infer<typeof kitOutFields>, userId: string) {
+    auditChange(null, { 'Quantidade de kits': data.quantity, Motivo: data.reason });
     return serial(this.db, async tx => {
       const kit = await tx.kit.findUnique({
         where: { id }, include: { components: { orderBy: { productId: 'asc' }, include: { product: true } } },

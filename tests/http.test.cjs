@@ -186,12 +186,19 @@ test('API REST com PostgreSQL', {
     const encodedProduct = '%' + product.id.charCodeAt(0).toString(16) + product.id.slice(1);
     expectStatus(await catalog('/catalog/products/' + encodedProduct, { method: 'PATCH', body: { name: 'Produto editado' } }), 200);
     expectStatus(await catalog('/audit'), 403);
-    const audit = expectStatus(await admin('/audit'), 200);
-    assert.ok(audit.events.some(event => event.action === 'Alterar produto' && event.actorId === user.id &&
-      event.targetId === product.id && event.status === 200));
+    const audit = expectStatus(await admin('/audit?' + new URLSearchParams({ userId: user.id })), 200);
+    assert.ok(audit.events.every(event => event.actorId === user.id));
+    const edited = audit.events.find(event => event.action === 'Alterar produto' && event.targetId === product.id && event.status === 200);
+    assert.deepEqual(edited.details.before, { Nome: 'CATALOGO-RESTRITO' });
+    assert.deepEqual(edited.details.after, { Nome: 'Produto editado' });
+    assert.ok(audit.events.some(event => event.action === 'Ativar conta' && event.details.context['E-mail'] === email));
+    assert.equal(audit.events.some(event => event.action.startsWith('Consultar')), false);
     assert.equal(JSON.stringify(audit).includes(password), false);
+    assert.equal(JSON.stringify(audit).includes(user.code), false);
     expectStatus(await catalog('/catalog/registrations'), 403);
     expectStatus(await catalog('/catalog/references', { method: 'POST', body: { kind: 'COR', name: sku('COR') } }), 403);
+    const denied = expectStatus(await admin('/audit?' + new URLSearchParams({ result: 'denied', action: 'Criar classificação' })), 200);
+    assert.ok(denied.events.some(event => event.actorId === user.id && event.status === 403 && !event.details?.after));
     expectStatus(await catalog('/stock'), 403);
     expectStatus(await catalog('/stock/initial/template'), 403);
     expectStatus(await catalog('/stock/initial/preview', { method: 'POST' }), 403);
@@ -247,11 +254,13 @@ test('API REST com PostgreSQL', {
 
     const out = await productMovements(product.id, 'OUT');
     assert.deepEqual(new Map(out.map(row => [row.quantity.abs().toString(), row.unitCost.toString()])), new Map([
-      ['250', '0.01425'], ['500', '0.0195'],
+      ['250', '0.01425'], ['500', '0.016159090909'],
     ]));
     const stock = await productRow(product.id);
     assert.equal(stock.quantity.toString(), '2250');
-    assert.equal(stock.currentCost.toString(), '0.0195');
+    // (1750 g × 0.01425 + 1000 g × 0.0195) / 2750 g
+    assert.equal(stock.currentCost.toString(), '0.016159090909');
+    assert.equal(stock.lastPurchaseCost.toString(), '0.0195');
 
     const precise = await createProduct('PRECISAO', gram.id);
     expectStatus(await movement(precise.id, gram.id, 'PURCHASE', '123456789012345678.123456789012', '1'), 201);

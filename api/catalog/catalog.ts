@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Get, Inject, Injectable, NotFoun
 import { Prisma, ReferenceKind } from '@prisma/client';
 import { z } from 'zod';
 import { Require } from '../access/access';
+import { Audit, auditChange } from '../audit/recorder';
 import { Database, idField, nameField, parse, positive, serial, skuField, storedDecimal } from '../shared';
 
 const referenceField = z.object({ kind: z.enum(ReferenceKind), name: nameField });
@@ -29,6 +30,22 @@ const references = [
   ['groupId', ReferenceKind.GRUPO], ['brandId', ReferenceKind.MARCA],
   ['colorId', ReferenceKind.COR], ['departmentId', ReferenceKind.DEPARTAMENTO],
 ] as const;
+
+const productAudit = {
+  sku: true, name: true, unit: { select: { symbol: true } }, group: { select: { name: true } }, brand: { select: { name: true } },
+  color: { select: { name: true } }, department: { select: { name: true } },
+} as const;
+type AuditedProduct = Prisma.ProductGetPayload<{ select: typeof productAudit }>;
+const productValues = (product: AuditedProduct) => ({
+  SKU: product.sku, Nome: product.name, Unidade: product.unit.symbol, Grupo: product.group?.name ?? null,
+  Marca: product.brand?.name ?? null, Cor: product.color?.name ?? null, Departamento: product.department?.name ?? null,
+});
+type AuditedKit = { sku: string; name: string; components: { quantity: Prisma.Decimal; product: { sku: string } }[] };
+const kitValues = (kit: AuditedKit) => ({
+  SKU: kit.sku, Nome: kit.name,
+  Componentes: kit.components.map(item => item.product.sku + ' × ' + item.quantity.toFixed()).sort(),
+});
+const kitAudit = { components: { include: { product: { select: { sku: true } } } } } as const;
 
 export function inBase(unit: { familyId: string; factor: Prisma.Decimal }, familyId: string, quantity: Prisma.Decimal) {
   if (unit.familyId !== familyId) throw new BadRequestException('A unidade não pertence à família de medida do produto.');
@@ -84,7 +101,20 @@ export class CatalogService {
 
   async createProduct(tx: Prisma.TransactionClient, data: z.infer<typeof productFields>) {
     await this.assertReferences(tx, data);
-    return tx.product.create({ data, include: productInclude });
+    const product = await tx.product.create({ data, include: productInclude });
+    auditChange(null, productValues(await tx.product.findUniqueOrThrow({ where: { id: product.id }, select: productAudit })));
+    return product;
+  }
+
+  async updateProduct(id: string, data: z.infer<typeof productUpdate>) {
+    return serial(this.db, async tx => {
+      await this.assertReferences(tx, data);
+      const before = await tx.product.findUnique({ where: { id }, select: productAudit });
+      if (!before) throw new NotFoundException('Produto não encontrado.');
+      await tx.product.update({ where: { id }, data });
+      auditChange(productValues(before), productValues(await tx.product.findUniqueOrThrow({ where: { id }, select: productAudit })));
+      return tx.product.findUniqueOrThrow({ where: { id }, select: catalogProduct });
+    });
   }
 
   async saveKit(data: z.infer<typeof kitFields>, id?: string) {
@@ -101,12 +131,16 @@ export class CatalogService {
         if (!product || !unit) throw new NotFoundException('Produto ou unidade do kit não encontrado.');
         return { productId: product.id, quantity: inBase(unit, product.unit.familyId, item.quantity) };
       });
-      if (id) {
-        return tx.kit.update({
-          where: { id }, data: { sku: data.sku, name: data.name, components: { deleteMany: {}, create: components } },
-        });
-      }
-      return tx.kit.create({ data: { sku: data.sku, name: data.name, components: { create: components } } });
+      const before = id ? await tx.kit.findUnique({ where: { id }, include: kitAudit }) : null;
+      if (id && !before) throw new NotFoundException('Kit não encontrado.');
+      const kit = id
+        ? await tx.kit.update({
+          where: { id }, data: { sku: data.sku, name: data.name, components: { deleteMany: {}, create: components } }, include: kitAudit,
+        })
+        : await tx.kit.create({ data: { sku: data.sku, name: data.name, components: { create: components } }, include: kitAudit });
+      auditChange(before && kitValues(before), kitValues(kit));
+      const { components: _components, ...saved } = kit;
+      return saved;
     });
   }
 }
@@ -124,19 +158,34 @@ export class CatalogController {
   registrations() { return this.catalog.registrations(); }
 
   @Require('registrations:operate')
+  @Audit('Criar classificação')
   @Post('references')
-  addReference(@Body() body: unknown) { return this.db.reference.create({ data: parse(referenceField, body) }); }
+  addReference(@Body() body: unknown) {
+    const data = parse(referenceField, body);
+    auditChange(null, { Tipo: data.kind, Nome: data.name });
+    return this.db.reference.create({ data });
+  }
 
   @Require('registrations:operate')
+  @Audit('Alterar classificação')
   @Patch('references/:id')
   updateReference(@Param('id') id: string, @Body() body: unknown) {
-    return this.db.reference.update({ where: { id: parse(idField, id) }, data: parse(referenceField.pick({ name: true }), body) });
+    const referenceId = parse(idField, id);
+    const data = parse(referenceField.pick({ name: true }), body);
+    return serial(this.db, async tx => {
+      const before = await tx.reference.findUnique({ where: { id: referenceId } });
+      if (!before) throw new NotFoundException('Classificação não encontrada.');
+      auditChange({ Tipo: before.kind, Nome: before.name }, { Tipo: before.kind, Nome: data.name });
+      return tx.reference.update({ where: { id: referenceId }, data });
+    });
   }
 
   @Require('admin')
+  @Audit('Criar família de medida')
   @Post('families')
   family(@Body() body: unknown) {
     const data = parse(familyField, body);
+    auditChange(null, { Nome: data.name, 'Unidade base': data.baseSymbol });
     return this.db.unitFamily.create({
       data: { name: data.name, units: { create: { symbol: data.baseSymbol, factor: 1, isBase: true } } },
       include: { units: true },
@@ -144,10 +193,18 @@ export class CatalogController {
   }
 
   @Require('admin')
+  @Audit('Criar unidade')
   @Post('units')
-  unit(@Body() body: unknown) { return this.db.unit.create({ data: parse(unitField, body) }); }
+  async unit(@Body() body: unknown) {
+    const data = parse(unitField, body);
+    const unit = await this.db.unit.create({ data, include: { family: { select: { name: true } } } });
+    auditChange(null, { 'Símbolo': unit.symbol, Fator: unit.factor, 'Família': unit.family.name });
+    const { family: _family, ...saved } = unit;
+    return saved;
+  }
 
   @Require('catalog:operate')
+  @Audit('Criar produto')
   @Post('products')
   addProduct(@Body() body: unknown) {
     const data = parse(productFields, body);
@@ -155,21 +212,20 @@ export class CatalogController {
   }
 
   @Require('catalog:operate')
+  @Audit('Alterar produto')
   @Patch('products/:id')
   updateProduct(@Param('id') id: string, @Body() body: unknown) {
     const data = parse(productUpdate, body);
-    const productId = parse(idField, id);
-    return serial(this.db, async tx => {
-      await this.catalog.assertReferences(tx, data);
-      return tx.product.update({ where: { id: productId }, data, select: catalogProduct });
-    });
+    return this.catalog.updateProduct(parse(idField, id), data);
   }
 
   @Require('catalog:operate')
+  @Audit('Criar kit')
   @Post('kits')
   addKit(@Body() body: unknown) { return this.catalog.saveKit(parse(kitFields, body)); }
 
   @Require('catalog:operate')
+  @Audit('Alterar kit')
   @Patch('kits/:id')
   updateKit(@Param('id') id: string, @Body() body: unknown) {
     return this.catalog.saveKit(parse(kitFields, body), parse(idField, id));

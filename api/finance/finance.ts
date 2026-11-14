@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { BadGatewayException, BadRequestException, Body, ConflictException, Controller, Get, Inject, Injectable, Post, Query, Req, Res } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Body, ConflictException, Controller, Get, Inject, Injectable, Post, Query, Req } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type { Response } from 'express';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
+import { Audit, auditChange, auditTarget } from '../audit/recorder';
 import { Database, parse, serial } from '../shared';
 import { BankEntry, BankReader } from './bank';
 import { BankProvider, bankProvider, providers } from './providers';
@@ -91,6 +91,9 @@ export class FinanceService {
         throw new ConflictException('Lançamento indisponível para conciliação. Atualize o extrato.');
       }
       const where = { provider, date, key };
+      const before = await tx.bankReconciliation.findUnique({ where: { provider_date_key: where } });
+      auditChange({ Conferido: before !== null, 'Referência': before?.reference ?? null },
+        { Conferido: matched, 'Referência': matched ? reference || null : null });
       if (matched) {
         await tx.bankReconciliation.upsert({
           where: { provider_date_key: where },
@@ -167,18 +170,21 @@ export class FinanceController {
   }
 
   @Require('finance:operate')
+  @Audit('Sincronizar dados bancários')
   @Post('refresh')
   refresh(@Body() body: unknown) {
     const range = dateRange(body);
+    auditChange(null, { Provedor: bankProvider(range.provider).id, De: range.from, 'Até': range.to });
     return this.finance.refresh(range, bankProvider(range.provider));
   }
 
   @Require('finance:operate')
+  @Audit('Alterar conciliação bancária')
   @Post('reconciliation')
-  reconcile(@Req() request: Authenticated, @Body() body: unknown, @Res({ passthrough: true }) response: Response) {
+  reconcile(@Req() request: Authenticated, @Body() body: unknown) {
     const data = parse(reconciliationFields, body);
     const provider = bankProvider(data.provider).id;
-    response.locals.auditTarget = [provider, data.date, data.key].join(':');
+    auditTarget([provider, data.date, data.key].join(':'));
     return this.finance.reconcile(provider, data, request.identity.id);
   }
 }

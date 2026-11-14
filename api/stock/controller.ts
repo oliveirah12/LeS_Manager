@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Inject, Param, Post, Req, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Authenticated, Require } from '../access/access';
+import { Audit } from '../audit/recorder';
 import { CatalogService } from '../catalog/catalog';
 import { Database, idField, parse } from '../shared';
 import { countFields, initialFields, kitOutFields, movementFields, StockService } from './stock';
@@ -44,12 +45,14 @@ export class StockController {
   }
 
   @Require('stock:operate')
+  @Audit('Registrar movimentação')
   @Post('movements')
   movement(@Req() request: Authenticated, @Body() body: unknown) {
     return this.stock.movement(parse(movementFields, body), request.identity.id);
   }
 
   @Require('stock:operate')
+  @Audit('Registrar saída de kit')
   @Post('kits/:id/out')
   kitOut(@Req() request: Authenticated, @Param('id') id: string, @Body() body: unknown) {
     return this.stock.kitOut(parse(idField, id), parse(kitOutFields, body), request.identity.id);
@@ -60,12 +63,14 @@ export class StockController {
   inventoryTemplate() { return template('inventory'); }
 
   @Require('stock:operate')
+  @Audit(false)
   @Post('inventory/preview')
   inventoryPreview(@Req() request: Authenticated, @Body() body: unknown) {
     return this.stock.previewCount(parse(countFields, body), request.identity.id);
   }
 
   @Require('stock:operate')
+  @Audit(false)
   @Post('inventory/upload')
   @Upload()
   async inventoryUpload(@Req() request: Authenticated, @UploadedFile() file?: Express.Multer.File) {
@@ -73,6 +78,7 @@ export class StockController {
   }
 
   @Require('stock:operate')
+  @Audit('Confirmar inventário')
   @Post('inventory/:id/confirm')
   inventoryConfirm(@Req() request: Authenticated, @Param('id') id: string) {
     return this.stock.confirmCount(parse(idField, id), request.identity.id);
@@ -83,6 +89,7 @@ export class StockController {
   initialTemplate() { return template('initial'); }
 
   @Require('catalog:operate', 'stock:operate')
+  @Audit(false)
   @Post('initial/preview')
   @Upload()
   async initialPreview(@Req() request: Authenticated, @UploadedFile() file?: Express.Multer.File) {
@@ -90,6 +97,7 @@ export class StockController {
   }
 
   @Require('catalog:operate', 'stock:operate')
+  @Audit('Confirmar carga inicial')
   @Post('initial/:id/confirm')
   initialConfirm(@Req() request: Authenticated, @Param('id') id: string) {
     return this.stock.confirmInitial(parse(idField, id), request.identity.id);

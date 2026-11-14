@@ -38,6 +38,8 @@ Para hospedar o painel, mantenha frontend e API na mesma origem. Configure HTTPS
 3. Gere a prévia e confirme. Registre uma saída do item por peso em `g` e confira quantidade, custo por grama e usuário no histórico.
 4. Use a contagem em lote ou o segundo modelo XLSX para inventário. Confirme somente depois de conferir as diferenças. Uma movimentação posterior à prévia exige uma nova conferência.
 
+O custo do estoque usa a **média ponderada móvel**. Cada compra ou carga inicial recalcula o custo médio do produto, e as saídas gravam o custo médio vigente no momento. A tela de estoque também mostra o custo da última compra, apenas para consulta.
+
 ## Financeiro e conciliação
 
 Crie uma integração no Inter com permissão de consulta de extrato. Comece com `INTER_ENV=sandbox` e preencha as variáveis comentadas em `.env.example`. Aponte para os arquivos PEM do certificado e da chave privada fora do repositório. `INTER_ACCOUNT` é opcional quando a integração identifica uma única conta. Reinicie a API e use **Financeiro → Extrato → Atualizar saldo e extrato do período**. O sandbox usa dados fictícios. [Portal do Inter Empresas](https://developers.inter.co/sandbox)
@@ -48,7 +50,9 @@ O Inter é o provedor disponível nesta versão. Para integrar outro banco, impl
 
 ## Auditoria
 
-O menu **Auditoria** está disponível a administradores. O histórico começa com a ativação do recurso e registra as operações da API, incluindo consultas, alterações e tentativas negadas. Cada evento mostra o resultado, o usuário identificado e o ID do registro quando disponível. Senhas, códigos de acesso e conteúdo dos formulários ficam fora do histórico.
+O menu **Auditoria** está disponível a administradores. Ele registra inclusões, alterações, movimentações de estoque, sincronização e conciliação bancária, além dos eventos de segurança: entradas, falhas de login, ativações, trocas de senha, códigos gerados e tentativas negadas de alteração. Consultas e prévias não são registradas. Cada evento mostra o usuário, o resultado e os valores antes e depois dos campos alterados. Filtre por usuário, ação, resultado e período. Senhas, códigos de acesso e tokens ficam fora do histórico.
+
+Os eventos com mais de 12 meses são removidos automaticamente. Para mudar o prazo, defina `AUDIT_RETENTION_DAYS`.
 
 ## Testes
 

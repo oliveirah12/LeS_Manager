@@ -6,7 +6,8 @@ import { Global, Module } from '@nestjs/common';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AccessController, AccessGuard, AccessService } from './access/access';
-import { AuditController, AuditInterceptor, auditRequests } from './audit/audit';
+import { AuditController } from './audit/audit';
+import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
 import { FinanceController, FinanceService } from './finance/finance';
 import { Database, DatabaseErrors } from './shared';
@@ -29,7 +30,7 @@ class StockModule {}
 @Module({ controllers: [FinanceController], providers: [FinanceService] })
 class FinanceModule {}
 
-@Module({ controllers: [AuditController] })
+@Module({ controllers: [AuditController], providers: [AuditRetention] })
 class AuditModule {}
 
 @Module({ imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, AuditModule] })
@@ -44,7 +45,6 @@ export async function createApp() {
     response.setHeader('Cache-Control', 'no-store');
     next();
   });
-  app.use('/api', auditRequests(app.get(Database)));
   app.getHttpAdapter().getInstance().disable('x-powered-by');
   const web = resolve(__dirname, '../web');
   if (existsSync(resolve(web, 'index.html'))) app.useStaticAssets(web);

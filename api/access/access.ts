@@ -6,6 +6,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
+import { Audit, AUDIT, auditActor, auditChange, auditContext, beginAudit } from '../audit/recorder';
 import { Database, idField, nameField, parse, serial } from '../shared';
 import {
   activationFields, administrator, canAccess, configurablePermissions, emailField, hashPassword,
@@ -38,6 +39,8 @@ export class AccessGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<Authenticated>();
+    const action = this.reflector.get<string | false | undefined>(AUDIT, context.getHandler());
+    if (action) await beginAudit(this.db, context, action);
     if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && request.headers['sec-fetch-site'] === 'cross-site') {
       throw new ForbiddenException();
     }
@@ -73,6 +76,7 @@ export class AccessService {
   }
 
   async login(data: z.infer<typeof loginFields>, response: Response) {
+    auditContext({ 'E-mail': data.email });
     const user = await this.db.user.findUnique({ where: { email: data.email } });
     const valid = await verifyPassword(data.password, user?.passwordHash ?? null);
     if (!user?.active || !user.passwordHash || !valid) throw new UnauthorizedException('E-mail ou senha inválidos. Para ativar uma conta nova, use Primeiro acesso.');
@@ -80,6 +84,7 @@ export class AccessService {
   }
 
   async activate(data: z.infer<typeof activationFields>, response: Response) {
+    auditContext({ 'E-mail': data.email });
     const where = {
       email: data.email, active: true, passwordHash: null, activationHash: hashToken(data.code),
       activationExpires: { gt: new Date() },
@@ -98,10 +103,7 @@ export class AccessService {
   async logout(request: Request, response: Response) {
     const token = sessionToken(request);
     if (token) {
-      const where = { tokenHash: hashToken(token) };
-      const session = await this.db.session.findUnique({ where, include: { user: { select: { id: true, name: true } } } });
-      response.locals.auditActor = session?.user;
-      await this.db.session.deleteMany({ where });
+      await this.db.session.deleteMany({ where: { tokenHash: hashToken(token) } });
     }
     response.clearCookie(cookieName, cookieOptions);
     return { ok: true };
@@ -119,7 +121,7 @@ export class AccessService {
       await tx.session.create({ data: { userId, tokenHash: hashToken(token), expiresAt } });
       return user;
     });
-    response.locals.auditActor = actor;
+    auditActor(actor);
     response.cookie(cookieName, token, { ...cookieOptions, maxAge: sessionAge });
     return { ok: true };
   }
@@ -143,7 +145,10 @@ export class AccessService {
 
   async createUser(data: z.infer<typeof userFields>) {
     const { code, activationHash, activationExpires } = this.activation();
-    const user = await this.db.user.create({ data: { ...data, activationHash, activationExpires }, select: { id: true } });
+    const user = await this.db.user.create({
+      data: { ...data, activationHash, activationExpires }, select: { id: true, profile: { select: { name: true } } },
+    });
+    auditChange(null, { Nome: data.name, 'E-mail': data.email, Perfil: user.profile.name });
     return { id: user.id, code, expiresAt: activationExpires };
   }
 
@@ -165,6 +170,7 @@ export class AccessController {
   constructor(@Inject(AccessService) private service: AccessService, @Inject(Database) private db: Database) {}
 
   @Public()
+  @Audit('Entrar')
   @Post('login')
   @HttpCode(200)
   login(@Req() request: Request, @Body() body: unknown, @Res({ passthrough: true }) response: Response) {
@@ -173,6 +179,7 @@ export class AccessController {
   }
 
   @Public()
+  @Audit('Ativar conta')
   @Post('activate')
   @HttpCode(200)
   activate(@Req() request: Request, @Body() body: unknown, @Res({ passthrough: true }) response: Response) {
@@ -181,6 +188,7 @@ export class AccessController {
   }
 
   @Post('logout')
+  @Audit(false)
   @Public()
   logout(@Req() request: Request, @Res({ passthrough: true }) response: Response) {
     return this.service.logout(request, response);
@@ -189,9 +197,11 @@ export class AccessController {
   @Get('me')
   me(@Req() request: Authenticated) { return request.identity; }
 
+  @Audit('Alterar próprio nome')
   @Patch('me')
   async updateMe(@Req() request: Authenticated, @Body() body: unknown) {
     const data = parse(z.strictObject({ name: nameField }), body);
+    auditChange({ Nome: request.identity.name }, { Nome: data.name });
     const updated = await this.db.user.updateMany({
       where: { id: request.identity.id, active: true }, data,
     });
@@ -199,6 +209,7 @@ export class AccessController {
     return { ...request.identity, name: data.name };
   }
 
+  @Audit('Alterar própria senha')
   @Post('me/password')
   @HttpCode(200)
   changePassword(@Req() request: Authenticated, @Body() body: unknown, @Res({ passthrough: true }) response: Response) {
@@ -211,19 +222,23 @@ export class AccessController {
   profiles() { return this.db.profile.findMany({ orderBy: { name: 'asc' } }); }
 
   @Require(administrator)
+  @Audit('Criar perfil')
   @Post('profiles')
   createProfile(@Body() body: unknown) {
     const data = parse(profileFields, body);
+    auditChange(null, { Nome: data.name, 'Permissões': [...new Set(data.permissions)] });
     return this.db.profile.create({ data: { ...data, permissions: [...new Set(data.permissions)] } });
   }
 
   @Require(administrator)
+  @Audit('Alterar perfil')
   @Patch('profiles/:id')
   async updateProfile(@Param('id') id: string, @Body() body: unknown) {
     const data = parse(profileFields, body);
     const profile = await this.db.profile.findUnique({ where: { id: parse(idField, id) } });
     if (!profile) throw new NotFoundException('Perfil não encontrado.');
     if (profile.permissions.includes(administrator)) throw new ForbiddenException('O perfil administrador é reservado.');
+    auditChange({ Nome: profile.name, 'Permissões': profile.permissions }, { Nome: data.name, 'Permissões': [...new Set(data.permissions)] });
     return this.db.profile.update({ where: { id }, data: { ...data, permissions: [...new Set(data.permissions)] } });
   }
 
@@ -238,10 +253,12 @@ export class AccessController {
   }
 
   @Require(administrator)
+  @Audit('Criar usuário')
   @Post('users')
   createUser(@Body() body: unknown) { return this.service.createUser(parse(userFields, body)); }
 
   @Require(administrator)
+  @Audit('Alterar usuário')
   @Patch('users/:id')
   async updateUser(@Req() request: Authenticated, @Param('id') id: string, @Body() body: unknown) {
     const data = parse(userUpdate, body);
@@ -249,8 +266,12 @@ export class AccessController {
     return serial(this.db, async tx => {
       const actor = await tx.user.findUnique({ where: { id: request.identity.id }, include: { profile: true } });
       if (!actor?.active || !actor.profile.permissions.includes(administrator)) throw new ForbiddenException();
-      const existing = await tx.user.findUnique({ where: { id: userId } });
+      const existing = await tx.user.findUnique({ where: { id: userId }, include: { profile: true } });
       if (!existing) throw new NotFoundException('Usuário não encontrado.');
+      const profile = await tx.profile.findUnique({ where: { id: data.profileId } });
+      if (!profile) throw new NotFoundException('Perfil não encontrado.');
+      auditChange({ Nome: existing.name, Perfil: existing.profile.name, Ativo: existing.active },
+        { Nome: data.name, Perfil: profile.name, Ativo: data.active });
       if (actor.id === userId && (!data.active || existing.profileId !== data.profileId)) {
         throw new ConflictException('Você precisa manter seu próprio acesso de administrador.');
       }
@@ -261,6 +282,7 @@ export class AccessController {
   }
 
   @Require(administrator)
+  @Audit('Gerar código de acesso')
   @Post('users/:id/code')
   replaceCode(@Param('id') id: string) { return this.service.replaceCode(parse(idField, id)); }
 }

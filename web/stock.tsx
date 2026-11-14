@@ -33,8 +33,8 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
         {edit && <button type="button" className="secondary" onClick={() => setDialog('inventory')}>Inventário físico</button>}
         {importInitial && <button type="button" className="secondary" onClick={() => setDialog('initial')}>Carga inicial por planilha</button>}
       </div>
-      <Table columns={['SKU', 'Produto', 'Saldo', 'Último custo por unidade base']} rows={data.products.map(item => [
-        item.sku, item.name, decimal(item.quantity) + ' ' + baseUnit(item).symbol, brl(item.currentCost),
+      <Table columns={['SKU', 'Produto', 'Saldo', 'Custo médio por unidade base', 'Última compra por unidade base']} rows={data.products.map(item => [
+        item.sku, item.name, decimal(item.quantity) + ' ' + baseUnit(item).symbol, brl(item.currentCost), brl(item.lastPurchaseCost),
       ])} />
     </Section>
     <Section title="Disponibilidade de kits">
