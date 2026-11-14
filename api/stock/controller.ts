@@ -1,11 +1,19 @@
-import { Body, Controller, Get, Inject, Param, Post, Req, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Query, Req, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { MovementKind } from '@prisma/client';
+import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
 import { Audit } from '../audit/recorder';
 import { CatalogService } from '../catalog/catalog';
-import { Database, idField, parse } from '../shared';
+import { Database, dayRange, idField, parse } from '../shared';
 import { countFields, initialFields, kitOutFields, movementFields, StockService } from './stock';
 import { WorkbookKind, workbookRows, workbookTemplate } from './workbooks';
+
+const pageSize = 100;
+const historyFields = z.object({
+  cursor: idField.optional(), productId: idField.optional(),
+  kind: z.enum(MovementKind).optional(), from: z.iso.date().optional(), to: z.iso.date().optional(),
+});
 
 const Upload = () => UseInterceptors(FileInterceptor('file', { limits: { fileSize: 2 * 1024 * 1024, files: 1 } }));
 
@@ -34,14 +42,19 @@ export class StockController {
 
   @Require('stock:view')
   @Get('movements')
-  movements() {
-    return this.db.movement.findMany({
+  async movements(@Query() query: unknown) {
+    const { cursor, productId, kind, from, to } = parse(historyFields, query);
+    const movements = await this.db.movement.findMany({
+      where: { productId, kind, createdAt: dayRange(from, to) },
       include: {
         product: { select: { sku: true, name: true, unit: { include: { family: { include: { units: { where: { isBase: true } } } } } } } },
         user: { select: { name: true } }, kit: { select: { sku: true } },
       },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 200,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: pageSize + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
+    return { movements: movements.slice(0, pageSize), nextCursor: movements.length > pageSize ? movements[pageSize - 1].id : null };
   }
 
   @Require('stock:operate')

@@ -261,6 +261,13 @@ test('API REST com PostgreSQL', {
     // (1750 g × 0.01425 + 1000 g × 0.0195) / 2750 g
     assert.equal(stock.currentCost.toString(), '0.016159090909');
     assert.equal(stock.lastPurchaseCost.toString(), '0.0195');
+    const outs = expectStatus(await admin('/stock/movements?' + new URLSearchParams({ productId: product.id, kind: 'OUT' })), 200);
+    assert.deepEqual(outs.movements.map(row => row.quantity), ['-500', '-250']);
+    assert.equal(outs.nextCursor, null);
+    const tomorrow = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+    const future = expectStatus(await admin('/stock/movements?' + new URLSearchParams({ productId: product.id, from: tomorrow })), 200);
+    assert.equal(future.movements.length, 0);
+    expectStatus(await admin('/stock/movements?kind=INVALIDO'), 400);
 
     const precise = await createProduct('PRECISAO', gram.id);
     expectStatus(await movement(precise.id, gram.id, 'PURCHASE', '123456789012345678.123456789012', '1'), 201);

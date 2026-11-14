@@ -53,7 +53,7 @@ export function Audit() {
   }
 
   return <Section title="Histórico de alterações" subtitle="Inclusões, alterações, acessos e tentativas negadas dos últimos 12 meses.">
-    <form className="audit-filters" onSubmit={apply} onReset={() => { setFilters({}); setCursors([]); }}>
+    <form className="filters" onSubmit={apply} onReset={() => { setFilters({}); setCursors([]); }}>
       <label>Usuário<select name="userId" defaultValue="">
         <option value="">Todos</option>
         {options.data?.users.map(user => <option key={user.id} value={user.id}>{user.name}</option>)}

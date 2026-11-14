@@ -33,6 +33,16 @@ export const storedDecimal = (value: Prisma.Decimal) => {
   return value;
 };
 
+/** Filter for calendar days in Brasília time, from the start of `from` to the end of `to`. */
+export function dayRange(from?: string, to?: string) {
+  if (!from && !to) return undefined;
+  const start = (day: string) => new Date(day + 'T00:00:00-03:00');
+  return {
+    ...(from ? { gte: start(from) } : {}),
+    ...(to ? { lt: new Date(start(to).getTime() + 86400000) } : {}),
+  };
+}
+
 export async function serial<T>(db: Database, work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {

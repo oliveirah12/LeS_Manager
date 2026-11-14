@@ -2,7 +2,7 @@ import { Controller, Get, Inject, Query } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { Require } from '../access/access';
-import { Database, idField, parse } from '../shared';
+import { Database, dayRange, idField, parse } from '../shared';
 
 const filterFields = z.object({
   cursor: idField.optional(),
@@ -27,13 +27,8 @@ export class AuditController {
   @Get()
   async list(@Query() query: unknown) {
     const { cursor, userId, action, from, to, result } = parse(filterFields, query);
-    // Dates are calendar days in Brasília time.
-    const createdAt = from || to ? {
-      ...(from ? { gte: new Date(from + 'T00:00:00-03:00') } : {}),
-      ...(to ? { lt: new Date(new Date(to + 'T00:00:00-03:00').getTime() + 86400000) } : {}),
-    } : undefined;
     const events = await this.db.auditEvent.findMany({
-      where: { actorId: userId, action, createdAt, ...(result ? results[result] : {}) },
+      where: { actorId: userId, action, createdAt: dayRange(from, to), ...(result ? results[result] : {}) },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 51,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),

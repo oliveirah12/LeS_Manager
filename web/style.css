@@ -158,8 +158,8 @@ th { font-size: .85rem; background: var(--surface-soft); white-space: nowrap; }
 .provider-select { max-width: 18rem; margin-bottom: 1rem; }
 .reconciliation-status { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 .table-wrap code { white-space: normal; overflow-wrap: anywhere; }
-.audit-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: .55rem; align-items: end; margin: .5rem 0; }
-.audit-filters .actions { grid-column: 1 / -1; }
+.filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: .55rem; align-items: end; margin: .5rem 0; }
+.filters .actions { grid-column: 1 / -1; }
 .audit-details { display: grid; gap: .15rem; font-size: .85rem; overflow-wrap: anywhere; }
 .audit-details del { opacity: .65; }
 .page-heading, .section, .table-wrap, .preview, .loading { animation: appear var(--motion) ease-out both; }

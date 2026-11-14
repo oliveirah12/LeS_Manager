@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { FormEvent, useState } from 'react';
 import {
   api, baseUnit, brl, dateTime, decimal, Field, fields, FileField, Form, Loading, message, Modal, ModalForm, Product, productOptions, Section, Select,
   StockView, Table, unitOptions, useData,
 } from './ui';
 
 type History = { product: Product; user: { name: string }; createdAt: string; quantity: string; unitCost: string | null; kind: string; reason: string; kit?: { sku: string } };
+type HistoryPage = { movements: History[]; nextCursor: string | null };
+type HistoryFilters = { productId?: string; kind?: string; from?: string; to?: string };
 type CountPreview = { id: string; rows: { product: { sku: string; name: string; unit: Product['unit'] }; expected: string; counted: string; difference: string }[] };
 type InitialPreview = { id: string; rows: { sku: string; name: string; unit: string; quantity: string; unitCost?: string }[] };
 const kinds = [
@@ -14,7 +16,16 @@ const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJU
 
 export function Stock({ edit, importInitial }: { edit: boolean; importInitial: boolean }) {
   const stock = useData<StockView>('stock');
-  const history = useData<History[]>('stock/movements');
+  const [filters, setFilters] = useState<HistoryFilters>({});
+  const [cursors, setCursors] = useState<string[]>([]);
+  const cursor = cursors.at(-1);
+  const query = new URLSearchParams(Object.entries({ ...filters, cursor }).filter((entry): entry is [string, string] => !!entry[1]));
+  const history = useData<HistoryPage>('stock/movements' + (query.size ? '?' + query : ''));
+  function filter(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFilters(Object.fromEntries([...new FormData(event.currentTarget)].map(([key, value]) => [key, String(value)])));
+    setCursors([]);
+  }
   const [notice, setNotice] = useState('');
   const [dialog, setDialog] = useState<'movement' | 'kit' | 'inventory' | 'initial'>();
   const data = stock.data;
@@ -53,13 +64,33 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
     {edit && dialog === 'movement' && <Modal title="Registrar movimentação" close={() => setDialog(undefined)}><MovementForm data={data} saved={saved} /></Modal>}
     {edit && dialog === 'inventory' && <Modal title="Inventário físico" close={() => setDialog(undefined)}><Inventory data={data} saved={saved} /></Modal>}
     {importInitial && dialog === 'initial' && <Modal title="Carga inicial por planilha" close={() => setDialog(undefined)}><InitialImport saved={saved} /></Modal>}
-    <Section title="Histórico" subtitle="Últimas 200 movimentações.">
+    <Section title="Histórico" subtitle="Movimentações mais recentes primeiro, 100 por página.">
+      <form className="filters" onSubmit={filter} onReset={() => { setFilters({}); setCursors([]); }}>
+        <label>Produto<select name="productId" defaultValue="">
+          <option value="">Todos</option>
+          {productOptions(data.products).map(option => <option key={option.id} value={option.id}>{option.name}</option>)}
+        </select></label>
+        <label>Movimento<select name="kind" defaultValue="">
+          <option value="">Todos</option>
+          {Object.entries(labels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select></label>
+        <label>De<input type="date" name="from" /></label>
+        <label>Até<input type="date" name="to" /></label>
+        <div className="actions">
+          <button type="submit">Filtrar</button>
+          <button type="reset" className="secondary">Limpar</button>
+        </div>
+      </form>
       {message(history.error)}
       {history.loading && <Loading label="Carregando movimentações…" />}
-      {history.data && <Table columns={['Data', 'SKU', 'Movimento', 'Quantidade', 'Custo na data', 'Usuário', 'Motivo']} rows={history.data.map(item => [
+      {history.data && <Table empty="Nenhuma movimentação encontrada." columns={['Data', 'SKU', 'Movimento', 'Quantidade', 'Custo na data', 'Usuário', 'Motivo']} rows={history.data.movements.map(item => [
         dateTime(item.createdAt), item.product.sku, labels[item.kind], decimal(item.quantity) + ' ' + baseUnit(item.product).symbol,
         brl(item.unitCost), item.user.name, item.reason + (item.kit ? ' · ' + item.kit.sku : ''),
       ])} />}
+      <div className="actions">
+        {cursor && <button type="button" className="secondary" onClick={() => setCursors(cursors.slice(0, -1))}>Página anterior</button>}
+        {history.data?.nextCursor && <button type="button" className="secondary" onClick={() => setCursors([...cursors, history.data!.nextCursor!])}>Mais movimentações</button>}
+      </div>
     </Section>
   </>;
 }
