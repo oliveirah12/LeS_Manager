@@ -2,13 +2,22 @@ import { FormEvent, ReactNode, useEffect, useId, useLayoutEffect, useRef, useSta
 import { createPortal } from 'react-dom';
 
 export async function api<T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST'): Promise<T> {
-  const response = await fetch('/api/' + path, {
-    method,
-    ...(body instanceof FormData ? { body } : body === undefined ? {} : {
-      body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
-    }),
-  });
-  const data = await response.json();
+  let response: Response;
+  try {
+    response = await fetch('/api/' + path, {
+      method,
+      ...(body instanceof FormData ? { body } : body === undefined ? {} : {
+        body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+      }),
+    });
+  } catch {
+    throw new Error(navigator.onLine ? 'Servidor indisponível. Tente novamente em instantes.' : 'Sem conexão com a internet. Confira a rede e tente novamente.');
+  }
+  // A proxy or a restarting server may answer with an HTML page instead of the API's JSON.
+  const data = await response.json().catch(() => undefined);
+  if (data === undefined) {
+    throw new Error(response.status >= 500 || response.ok ? 'Servidor indisponível. Tente novamente em instantes.' : 'Falha na operação (' + response.status + ').');
+  }
   if (!response.ok) throw new Error(Array.isArray(data.message) ? data.message.join(' · ') : data.message ?? 'Falha na operação.');
   return data;
 }
