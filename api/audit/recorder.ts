@@ -1,11 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import {
-  CallHandler, ExecutionContext, Inject, Injectable, NestInterceptor, OnApplicationBootstrap, OnModuleDestroy, SetMetadata,
-} from '@nestjs/common';
+import { CallHandler, ExecutionContext, Inject, Injectable, NestInterceptor, SetMetadata } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { Request, Response } from 'express';
 import { concatMap, Observable } from 'rxjs';
-import { Database, idField } from '../shared';
+import { DailyTask, Database, idField } from '../shared';
 
 export const AUDIT = 'audit';
 /** Records the route in the audit trail under a stable label, or `false` to keep it out deliberately. */
@@ -108,19 +106,10 @@ export class AuditInterceptor implements NestInterceptor {
 }
 
 @Injectable()
-export class AuditRetention implements OnApplicationBootstrap, OnModuleDestroy {
-  private timer?: NodeJS.Timeout;
-  constructor(@Inject(Database) private db: Database) {}
+export class AuditRetention extends DailyTask {
+  constructor(@Inject(Database) private db: Database) { super(); }
 
-  onApplicationBootstrap() {
-    void this.prune();
-    this.timer = setInterval(() => void this.prune(), 24 * 60 * 60 * 1000);
-    this.timer.unref();
-  }
-
-  onModuleDestroy() { clearInterval(this.timer); }
-
-  async prune() {
+  protected async run() {
     const limit = new Date(Date.now() - retentionDays() * 24 * 60 * 60 * 1000);
     await this.db.auditEvent.deleteMany({ where: { createdAt: { lt: limit } } })
       .catch(() => console.error('Falha ao aplicar a retenção da auditoria.'));

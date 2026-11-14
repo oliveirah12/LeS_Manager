@@ -5,7 +5,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { Global, Module } from '@nestjs/common';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { AccessController, AccessGuard, AccessService } from './access/access';
+import { AccessController, AccessGuard, AccessService, SessionCleanup } from './access/access';
 import { AuditController } from './audit/audit';
 import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
@@ -18,7 +18,7 @@ import { StockService } from './stock/stock';
 @Module({ providers: [Database], exports: [Database] })
 class PersistenceModule {}
 
-@Module({ controllers: [AccessController], providers: [AccessService, { provide: APP_GUARD, useClass: AccessGuard }] })
+@Module({ controllers: [AccessController], providers: [AccessService, SessionCleanup, { provide: APP_GUARD, useClass: AccessGuard }] })
 class AccessModule {}
 
 @Module({ controllers: [CatalogController], providers: [CatalogService], exports: [CatalogService] })

@@ -7,7 +7,7 @@ import { Reflector } from '@nestjs/core';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Audit, AUDIT, auditActor, auditChange, auditContext, beginAudit } from '../audit/recorder';
-import { Database, idField, nameField, parse, serial } from '../shared';
+import { DailyTask, Database, idField, nameField, parse, serial } from '../shared';
 import {
   activationFields, administrator, canAccess, configurablePermissions, emailField, hashPassword,
   hashToken, newToken, passwordChangeFields, verifyPassword,
@@ -58,6 +58,16 @@ export class AccessGuard implements CanActivate {
     const required = this.reflector.get<string[]>('permissions', context.getHandler()) ?? [];
     if (!required.every(permission => canAccess(profile.permissions, permission))) throw new ForbiddenException('Seu perfil não tem acesso a esta operação.');
     return true;
+  }
+}
+
+@Injectable()
+export class SessionCleanup extends DailyTask {
+  constructor(@Inject(Database) private db: Database) { super(); }
+
+  protected async run() {
+    await this.db.session.deleteMany({ where: { expiresAt: { lte: new Date() } } })
+      .catch(() => console.error('Falha ao remover sessões expiradas.'));
   }
 }
 

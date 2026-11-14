@@ -1,4 +1,6 @@
-import { ArgumentsHost, BadRequestException, Catch, ConflictException, ExceptionFilter, Injectable, OnModuleDestroy } from '@nestjs/common';
+import {
+  ArgumentsHost, BadRequestException, Catch, ConflictException, ExceptionFilter, Injectable, OnApplicationBootstrap, OnModuleDestroy,
+} from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 
@@ -32,6 +34,20 @@ export const storedDecimal = (value: Prisma.Decimal) => {
   }
   return value;
 };
+
+/** Maintenance that runs when the API starts and then once a day. */
+export abstract class DailyTask implements OnApplicationBootstrap, OnModuleDestroy {
+  private timer?: NodeJS.Timeout;
+  protected abstract run(): Promise<void>;
+
+  onApplicationBootstrap() {
+    void this.run();
+    this.timer = setInterval(() => void this.run(), 24 * 60 * 60 * 1000);
+    this.timer.unref();
+  }
+
+  onModuleDestroy() { clearInterval(this.timer); }
+}
 
 /** Filter for calendar days in Brasília time, from the start of `from` to the end of `to`. */
 export function dayRange(from?: string, to?: string) {
