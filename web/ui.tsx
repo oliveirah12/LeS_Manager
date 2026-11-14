@@ -1,6 +1,6 @@
 import { createContext, FormEvent, ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CheckCircle2, Inbox, Search, X } from 'lucide-react';
+import { CheckCircle2, Inbox, Search, SlidersHorizontal, X } from 'lucide-react';
 
 /* ---------- Data ---------- */
 
@@ -171,8 +171,9 @@ export function Modal({ title, subtitle, close, wide = false, children }: {
     element.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select, textarea')?.focus();
     return () => { if (element.open) element.close(); };
   }, []);
-  function requestClose() {
-    if (closing || dialog.current?.querySelector('[aria-busy="true"]')) return;
+  // The person cannot dismiss a panel while it saves; the code closes it after a successful save.
+  function requestClose(force = false) {
+    if (closing || (!force && dialog.current?.querySelector('[aria-busy="true"]'))) return;
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) { close(); return; }
     setClosing(true);
   }
@@ -183,9 +184,9 @@ export function Modal({ title, subtitle, close, wide = false, children }: {
     <div className="panel-grip" aria-hidden="true" />
     <div className="panel-head">
       <div><h2 id={heading}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>
-      <button type="button" className="icon-button" onClick={requestClose} aria-label="Fechar"><X size={20} aria-hidden="true" /></button>
+      <button type="button" className="icon-button" onClick={() => requestClose()} aria-label="Fechar"><X size={20} aria-hidden="true" /></button>
     </div>
-    <div className="panel-body"><CloseContext.Provider value={requestClose}>{children}</CloseContext.Provider></div>
+    <div className="panel-body"><CloseContext.Provider value={() => requestClose(true)}>{children}</CloseContext.Provider></div>
   </dialog>, document.body);
 }
 
@@ -276,6 +277,34 @@ export function Segmented<T extends string>({ label, options, value, onChange }:
 }) {
   return <div className="segmented" role="group" aria-label={label}>
     {options.map(option => <button type="button" key={option.id} aria-pressed={option.id === value} onClick={() => onChange(option.id)}>{option.name}</button>)}
+  </div>;
+}
+
+export function Tabs<T extends string>({ label, tabs, value, onChange }: {
+  label: string; tabs: { id: T; name: string }[]; value: T; onChange: (value: T) => void;
+}) {
+  return <div className="tabs" role="tablist" aria-label={label}>
+    {tabs.map(tab => <button type="button" role="tab" key={tab.id} aria-selected={tab.id === value} onClick={() => onChange(tab.id)}>{tab.name}</button>)}
+  </div>;
+}
+
+/** A filter form. Always visible on wide screens; behind a "Filtros" button on phones. */
+export function Filters({ children, active, apply, clear }: {
+  children: ReactNode; active: number; apply: (values: Record<string, string>) => void; clear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return <div className="filters">
+    <button type="button" className="btn secondary filters-toggle" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
+      <SlidersHorizontal size={16} aria-hidden="true" />Filtros{active > 0 && <span className="badge brand">{active}</span>}
+    </button>
+    <div id={id} className="filters-panel" data-open={open}><div>
+      <form className="filters-form" onSubmit={event => { event.preventDefault(); apply(fields(new FormData(event.currentTarget))); setOpen(false); }}
+        onReset={() => { clear(); setOpen(false); }}>
+        {children}
+        <div className="actions"><button type="submit" className="btn">Filtrar</button><button type="reset" className="btn secondary">Limpar</button></div>
+      </form>
+    </div></div>
   </div>;
 }
 
