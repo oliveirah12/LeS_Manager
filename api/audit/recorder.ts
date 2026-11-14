@@ -55,7 +55,8 @@ function changes(record: AuditRecord, status: number) {
   if (before && after) {
     const changed = (key: string) => JSON.stringify(before[key]) !== JSON.stringify(after![key]);
     const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(changed);
-    return { before: Object.fromEntries(keys.map(key => [key, before[key] ?? null])),
+    // A key missing from `before` was created by this operation, so it has no previous value to show.
+    return { before: Object.fromEntries(keys.filter(key => key in before).map(key => [key, before[key]])),
       after: Object.fromEntries(keys.map(key => [key, after![key] ?? null])), context: record.context };
   }
   if (!before && !after && !record.context) return undefined;

@@ -1,5 +1,6 @@
-import { FormEvent, useState } from 'react';
-import { dateTime, Loading, message, Section, Table, useData } from './ui';
+import { useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { Badge, dateTime, Field, Filters, Loading, message, PageActions, Select, Table, useData } from './ui';
 
 type Values = Record<string, string | number | boolean | null | string[]>;
 type Details = { before?: Values; after?: Values; context?: Values };
@@ -10,12 +11,12 @@ type AuditEvent = {
 type AuditPage = { events: AuditEvent[]; nextCursor: string | null };
 type Filters = { userId?: string; action?: string; from?: string; to?: string; result?: string };
 
-function outcome(status: number | null) {
-  if (status === null) return 'Aguardando conclusão';
-  if (status === 499) return 'Conexão interrompida';
-  if (status < 400) return 'Concluído';
-  if (status === 401 || status === 403) return 'Acesso negado';
-  return 'Falhou (' + status + ')';
+function Outcome({ status }: { status: number | null }) {
+  if (status === null) return <Badge>Em andamento</Badge>;
+  if (status === 499) return <Badge>Interrompido</Badge>;
+  if (status < 400) return <Badge tone="ok">Concluído</Badge>;
+  if (status === 401 || status === 403) return <Badge tone="danger">Negado</Badge>;
+  return <Badge tone="warn">Falhou ({status})</Badge>;
 }
 
 function show(value: Values[string] | undefined) {
@@ -26,13 +27,13 @@ function show(value: Values[string] | undefined) {
 }
 
 function Changes({ details }: { details: Details | null }) {
-  if (!details) return <>—</>;
+  if (!details) return <span className="muted">—</span>;
   const { before, after, context } = details;
   const keys = [...new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])];
-  return <div className="audit-details">
-    {context && Object.entries(context).map(([key, value]) => <div key={'c' + key}><strong>{key}:</strong> {show(value)}</div>)}
+  return <div className="changes">
+    {context && Object.entries(context).map(([key, value]) => <div key={'c' + key}><span className="muted">{key}:</span> {show(value)}</div>)}
     {keys.map(key => <div key={key}>
-      <strong>{key}:</strong> {before ? <><del>{show(before[key])}</del> → </> : null}{show(after?.[key])}
+      <span className="muted">{key}:</span> {before && key in before ? <><del>{show(before[key])}</del> → </> : null}<strong>{show(after?.[key])}</strong>
     </div>)}
   </div>;
 }
@@ -44,47 +45,32 @@ export function Audit() {
   const options = useData<{ actions: string[]; users: { id: string; name: string }[] }>('audit/filters');
   const query = new URLSearchParams(Object.entries({ ...filters, cursor }).filter((entry): entry is [string, string] => !!entry[1]));
   const { data, error, loading, reload } = useData<AuditPage>('audit' + (query.size ? '?' + query : ''));
+  const active = Object.values(filters).filter(Boolean).length;
 
-  function apply(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const values = Object.fromEntries([...new FormData(event.currentTarget)].map(([key, value]) => [key, String(value)]));
-    setFilters(values);
-    setCursors([]);
-  }
-
-  return <Section title="Histórico de alterações" subtitle="Inclusões, alterações, acessos e tentativas negadas dos últimos 12 meses.">
-    <form className="filters" onSubmit={apply} onReset={() => { setFilters({}); setCursors([]); }}>
-      <label>Usuário<select name="userId" defaultValue="">
-        <option value="">Todos</option>
-        {options.data?.users.map(user => <option key={user.id} value={user.id}>{user.name}</option>)}
-      </select></label>
-      <label>Ação<select name="action" defaultValue="">
-        <option value="">Todas</option>
-        {options.data?.actions.map(action => <option key={action} value={action}>{action}</option>)}
-      </select></label>
-      <label>Resultado<select name="result" defaultValue="">
-        <option value="">Todos</option>
-        <option value="success">Concluído</option>
-        <option value="denied">Acesso negado</option>
-        <option value="error">Falhou</option>
-      </select></label>
-      <label>De<input type="date" name="from" /></label>
-      <label>Até<input type="date" name="to" /></label>
-      <div className="actions">
-        <button type="submit">Filtrar</button>
-        <button type="reset" className="secondary">Limpar</button>
-        <button type="button" className="secondary" disabled={loading} onClick={() => { if (cursor) setCursors([]); else void reload(); }}>Atualizar</button>
-      </div>
-    </form>
-    {message(options.error)}{message(error)}{loading && <Loading label="Carregando auditoria…" />}
-    {data && <>
-      <Table columns={['Data', 'Usuário', 'Ação', 'Detalhes', 'Resultado']} rows={data.events.map(event => [
-        dateTime(event.createdAt), event.actorName ?? '—', event.action, <Changes details={event.details} />, outcome(event.status),
-      ])} empty="Nenhum evento encontrado." />
-      <div className="actions">
-        {cursor && <button type="button" className="secondary" onClick={() => setCursors(cursors.slice(0, -1))}>Página anterior</button>}
-        {data.nextCursor && <button type="button" className="secondary" onClick={() => setCursors([...cursors, data.nextCursor!])}>Mais registros</button>}
-      </div>
-    </>}
-  </Section>;
+  return <>
+    <PageActions><button type="button" className="btn secondary" disabled={loading} onClick={() => { if (cursor) setCursors([]); else void reload(); }}>
+      <RefreshCw size={16} aria-hidden="true" />Atualizar</button></PageActions>
+    <Filters active={active} apply={values => { setFilters(values); setCursors([]); }} clear={() => { setFilters({}); setCursors([]); }}>
+      <Select name="userId" label="Usuário" required={false} placeholder="Todos" options={options.data?.users ?? []} />
+      <Select name="action" label="Ação" required={false} placeholder="Todas" options={(options.data?.actions ?? []).map(action => ({ id: action, name: action }))} />
+      <Select name="result" label="Resultado" required={false} placeholder="Todos"
+        options={[{ id: 'success', name: 'Concluído' }, { id: 'denied', name: 'Negado' }, { id: 'error', name: 'Falhou' }]} />
+      <Field name="from" label="De" type="date" required={false} />
+      <Field name="to" label="Até" type="date" required={false} />
+    </Filters>
+    {message(options.error)}{message(error)}
+    {loading && !data ? <Loading label="Carregando auditoria…" /> : data && <Table empty="Nenhum evento encontrado."
+      columns={['Ação', 'Usuário', 'Data', 'Detalhes', 'Resultado']}
+      rows={data.events.map(event => [
+        <span className="cell-title">{event.action}</span>, event.actorName ?? <span className="muted">—</span>, dateTime(event.createdAt),
+        <Changes details={event.details} />, <Outcome status={event.status} />,
+      ])}
+      footer={(cursor || data.nextCursor) && <>
+        <span>Página {cursors.length + 1}</span>
+        <div className="actions">
+          <button type="button" className="btn secondary small" disabled={!cursor} onClick={() => setCursors(cursors.slice(0, -1))}>Anterior</button>
+          <button type="button" className="btn secondary small" disabled={!data.nextCursor} onClick={() => setCursors([...cursors, data.nextCursor!])}>Próxima</button>
+        </div>
+      </>} />}
+  </>;
 }

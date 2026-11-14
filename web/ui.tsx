@@ -21,9 +21,12 @@ export async function api<T>(path: string, body?: unknown, method = body === und
   if (data === undefined) {
     throw new Error(response.status >= 500 || response.ok ? 'Servidor indisponível. Tente novamente em instantes.' : 'Falha na operação (' + response.status + ').');
   }
+  // An expired session anywhere sends the person back to the sign-in screen once, instead of an error per block.
+  if (response.status === 401 && !path.startsWith('access/')) dispatchEvent(new Event(sessionExpired));
   if (!response.ok) throw new Error(Array.isArray(data.message) ? data.message.join(' · ') : data.message ?? 'Falha na operação.');
   return data;
 }
+export const sessionExpired = 'les-manager:session-expired';
 
 export function useData<T>(path: string | null) {
   const [result, setResult] = useState<{ path: string; data?: T; error?: string }>();
@@ -340,8 +343,8 @@ export function Table({ columns, rows, empty = 'Nenhum registro.', footer, respo
 }
 
 /** Title and code stacked in the first cell of a row. */
-export const Title = ({ name, code }: { name: string; code?: string | null }) =>
-  <><span className="cell-title">{name}</span>{code && <span className="cell-sub mono">{code}</span>}</>;
+export const Title = ({ name, code, mono = true }: { name: string; code?: string | null; mono?: boolean }) =>
+  <><span className="cell-title">{name}</span>{code && <span className={"cell-sub" + (mono ? " mono" : "")}>{code}</span>}</>;
 
 /* ---------- Domain types ---------- */
 

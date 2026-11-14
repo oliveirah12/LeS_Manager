@@ -13,7 +13,7 @@ import { Home } from './home';
 import { InstallApp } from './pwa';
 import { referenceKinds, Registrations } from './registrations';
 import { Stock } from './stock';
-import { accessible, api, Identity, Loading, ModalForm, PageActionsProvider, Toaster } from './ui';
+import { accessible, api, Identity, Loading, ModalForm, PageActionsProvider, sessionExpired, Toaster } from './ui';
 import './style.css';
 
 const groups = [
@@ -156,6 +156,12 @@ function App() {
   useEffect(() => { if (!mobile) setMenuOpen(false); }, [mobile]);
   async function signIn() { setIdentity(await api<Identity>('access/me')); setNotice(''); }
   useEffect(() => { void signIn().catch(() => setIdentity(null)); }, []);
+  useEffect(() => {
+    // Keeps the current address so the person returns to the same screen after signing in again.
+    const expired = () => { setIdentity(null); setNotice('Sua sessão expirou. Entre novamente.'); setLogout(false); setMenuOpen(false); };
+    addEventListener(sessionExpired, expired);
+    return () => removeEventListener(sessionExpired, expired);
+  }, []);
 
   const can = (permission: string) => accessible(identity?.permissions ?? [], permission);
   const admin = can('admin');

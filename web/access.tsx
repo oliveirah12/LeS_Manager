@@ -1,39 +1,37 @@
 import { useState } from 'react';
-import { api, dateTime, Field, fields, Identity, Loading, message, Modal, ModalForm, Section, Select, Table, useData } from './ui';
+import { Copy, KeyRound, Pencil, Plus, UserRound } from 'lucide-react';
+import {
+  api, Badge, dateTime, Field, fields, Form, Identity, Loading, message, Modal, ModalForm, notify, PageActions, Section, Segmented, Select, Table,
+  Tabs, Title, useData,
+} from './ui';
 
 type Profile = { id: string; name: string; permissions: string[] };
 type User = { id: string; name: string; email: string; active: boolean; pending: boolean; profileId: string; activationExpires: string | null };
-type Code = { code: string; expiresAt: string };
+type Code = { code: string; expiresAt: string; name: string };
 const modules = [
   { id: 'catalog', name: 'Catálogo' }, { id: 'registrations', name: 'Cadastros' },
   { id: 'stock', name: 'Estoque' }, { id: 'finance', name: 'Financeiro' },
 ];
 
 export function SignIn({ signedIn, notice }: { signedIn: () => Promise<void>; notice?: string }) {
-  const [mode, setMode] = useState<'login' | 'activate'>();
+  const [mode, setMode] = useState<'login' | 'activate'>('login');
   const activate = mode === 'activate';
   return <main className="signin">
-    <div className="intro"><img src="/brand.png" alt="" width="88" height="88" /><span className="eyebrow">Gestão interna</span><h1>LeS Manager</h1><p>Catálogo, estoque e financeiro em um só painel.</p></div>
-    <div className="login-card">
-      <h2>Acesse seu painel</h2>
+    <div className="card signin-card">
+      <div className="brand"><img src="/brand.png" alt="" width="44" height="44" /><span>LeS Manager</span></div>
+      <div><h1 style={{ fontSize: '1.4rem' }}>{activate ? 'Ative sua conta' : 'Entre no painel'}</h1>
+        <p className="muted" style={{ marginTop: 4 }}>{activate ? 'Use o código entregue pelo administrador e crie sua senha.' : 'Use a conta criada pelo administrador da empresa.'}</p></div>
       {notice && <p className="success" role="status">{notice}</p>}
-      <p className="muted">Entre com a conta criada pelo administrador da empresa.</p>
-      <div className="actions">
-        <button type="button" onClick={() => setMode('login')}>Entrar</button>
-        <button type="button" className="secondary" onClick={() => setMode('activate')}>Primeiro acesso</button>
-      </div>
-      {mode && <ModalForm title={activate ? 'Primeiro acesso' : 'Entrar'} close={() => setMode(undefined)}
-        label={activate ? 'Ativar conta' : 'Entrar no painel'} action={async data => {
+      <Segmented label="Tipo de acesso" value={mode} onChange={setMode} options={[{ id: 'login', name: 'Entrar' }, { id: 'activate', name: 'Primeiro acesso' }]} />
+      <Form key={mode} label={activate ? 'Ativar conta' : 'Entrar'} action={async data => {
         await api(activate ? 'access/activate' : 'access/login', fields(data)); await signedIn();
       }}>
         <label>E-mail<input name="email" type="email" required autoComplete="username" /></label>
-        {activate && <label>Código temporário<input name="code" autoComplete="one-time-code" required /></label>}
-        <label>Senha<input name="password" type="password" autoComplete={activate ? 'new-password' : 'current-password'} minLength={activate ? 8 : undefined} required /></label>
-        {activate && <>
-          <label>Confirme a senha<input name="confirmation" type="password" autoComplete="new-password" minLength={8} required /></label>
-          <p className="muted">Use pelo menos 8 caracteres, incluindo uma letra e um número.</p>
-        </>}
-      </ModalForm>}
+        {activate && <label>Código de primeiro acesso<input name="code" autoComplete="one-time-code" required /></label>}
+        <label>{activate ? 'Nova senha' : 'Senha'}<input name="password" type="password" autoComplete={activate ? 'new-password' : 'current-password'} minLength={activate ? 8 : undefined} required /></label>
+        {activate && <label>Confirme a senha<input name="confirmation" type="password" autoComplete="new-password" minLength={8} required />
+          <span className="hint">Pelo menos 8 caracteres, com uma letra e um número.</span></label>}
+      </Form>
     </div>
   </main>;
 }
@@ -41,103 +39,136 @@ export function SignIn({ signedIn, notice }: { signedIn: () => Promise<void>; no
 export function AccountSettings({ identity, changed, passwordChanged }: {
   identity: Identity; changed: (identity: Identity) => void; passwordChanged: () => void;
 }) {
-  const [notice, setNotice] = useState('');
   const [dialog, setDialog] = useState<'name' | 'password'>();
   return <>
-    <Section title="Dados da conta">
-      <dl className="account-info"><div><dt>Nome</dt><dd>{identity.name}</dd></div><div><dt>E-mail</dt><dd>{identity.email}</dd></div><div><dt>Perfil de acesso</dt><dd>{identity.profileName}</dd></div></dl>
-      <div className="actions">
-        <button type="button" onClick={() => setDialog('name')}>Alterar nome</button>
-        <button type="button" className="secondary" onClick={() => setDialog('password')}>Alterar senha</button>
-      </div>
-      {dialog === 'name' && <ModalForm title="Alterar nome" close={() => setDialog(undefined)} label="Salvar nome" action={async data => {
-        changed(await api<Identity>('access/me', fields(data), 'PATCH'));
-        setNotice('Nome atualizado.');
-      }}>
-        <Field name="name" label="Nome" defaultValue={identity.name} />
-      </ModalForm>}
-      {notice && <p role="status" className="success">{notice}</p>}
+    <Section title="Dados da conta" actions={<>
+      <button type="button" className="btn secondary" onClick={() => setDialog('name')}><Pencil size={16} aria-hidden="true" />Alterar nome</button>
+      <button type="button" className="btn secondary" onClick={() => setDialog('password')}><KeyRound size={16} aria-hidden="true" />Alterar senha</button>
+    </>}>
+      <dl className="dl">
+        <div><dt>Nome</dt><dd>{identity.name}</dd></div>
+        <div><dt>E-mail</dt><dd>{identity.email}</dd></div>
+        <div><dt>Perfil de acesso</dt><dd>{identity.profileName}</dd></div>
+      </dl>
     </Section>
-    {dialog === 'password' && <ModalForm title="Alterar senha" close={() => setDialog(undefined)} label="Salvar nova senha" action={async data => {
+    {dialog === 'name' && <ModalForm title="Alterar nome" close={() => setDialog(undefined)} label="Salvar nome" action={async data => {
+      changed(await api<Identity>('access/me', fields(data), 'PATCH'));
+      notify('Nome atualizado.');
+    }}>
+      <Field name="name" label="Nome" defaultValue={identity.name} />
+    </ModalForm>}
+    {dialog === 'password' && <ModalForm title="Alterar senha" subtitle="Ao salvar, todas as suas sessões serão encerradas." close={() => setDialog(undefined)}
+      label="Salvar nova senha" action={async data => {
         await api('access/me/password', fields(data));
         passwordChanged();
       }}>
-        <label>Senha atual<input name="currentPassword" type="password" autoComplete="current-password" maxLength={128} required /></label>
-        <label>Nova senha<input name="password" type="password" autoComplete="new-password" minLength={8} maxLength={128} required /></label>
-        <label>Confirme a nova senha<input name="confirmation" type="password" autoComplete="new-password" minLength={8} maxLength={128} required /></label>
-        <p className="muted">Use pelo menos 8 caracteres, incluindo uma letra e um número. Ao salvar, suas sessões serão encerradas.</p>
-      </ModalForm>}
+      <label>Senha atual<input name="currentPassword" type="password" autoComplete="current-password" maxLength={128} required /></label>
+      <label>Nova senha<input name="password" type="password" autoComplete="new-password" minLength={8} maxLength={128} required /></label>
+      <label>Confirme a nova senha<input name="confirmation" type="password" autoComplete="new-password" minLength={8} maxLength={128} required />
+        <span className="hint">Pelo menos 8 caracteres, com uma letra e um número.</span></label>
+    </ModalForm>}
   </>;
+}
+
+function permissionSummary(profile: Profile) {
+  if (profile.permissions.includes('admin')) return [<Badge key="admin" tone="brand">Acesso total</Badge>];
+  const items = modules.flatMap(module => {
+    if (profile.permissions.includes(module.id + ':operate')) return [<Badge key={module.id} tone="ok">{module.name} · operar</Badge>];
+    if (profile.permissions.includes(module.id + ':view')) return [<Badge key={module.id}>{module.name} · ver</Badge>];
+    return [];
+  });
+  return items.length ? items : [<span key="none" className="muted">Nenhuma permissão</span>];
 }
 
 export function Administration({ onUserChanged }: { onUserChanged: (id: string) => Promise<void> }) {
   const profiles = useData<Profile[]>('access/profiles');
   const users = useData<User[]>('access/users');
+  const [tab, setTab] = useState<'users' | 'profiles'>('users');
   const [profile, setProfile] = useState<Profile | null>();
   const [user, setUser] = useState<User | null>();
   const [renew, setRenew] = useState<User>();
   const [code, setCode] = useState<Code>();
+  const profileName = (id: string) => profiles.data?.find(item => item.id === id)?.name ?? '—';
+
   return <>
+    <PageActions>
+      {tab === 'users' ? <button type="button" className="btn" onClick={() => setUser(null)}><Plus size={16} aria-hidden="true" />Novo usuário</button>
+        : <button type="button" className="btn" onClick={() => setProfile(null)}><Plus size={16} aria-hidden="true" />Novo perfil</button>}
+    </PageActions>
+    <Tabs label="Acessos" value={tab} onChange={setTab} tabs={[{ id: 'users', name: 'Usuários' }, { id: 'profiles', name: 'Perfis' }]} />
     {message(profiles.error || users.error)}
-    <Section title="Perfis de acesso" subtitle="Permitir operação também libera a visualização do módulo.">
-      <button type="button" onClick={() => setProfile(null)}>Criar perfil</button>
-      {profiles.loading && <Loading label="Carregando perfis…" />}
-      {profiles.data && <Table columns={['Perfil', 'Permissões', 'Ação']} rows={profiles.data.map(item => [
-        item.name, item.permissions.includes('admin') ? 'Acesso total' : item.permissions.map(permission => {
-          const [module, action] = permission.split(':');
-          return modules.find(entry => entry.id === module)?.name + ' · ' + (action === 'view' ? 'Visualizar' : 'Operar');
-        }).join(' / ') || 'Nenhuma',
-        item.permissions.includes('admin') ? 'Reservado' : <button type="button" className="secondary" onClick={() => setProfile(item)}>Editar</button>,
-      ])} />}
-      {profile !== undefined && <ModalForm title={profile ? 'Editar perfil' : 'Criar perfil'} close={() => setProfile(undefined)} label="Salvar perfil" action={async data => {
-        await api(profile ? 'access/profiles/' + profile.id : 'access/profiles',
-          { name: data.get('name'), permissions: data.getAll('permissions') }, profile ? 'PATCH' : 'POST');
-        await profiles.reload();
-      }}>
-        <Field name="name" label="Nome do perfil" defaultValue={profile?.name} />
-        <div className="permissions">
-          {modules.map(item => <div key={item.id}><strong>{item.name}</strong>
-            <label><input name="permissions" type="checkbox" value={item.id + ':view'} defaultChecked={profile?.permissions.includes(item.id + ':view')} /> Visualizar</label>
-            <label><input name="permissions" type="checkbox" value={item.id + ':operate'} defaultChecked={profile?.permissions.includes(item.id + ':operate')} /> Operar</label>
-          </div>)}
+    {tab === 'users' && <div className="tab-panel" role="tabpanel">
+      {users.loading && !users.data ? <Loading label="Carregando usuários…" /> : users.data && <Table empty="Nenhum usuário."
+        columns={['Usuário', 'Perfil', 'Situação', { label: 'Ações', actions: true }]}
+        rows={users.data.map(item => [
+          <Title name={item.name} code={item.email} mono={false} />, profileName(item.profileId),
+          !item.active ? <Badge>Inativo</Badge> : item.pending ? <Badge tone="warn">Aguardando ativação</Badge> : <Badge tone="ok"><span className="dot" />Ativo</Badge>,
+          <div className="actions">
+            <button type="button" className="btn secondary small" onClick={() => setUser(item)}><Pencil size={14} aria-hidden="true" />Editar</button>
+            {item.active && item.pending && <button type="button" className="btn ghost small" onClick={() => setRenew(item)}><KeyRound size={14} aria-hidden="true" />Novo código</button>}
+          </div>,
+        ])} />}
+    </div>}
+    {tab === 'profiles' && <div className="tab-panel" role="tabpanel">
+      <p className="muted">Permitir operar também libera a visualização do módulo.</p>
+      {profiles.loading && !profiles.data ? <Loading label="Carregando perfis…" /> : profiles.data && <Table empty="Nenhum perfil."
+        columns={['Perfil', 'Permissões', { label: 'Ações', actions: true }]}
+        rows={profiles.data.map(item => [
+          <span className="cell-title">{item.name}</span>, <div className="actions">{permissionSummary(item)}</div>,
+          item.permissions.includes('admin') ? <span className="muted">Reservado</span> :
+            <button type="button" className="btn secondary small" onClick={() => setProfile(item)}><Pencil size={14} aria-hidden="true" />Editar</button>,
+        ])} />}
+    </div>}
+
+    {profile !== undefined && <ModalForm title={profile ? 'Editar perfil' : 'Novo perfil'} close={() => setProfile(undefined)} label="Salvar perfil" action={async data => {
+      await api(profile ? 'access/profiles/' + profile.id : 'access/profiles', { name: data.get('name'), permissions: data.getAll('permissions') }, profile ? 'PATCH' : 'POST');
+      notify('Perfil salvo.');
+      await profiles.reload();
+    }}>
+      <Field name="name" label="Nome do perfil" defaultValue={profile?.name} />
+      <div className="stack" style={{ gap: 8 }}>
+        <span style={{ fontWeight: 600, fontSize: '.9rem' }}>Permissões</span>
+        {modules.map(item => <div key={item.id} className="card" style={{ padding: '10px 14px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 20px' }}>
+          <strong style={{ flex: '1 1 8rem' }}>{item.name}</strong>
+          <label className="check"><input name="permissions" type="checkbox" value={item.id + ':view'} defaultChecked={profile?.permissions.includes(item.id + ':view')} />Ver</label>
+          <label className="check"><input name="permissions" type="checkbox" value={item.id + ':operate'} defaultChecked={profile?.permissions.includes(item.id + ':operate')} />Operar</label>
+        </div>)}
+      </div>
+    </ModalForm>}
+    {user !== undefined && <ModalForm title={user ? 'Editar usuário' : 'Novo usuário'} subtitle={user?.email} label="Salvar usuário" close={() => setUser(undefined)} action={async data => {
+      const values = fields(data);
+      if (user) {
+        await api('access/users/' + user.id, { ...values, active: data.has('active') }, 'PATCH');
+        notify('Usuário atualizado.');
+        await onUserChanged(user.id);
+      } else {
+        const created = await api<Omit<Code, 'name'>>('access/users', values);
+        setCode({ ...created, name: values.name });
+      }
+      await users.reload();
+    }}>
+      <Field name="name" label="Nome da pessoa" defaultValue={user?.name} />
+      {!user && <Field name="email" label="E-mail" type="email" hint="A pessoa recebe um código para criar a própria senha." />}
+      <Select name="profileId" label="Perfil" options={profiles.data ?? []} defaultValue={user?.profileId} />
+      {user && <label className="check"><input name="active" type="checkbox" defaultChecked={user.active} />Conta ativa</label>}
+    </ModalForm>}
+    {renew && <ModalForm title="Gerar novo código" label="Gerar código" close={() => setRenew(undefined)} action={async () => {
+      const created = await api<Omit<Code, 'name'>>('access/users/' + renew.id + '/code', {});
+      setCode({ ...created, name: renew.name });
+      await users.reload();
+    }}><p className="muted">O código anterior de {renew.name} deixará de funcionar.</p></ModalForm>}
+    {code && <Modal title="Código de primeiro acesso" subtitle={code.name} close={() => setCode(undefined)}>
+      <div className="stack">
+        <div className="info" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
+          <code style={{ fontSize: '1rem', overflowWrap: 'anywhere' }}>{code.code}</code>
+          <button type="button" className="icon-button" aria-label="Copiar código" onClick={() => {
+            void navigator.clipboard?.writeText(code.code).then(() => notify('Código copiado.'));
+          }}><Copy size={18} aria-hidden="true" /></button>
         </div>
-      </ModalForm>}
-    </Section>
-    <Section title="Usuários" subtitle="Crie a conta, atribua um perfil e entregue o código de ativação à pessoa.">
-      <button type="button" onClick={() => setUser(null)}>Criar usuário</button>
-      {users.loading && <Loading label="Carregando usuários…" />}
-      {users.data && <Table columns={['Nome', 'E-mail', 'Perfil', 'Situação', 'Ação']} rows={users.data.map(item => [
-        item.name, item.email, profiles.data?.find(role => role.id === item.profileId)?.name,
-        item.active ? (item.pending ? 'Aguardando ativação' : 'Ativo') : 'Inativo',
-        <div className="actions">
-          <button type="button" className="secondary" onClick={() => setUser(item)}>Editar</button>
-          {item.active && item.pending && <button type="button" className="secondary" onClick={() => setRenew(item)}>Gerar novo código</button>}
-        </div>,
-      ])} />}
-      {renew && !code && <ModalForm title="Gerar novo código" label="Gerar código" close={() => setRenew(undefined)} action={async () => {
-        setCode(await api<Code>('access/users/' + renew.id + '/code', {})); await users.reload();
-      }}><p>O código anterior de {renew.name} deixará de funcionar.</p></ModalForm>}
-      {user !== undefined && !code && <ModalForm title={user ? 'Editar usuário' : 'Criar usuário'} label="Salvar usuário" close={() => setUser(undefined)} action={async data => {
-        const values = fields(data);
-        if (user) {
-          await api('access/users/' + user.id, { ...values, active: data.has('active') }, 'PATCH');
-          await onUserChanged(user.id);
-        }
-        else setCode(await api<Code>('access/users', values));
-        await users.reload();
-      }}>
-        <Field name="name" label="Nome da pessoa" defaultValue={user?.name} />
-        {!user && <Field name="email" label="E-mail" type="email" />}
-        <Select name="profileId" label="Perfil" options={profiles.data ?? []} defaultValue={user?.profileId} />
-        {user && <>
-          <label className="check"><input name="active" type="checkbox" defaultChecked={user.active} /> Conta ativa</label>
-        </>}
-      </ModalForm>}
-      {code && <Modal title="Código de primeiro acesso" close={() => setCode(undefined)}>
-        <p><code>{code.code}</code></p>
-        <p className="muted">Válido até {dateTime(code.expiresAt)}. Compartilhe-o diretamente com a pessoa.</p>
-        <button type="button" className="secondary" onClick={() => setCode(undefined)}>Ocultar código</button>
-      </Modal>}
-    </Section>
+        <p className="muted"><UserRound size={14} aria-hidden="true" style={{ verticalAlign: '-2px' }} /> Válido até {dateTime(code.expiresAt)}.
+          Entregue-o diretamente à pessoa. Ele não será exibido de novo.</p>
+        <button type="button" className="btn" onClick={() => setCode(undefined)}>Concluir</button>
+      </div>
+    </Modal>}
   </>;
 }

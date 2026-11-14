@@ -351,7 +351,8 @@ dialog.panel.closing::backdrop { animation: fade-out var(--fast) ease-in both; }
 .signin-card { width: min(420px, 100%); padding: 32px 28px; display: flex; flex-direction: column; gap: 20px; animation: page-in var(--medium) var(--ease) both; }
 .signin-card .brand { padding: 0; font-size: 1.15rem; }
 .signin-card .brand img { width: 44px; height: 44px; border-radius: 12px; }
-.signin-foot { display: flex; justify-content: flex-end; }
+.signin-card .form-actions > .btn { flex: 1; height: 44px; }
+.signin-card .segmented { display: grid; grid-template-columns: 1fr 1fr; }
 
 /* Install prompt */
 .install {
@@ -391,6 +392,9 @@ dialog.panel.closing::backdrop { animation: fade-out var(--fast) ease-in both; }
   .section { padding: 16px; }
   .search { max-width: none; flex-basis: 100%; }
   .summary { margin-left: 0; flex-basis: 100%; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .kpi { padding: 14px; }
+  .kpi strong { font-size: 1.15rem; overflow-wrap: anywhere; }
   .filters-toggle { display: inline-flex; }
   .filters-panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--medium) var(--ease); }
   .filters-panel[data-open='true'] { grid-template-rows: 1fr; }
