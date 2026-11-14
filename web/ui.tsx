@@ -150,11 +150,11 @@ export const message = (text: string) => text && <p role="alert" className="aler
 export type Identity = { id: string; name: string; email: string; profileName: string; permissions: string[] };
 export type Unit = { id: string; symbol: string; factor: string; familyId: string; isBase: boolean };
 export type Product = {
-  id: string; sku: string; name: string; unit: Unit & { family: { units: Unit[] } }; quantity: string; currentCost: string | null; lastPurchaseCost: string | null;
+  id: string; sku: string; name: string; active: boolean; unit: Unit & { family: { units: Unit[] } }; quantity: string; currentCost: string | null; lastPurchaseCost: string | null;
   groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null;
 };
 export type Kit = {
-  id: string; sku: string; name: string; available: string;
+  id: string; sku: string; name: string; active: boolean; available: string;
   components: { productId: string; quantity: string; product: Product }[];
 };
 export type StockView = { products: Product[]; kits: Kit[]; units: Unit[] };

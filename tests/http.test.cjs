@@ -344,6 +344,35 @@ test('API REST com PostgreSQL', {
     assert.equal((await productMovements(uncounted.id, 'INVENTORY')).length, 0);
   });
 
+  await t.test('inativação exige saldo zerado, bloqueia movimentações e preserva o histórico', async () => {
+    const product = await createProduct('INATIVO', unit.id);
+    expectStatus(await movement(product.id, unit.id, 'PURCHASE', '2', '3'), 201);
+    const kit = expectStatus(await post('/catalog/kits', {
+      sku: sku('KIT-INATIVO'), name: 'Kit para inativar', components: [{ productId: product.id, quantity: '1', unitId: unit.id }],
+    }), 201);
+    const status = (kind, id, active) => post(`/catalog/${kind}/${id}/status`, { active });
+
+    expectStatus(await status('products', product.id, false), 409);
+    expectStatus(await movement(product.id, unit.id, 'OUT', '2'), 201);
+    expectStatus(await status('products', product.id, false), 409);
+    expectStatus(await status('kits', kit.id, false), 200);
+    expectStatus(await post(`/stock/kits/${kit.id}/out`, { quantity: '1', reason: 'Kit inativo' }), 409);
+    expectStatus(await status('products', product.id, false), 200);
+
+    expectStatus(await movement(product.id, unit.id, 'PURCHASE', '1', '3'), 409);
+    expectStatus(await status('kits', kit.id, true), 409);
+    const stock = expectStatus(await admin('/stock'), 200);
+    assert.equal(stock.products.some(row => row.id === product.id), false);
+    const catalog = expectStatus(await admin('/catalog'), 200);
+    assert.equal(catalog.products.find(row => row.id === product.id).active, false);
+    assert.equal((await productMovements(product.id, 'OUT')).length, 1);
+    const audit = expectStatus(await admin('/audit?' + new URLSearchParams({ action: 'Alterar situação do produto' })), 200);
+    assert.ok(audit.events.some(event => event.targetId === product.id && event.details?.after?.['Situação'] === 'Inativo'));
+
+    expectStatus(await status('products', product.id, true), 200);
+    expectStatus(await movement(product.id, unit.id, 'PURCHASE', '1', '3'), 201);
+  });
+
   await t.test('a planilha inválida não grava produtos e a confirmação da carga é idempotente', async () => {
     const workbook = await loadTemplate('/stock/initial/template');
     const first = sku('IMPORTADO-1');

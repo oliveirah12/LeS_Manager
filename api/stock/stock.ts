@@ -33,6 +33,7 @@ export class StockService {
     tx: Prisma.TransactionClient, product: Product, quantity: Prisma.Decimal,
     kind: MovementKind, userId: string, reason: string, unitCost = product.currentCost, kitId?: string,
   ) {
+    if (!product.active) throw new ConflictException('O produto ' + product.sku + ' está inativo.');
     const balance = storedDecimal(product.quantity.plus(quantity));
     if (balance.lt(0)) throw new ConflictException('Saldo insuficiente para ' + product.sku + '.');
     // Entries with their own cost update the moving average; other movements keep it.
@@ -77,6 +78,7 @@ export class StockService {
         where: { id }, include: { components: { orderBy: { productId: 'asc' }, include: { product: true } } },
       });
       if (!kit) throw new NotFoundException('Kit não encontrado.');
+      if (!kit.active) throw new ConflictException('O kit ' + kit.sku + ' está inativo.');
       const movements = [];
       for (const item of kit.components) {
         const amount = storedDecimal(item.quantity.times(data.quantity)).neg();
@@ -97,6 +99,7 @@ export class StockService {
         const product = products.find(item => item.sku === row.sku);
         const unit = units.find(item => item.symbol === row.unit);
         if (!product || !unit) throw new BadRequestException('SKU ou unidade desconhecido: ' + row.sku);
+        if (!product.active) throw new BadRequestException('Produto inativo: ' + row.sku);
         return {
           productId: product.id, expected: product.quantity, counted: inBase(unit, product.unit.familyId, row.quantity), revision: product.revision,
         };

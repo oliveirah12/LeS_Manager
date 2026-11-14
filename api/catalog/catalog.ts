@@ -1,4 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Inject, Injectable, NotFoundException, Param, Patch, Post } from '@nestjs/common';
+import {
+  BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post,
+} from '@nestjs/common';
 import { Prisma, ReferenceKind } from '@prisma/client';
 import { z } from 'zod';
 import { Require } from '../access/access';
@@ -17,13 +19,15 @@ export const productFields = z.object({
   groupId: idField.nullish(), brandId: idField.nullish(), colorId: idField.nullish(), departmentId: idField.nullish(),
 });
 const productUpdate = productFields.omit({ sku: true, unitId: true });
+const statusFields = z.strictObject({ active: z.boolean() });
+const situation = (active: boolean) => active ? 'Ativo' : 'Inativo';
 const kitFields = z.object({
   sku: skuField, name: nameField,
   components: z.array(z.object({ productId: idField, unitId: idField, quantity: positive })).min(1).max(100),
 });
 export const productInclude = { unit: { include: { family: { include: { units: { where: { isBase: true } } } } } } } as const;
 const catalogProduct = {
-  id: true, sku: true, name: true, unitId: true, groupId: true, brandId: true, colorId: true, departmentId: true,
+  id: true, sku: true, name: true, active: true, unitId: true, groupId: true, brandId: true, colorId: true, departmentId: true,
   ...productInclude,
 } as const;
 const references = [
@@ -79,8 +83,10 @@ export class CatalogService {
 
   async stockView() {
     const [products, kits] = await Promise.all([
-      this.db.product.findMany({ include: productInclude, orderBy: { sku: 'asc' } }),
-      this.db.kit.findMany({ include: { components: { include: { product: { include: productInclude } } } }, orderBy: { sku: 'asc' } }),
+      this.db.product.findMany({ where: { active: true }, include: productInclude, orderBy: { sku: 'asc' } }),
+      this.db.kit.findMany({
+        where: { active: true }, include: { components: { include: { product: { include: productInclude } } } }, orderBy: { sku: 'asc' },
+      }),
     ]);
     const kitsWithAvailability = kits.map(kit => ({
       ...kit,
@@ -117,6 +123,40 @@ export class CatalogService {
     });
   }
 
+  /** Only products without balance and outside active kits can be inactivated; reactivation is always allowed. */
+  setProductActive(id: string, active: boolean) {
+    return serial(this.db, async tx => {
+      const product = await tx.product.findUnique({
+        where: { id }, include: { kitComponents: { where: { kit: { active: true } }, include: { kit: { select: { sku: true } } } } },
+      });
+      if (!product) throw new NotFoundException('Produto não encontrado.');
+      if (!active && !product.quantity.eq(0)) {
+        throw new ConflictException('Zere o saldo de ' + product.sku + ' antes de inativar. Saldo atual: ' + product.quantity.toFixed() + '.');
+      }
+      if (!active && product.kitComponents.length) {
+        throw new ConflictException('Inative antes os kits que usam ' + product.sku + ': ' + product.kitComponents.map(item => item.kit.sku).join(', ') + '.');
+      }
+      auditChange({ 'Situação': situation(product.active) }, { 'Situação': situation(active) });
+      // The revision change invalidates inventory previews that counted this product.
+      await tx.product.update({ where: { id }, data: { active, revision: { increment: 1 } } });
+      return { id, active };
+    });
+  }
+
+  setKitActive(id: string, active: boolean) {
+    return serial(this.db, async tx => {
+      const kit = await tx.kit.findUnique({ where: { id }, include: { components: { include: { product: { select: { sku: true, active: true } } } } } });
+      if (!kit) throw new NotFoundException('Kit não encontrado.');
+      const inactive = kit.components.filter(item => !item.product.active);
+      if (active && inactive.length) {
+        throw new ConflictException('Reative antes os produtos do kit: ' + inactive.map(item => item.product.sku).join(', ') + '.');
+      }
+      auditChange({ 'Situação': situation(kit.active) }, { 'Situação': situation(active) });
+      await tx.kit.update({ where: { id }, data: { active } });
+      return { id, active };
+    });
+  }
+
   async saveKit(data: z.infer<typeof kitFields>, id?: string) {
     const uniqueIds = new Set(data.components.map(component => component.productId));
     if (uniqueIds.size !== data.components.length) throw new BadRequestException('Inclua cada produto apenas uma vez no kit.');
@@ -129,6 +169,7 @@ export class CatalogService {
         const product = products.find(row => row.id === item.productId);
         const unit = units.find(row => row.id === item.unitId);
         if (!product || !unit) throw new NotFoundException('Produto ou unidade do kit não encontrado.');
+        if (!product.active) throw new BadRequestException('Produto inativo no kit: ' + product.sku + '.');
         return { productId: product.id, quantity: inBase(unit, product.unit.familyId, item.quantity) };
       });
       const before = id ? await tx.kit.findUnique({ where: { id }, include: kitAudit }) : null;
@@ -220,6 +261,14 @@ export class CatalogController {
   }
 
   @Require('catalog:operate')
+  @Audit('Alterar situação do produto')
+  @Post('products/:id/status')
+  @HttpCode(200)
+  productStatus(@Param('id') id: string, @Body() body: unknown) {
+    return this.catalog.setProductActive(parse(idField, id), parse(statusFields, body).active);
+  }
+
+  @Require('catalog:operate')
   @Audit('Criar kit')
   @Post('kits')
   addKit(@Body() body: unknown) { return this.catalog.saveKit(parse(kitFields, body)); }
@@ -229,5 +278,13 @@ export class CatalogController {
   @Patch('kits/:id')
   updateKit(@Param('id') id: string, @Body() body: unknown) {
     return this.catalog.saveKit(parse(kitFields, body), parse(idField, id));
+  }
+
+  @Require('catalog:operate')
+  @Audit('Alterar situação do kit')
+  @Post('kits/:id/status')
+  @HttpCode(200)
+  kitStatus(@Param('id') id: string, @Body() body: unknown) {
+    return this.catalog.setKitActive(parse(idField, id), parse(statusFields, body).active);
   }
 }

@@ -10,21 +10,32 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
   const [product, setProduct] = useState<Product | null>();
   const [kit, setKit] = useState<Kit | null>();
   const [notice, setNotice] = useState('');
+  const [showInactive, setShowInactive] = useState(false);
+  const [status, setStatus] = useState<{ kind: 'products' | 'kits'; id: string; sku: string; active: boolean }>();
   if (!data) return message(error) || <Loading label="Carregando catálogo…" />;
   async function save(path: string, payload: unknown, id?: string) {
     await api('catalog/' + path + (id ? '/' + id : ''), payload, id ? 'PATCH' : 'POST');
     setNotice('Registro salvo.');
     await reload();
   }
+  const visible = <T extends { active: boolean }>(rows: T[]) => rows.filter(row => showInactive || row.active);
+  const situation = (row: { active: boolean }) => row.active ? 'Ativo' : <span className="badge">Inativo</span>;
+  const toggle = <label className="checkbox"><input type="checkbox" checked={showInactive}
+    onChange={event => setShowInactive(event.target.checked)} />Mostrar inativos</label>;
+  const statusButton = (kind: 'products' | 'kits', row: { id: string; sku: string; active: boolean }) =>
+    <button type="button" className="secondary" onClick={() => setStatus({ kind, id: row.id, sku: row.sku, active: !row.active })}>
+      {row.active ? 'Inativar' : 'Reativar'}</button>;
 
   return <>
     {message(error)}{notice && <p className="success" role="status">{notice}</p>}
     {page === 'products' && <Section title="Lista de produtos" subtitle="Organize os itens por SKU, classificação e família de medida.">
-      {edit && <button type="button" onClick={() => setProduct(null)}>Novo produto</button>}
-      <Table columns={['SKU', 'Produto', 'Unidade', 'Classificação', ...(edit ? ['Ação'] : [])]} rows={data.products.map(row => [
+      <div className="actions">{edit && <button type="button" onClick={() => setProduct(null)}>Novo produto</button>}{toggle}</div>
+      <Table columns={['SKU', 'Produto', 'Unidade', 'Classificação', 'Situação', ...(edit ? ['Ações'] : [])]} rows={visible(data.products).map(row => [
         row.sku, row.name, row.unit.symbol,
         referenceKinds.map(kind => data.references.find(item => item.id === row[kind.field])?.name).filter(Boolean).join(' · ') || '—',
-        ...(edit ? [<button type="button" className="secondary" onClick={() => setProduct(row)}>Editar</button>] : []),
+        situation(row),
+        ...(edit ? [<div className="actions"><button type="button" className="secondary" onClick={() => setProduct(row)}>Editar</button>
+          {statusButton('products', row)}</div>] : []),
       ])} />
       {edit && product !== undefined && <ModalForm title={product ? 'Editar produto ' + product.sku : 'Novo produto'}
         close={() => setProduct(undefined)} label="Salvar produto" action={async values => {
@@ -39,10 +50,12 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
       </ModalForm>}
     </Section>}
     {page === 'kits' && <Section title="Lista de kits" subtitle="A composição usa itens já cadastrados no catálogo.">
-      {edit && <button type="button" onClick={() => setKit(null)}>Novo kit</button>}
-      <Table columns={['SKU', 'Kit', 'Componentes', ...(edit ? ['Ação'] : [])]} rows={data.kits.map(row => [
+      <div className="actions">{edit && <button type="button" onClick={() => setKit(null)}>Novo kit</button>}{toggle}</div>
+      <Table columns={['SKU', 'Kit', 'Componentes', 'Situação', ...(edit ? ['Ações'] : [])]} rows={visible(data.kits).map(row => [
         row.sku, row.name, row.components.map(item => decimal(item.quantity) + ' ' + baseUnit(item.product).symbol + ' · ' + item.product.sku).join(' / '),
-        ...(edit ? [<button type="button" className="secondary" onClick={() => setKit(row)}>Editar</button>] : []),
+        situation(row),
+        ...(edit ? [<div className="actions"><button type="button" className="secondary" onClick={() => setKit(row)}>Editar</button>
+          {statusButton('kits', row)}</div>] : []),
       ])} />
       {edit && kit !== undefined && <Modal title={kit ? 'Editar kit ' + kit.sku : 'Novo kit'} close={() => setKit(undefined)}>
         <KitForm key={kit?.id ?? 'new'} data={data} kit={kit ?? undefined} save={async payload => {
@@ -50,6 +63,17 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
         }} />
       </Modal>}
     </Section>}
+    {edit && status && <ModalForm title={(status.active ? 'Reativar ' : 'Inativar ') + status.sku} label={status.active ? 'Reativar' : 'Inativar'}
+      close={() => setStatus(undefined)} action={async () => {
+        await api('catalog/' + status.kind + '/' + status.id + '/status', { active: status.active });
+        setNotice(status.sku + (status.active ? ' reativado.' : ' inativado.'));
+        await reload();
+      }}>
+      <p>{status.active
+        ? 'O item volta a aparecer no estoque e pode receber movimentações.'
+        : 'O item sai do estoque e das listas de seleção, mas o histórico é preservado. ' +
+          (status.kind === 'products' ? 'O saldo precisa estar zerado e o produto não pode compor kits ativos.' : 'Não será possível dar saída neste kit.')}</p>
+    </ModalForm>}
   </>;
 }
 
@@ -68,7 +92,7 @@ function KitForm({ data, kit, save }: { data: CatalogView; kit?: Kit; save: (bod
       const product = data.products.find(item => item.id === productId);
       const units = data.units.filter(unit => unit.familyId === product?.unit.familyId);
       return <div className="inline-row" key={index}>
-        <Select name={'product' + index} label={'Componente ' + (index + 1)} options={productOptions(data.products)}
+        <Select name={'product' + index} label={'Componente ' + (index + 1)} options={productOptions(data.products.filter(item => item.active || item.id === productId))}
           defaultValue={productId} onChange={value => setComponents(items => items.map((item, i) => i === index ? value : item))} />
         <Field name={'quantity' + index} label="Quantidade" defaultValue={kit?.components[index]?.quantity} />
         <Select key={productId} name={'unit' + index} label="Unidade" options={unitOptions(units)} defaultValue={product && baseUnit(product).id} />
