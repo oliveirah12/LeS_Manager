@@ -58,4 +58,6 @@ Os eventos com mais de 12 meses são removidos automaticamente. Para mudar o pra
 
 ## Testes
 
+O GitHub Actions (`.github/workflows/ci.yml`) roda o build, as migrações e todos os testes, incluindo os HTTP, em um PostgreSQL temporário a cada push em `main` ou `develop` e em cada pull request.
+
 `npm test` executa os testes do adaptador bancário. Para rodar também os testes HTTP, use uma **base exclusiva de testes**, já migrada, e configure `TEST_DATABASE_URL`. Os testes criam registros nessa base. Nunca use o banco da empresa para executar a suíte.

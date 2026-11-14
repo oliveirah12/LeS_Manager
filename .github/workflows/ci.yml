@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: les
+          POSTGRES_PASSWORD: les_ci
+          POSTGRES_DB: les_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U les -d les_test"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://les:les_ci@localhost:5432/les_test
+      TEST_DATABASE_URL: postgresql://les:les_ci@localhost:5432/les_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18
+          cache: npm
+      - run: npm ci
+      - run: npm run db:generate
+      # Applying every migration to an empty database catches missing or broken migrations.
+      - run: npm run db:migrate
+      - run: npm run build
+      - run: npm test
