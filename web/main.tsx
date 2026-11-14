@@ -48,6 +48,33 @@ const pageDescriptions: Record<Page, string> = {
   account: 'Atualize seus dados e sua senha.',
 };
 
+// Each screen has its own address so reload, back/forward and shared links keep the page.
+const paths: Record<Page, string> = {
+  home: '', products: 'catalogo/produtos', kits: 'catalogo/kits',
+  'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits',
+  GRUPO: 'cadastros/grupos', MARCA: 'cadastros/marcas', COR: 'cadastros/cores', DEPARTAMENTO: 'cadastros/departamentos',
+  families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque',
+  balance: 'financeiro/saldo', statement: 'financeiro/extrato', reconciliation: 'financeiro/conciliacao',
+  audit: 'auditoria', admin: 'acessos/usuarios', 'admin-account': 'acessos/minha-conta', account: 'conta',
+};
+const hashOf = (page: Page) => '#/' + paths[page];
+
+function pageFromHash(): Page | undefined {
+  let path = location.hash.replace(/^#\/?/, '').replace(/\/+$/, '');
+  try { path = decodeURIComponent(path).toLowerCase(); } catch { return undefined; }
+  return (Object.keys(paths) as Page[]).find(page => paths[page] === path);
+}
+
+function useHashPage() {
+  const [page, setPage] = useState(pageFromHash);
+  useEffect(() => {
+    const changed = () => setPage(pageFromHash());
+    addEventListener('hashchange', changed);
+    return () => removeEventListener('hashchange', changed);
+  }, []);
+  return page;
+}
+
 function readPreference(key: string) {
   try { return localStorage.getItem('les-manager.' + key); } catch { return null; }
 }
@@ -76,7 +103,7 @@ function useSidebar() {
 
 function App() {
   const [identity, setIdentity] = useState<Identity | null>();
-  const [selected, setSelected] = useState<Page>();
+  const requested = useHashPage();
   const [expanded, setExpanded] = useState<Partial<Record<Group['id'], boolean>>>({});
   const [notice, setNotice] = useState('');
   const [logout, setLogout] = useState(false);
@@ -85,7 +112,7 @@ function App() {
   const sidebar = useSidebar();
   const heading = useRef<HTMLHeadingElement>(null);
   const menuToggle = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (selected) heading.current?.focus(); }, [selected]);
+  const shownPage = useRef<Page | undefined>(undefined);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#27181e' : '#a52d40');
@@ -102,23 +129,36 @@ function App() {
     }),
   })).filter(group => group.pages.length);
   const allowedPages = allowed.flatMap(group => [...group.pages]);
+  // Administrators keep their account page under Acessos; everyone else uses the standalone page.
+  const selected = requested === 'account' && admin ? 'admin-account' : requested === 'admin-account' && !admin ? 'account' : requested;
   const screen = allowedPages.find(page => page.id === selected) ??
     (selected === 'account' && !admin ? { id: 'account' as const, label: 'Minha conta' } : allowedPages[0]);
   const currentGroup = allowed.find(group => group.pages.some(page => page.id === screen?.id));
 
+  // Unknown or unauthorized addresses fall back to the first allowed screen without a new history entry.
+  useEffect(() => {
+    if (!identity || !screen) return;
+    if (location.hash !== hashOf(screen.id)) history.replaceState(null, '', hashOf(screen.id));
+    if (shownPage.current && shownPage.current !== screen.id) heading.current?.focus();
+    shownPage.current = screen.id;
+  }, [identity, screen?.id]);
+
   function navigate(page: Page) {
-    setSelected(page);
     const group = allowed.find(item => item.pages.some(itemPage => itemPage.id === page));
     if (group) setExpanded(previous => ({ ...previous, [group.id]: true }));
     if (sidebar.mobile) sidebar.setOpen(false);
-    if (page === selected) requestAnimationFrame(() => heading.current?.focus());
+    if (location.hash === hashOf(page)) requestAnimationFrame(() => heading.current?.focus());
+    else location.hash = hashOf(page);
   }
   function closeMobileMenu() {
     sidebar.setOpen(false);
     menuToggle.current?.focus();
   }
   function signedOut(message = '') {
-    setIdentity(null); setSelected(undefined); setExpanded({}); setNotice(message); setLogout(false);
+    setIdentity(null); setExpanded({}); setNotice(message); setLogout(false);
+    shownPage.current = undefined;
+    history.replaceState(null, '', hashOf('home'));
+    dispatchEvent(new HashChangeEvent('hashchange'));
   }
   function toggleTheme() {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -135,7 +175,7 @@ function App() {
           onKeyDown={event => { if (event.key === 'Escape' && sidebar.mobile && sidebar.open) closeMobileMenu(); }}>
           <svg aria-hidden="true" viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
         </button>}
-        <a href="/" className="brand" aria-label="LeS Manager · Início" onClick={event => {
+        <a href={hashOf('home')} className="brand" aria-label="LeS Manager · Início" onClick={event => {
           if (identity && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); navigate('home'); }
         }}><img src="/brand.png" alt="" width="36" height="36" /><span>LeS <strong>Manager</strong></span></a>
       </div>

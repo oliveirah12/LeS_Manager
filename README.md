@@ -27,6 +27,8 @@ A instalação está disponível no **build de produção** em `localhost` ou em
 
 Abra o menu da conta no cabeçalho para alternar entre os temas claro e escuro ou acessar as configurações pessoais. Administradores também encontram **Minha conta** no menu **Acessos**. A troca de senha encerra todas as sessões da conta. O menu lateral memoriza se está aberto ou fechado neste navegador.
 
+Cada tela tem seu próprio endereço, como `/#/estoque` ou `/#/financeiro/conciliacao`. Atualizar a página mantém a tela, os botões voltar e avançar do navegador funcionam, e um link aberto sem sessão leva à tela pedida depois do login. Endereços desconhecidos ou fora do perfil abrem o Início.
+
 **Início** mostra os atalhos autorizados pelo perfil. Clique no logo para voltar a essa tela. **Catálogo** reúne as consultas de produtos e kits. Para incluir ou editar esses itens, abra **Cadastros → Produtos** ou **Cadastros → Kits** e use os formulários em modal.
 
 Para hospedar o painel, mantenha frontend e API na mesma origem. Configure HTTPS no proxy, `COOKIE_SECURE=true` e um endereço de escuta apropriado em `HOST`. Restrinja o acesso ao banco e faça backup da base antes de atualizar versões.
