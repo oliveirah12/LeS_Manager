@@ -14,7 +14,7 @@ import { FinanceController, FinanceService } from './finance/finance';
 import { HealthController } from './health';
 import { Database, DatabaseErrors } from './shared';
 import { StockController } from './stock/controller';
-import { StockService } from './stock/stock';
+import { PreviewCleanup, StockService } from './stock/stock';
 
 @Global()
 @Module({ providers: [Database], exports: [Database] })
@@ -26,7 +26,7 @@ class AccessModule {}
 @Module({ controllers: [CatalogController], providers: [CatalogService], exports: [CatalogService] })
 class CatalogModule {}
 
-@Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService] })
+@Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService, PreviewCleanup] })
 class StockModule {}
 
 @Module({ controllers: [FinanceController], providers: [FinanceService] })

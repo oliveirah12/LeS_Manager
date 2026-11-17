@@ -73,6 +73,8 @@ O menu **Auditoria** está disponível a administradores. Ele registra inclusõe
 
 Os eventos com mais de 12 meses são removidos automaticamente. Para mudar o prazo, defina `AUDIT_RETENTION_DAYS`.
 
+Prévias de inventário e de carga inicial que não forem confirmadas em 7 dias são removidas automaticamente. As confirmadas ficam guardadas como histórico.
+
 ## Testes
 
 O GitHub Actions (`.github/workflows/ci.yml`) roda o build, as migrações e todos os testes, incluindo os HTTP, em um PostgreSQL temporário a cada push em `main` ou `develop` e em cada pull request.

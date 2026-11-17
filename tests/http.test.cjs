@@ -401,6 +401,21 @@ test('API REST com PostgreSQL', {
     expectStatus(await movement(product.id, unit.id, 'PURCHASE', '1', '3'), 201);
   });
 
+  await t.test('a limpeza remove somente prévias antigas não confirmadas', async () => {
+    const { PreviewCleanup } = require('../dist/api/stock/stock.js');
+    const { id: userId } = await db.user.findUniqueOrThrow({ where: { email: adminEmail } });
+    const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    const batch = data => db.inventoryBatch.create({ data: { userId, ...data } });
+    const abandoned = await batch({ createdAt: old });
+    const confirmed = await batch({ createdAt: old, confirmedAt: old });
+    const recent = await batch({});
+    const oldImport = await db.initialImport.create({ data: { userId, data: [], createdAt: old } });
+    await app.get(PreviewCleanup).removeExpired();
+    const kept = await db.inventoryBatch.findMany({ where: { id: { in: [abandoned.id, confirmed.id, recent.id] } } });
+    assert.deepEqual(kept.map(row => row.id).sort(), [confirmed.id, recent.id].sort());
+    assert.equal(await db.initialImport.findUnique({ where: { id: oldImport.id } }), null);
+  });
+
   await t.test('a planilha inválida não grava produtos e a confirmação da carga é idempotente', async () => {
     const workbook = await loadTemplate('/stock/initial/template');
     const first = sku('IMPORTADO-1');
