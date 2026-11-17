@@ -104,6 +104,11 @@ test('API REST com PostgreSQL', {
     const anonymous = await request('/stock');
     expectStatus(anonymous, 401);
     assert.equal(anonymous.cacheControl, 'no-store');
+    // Calls without a valid session are refused before the audit, so they cannot fill it.
+    const eventsBefore = await db.auditEvent.count();
+    expectStatus(await request('/stock/movements', { method: 'POST', body: {} }), 401);
+    expectStatus(await request('/stock/movements', { method: 'POST', cookie: 'les_session=' + 'x'.repeat(32), body: {} }), 401);
+    assert.equal(await db.auditEvent.count(), eventsBefore);
     const profile = expectStatus(await post('/access/profiles', { name: sku('LEITURA'), permissions: ['stock:view'] }), 201);
     const email = run.toLowerCase() + '-estoque@example.com';
     const user = expectStatus(await post('/access/users', { name: 'Pessoa de estoque', email, profileId: profile.id }), 201);

@@ -69,7 +69,7 @@ O Inter é o provedor disponível nesta versão. Para integrar outro banco, impl
 
 ## Auditoria
 
-O menu **Auditoria** está disponível a administradores. Ele registra inclusões, alterações, movimentações de estoque, sincronização e conciliação bancária, além dos eventos de segurança: entradas, falhas de login, ativações, trocas de senha, códigos gerados e tentativas negadas de alteração. Consultas e prévias não são registradas. Cada evento mostra o usuário, o resultado e os valores antes e depois dos campos alterados. Filtre por usuário, ação, resultado e período. Senhas, códigos de acesso e tokens ficam fora do histórico.
+O menu **Auditoria** está disponível a administradores. Ele registra inclusões, alterações, movimentações de estoque, sincronização e conciliação bancária, além dos eventos de segurança: entradas, falhas de login, ativações, trocas de senha, códigos gerados e tentativas negadas de alteração por usuários conectados. Consultas e prévias não são registradas, nem chamadas sem sessão válida, excesso de tentativas ou pedidos vindos de outros sites, que são recusados antes do registro. Cada evento mostra o usuário, o resultado e os valores antes e depois dos campos alterados. Filtre por usuário, ação, resultado e período. Senhas, códigos de acesso e tokens ficam fora do histórico.
 
 Os eventos com mais de 12 meses são removidos automaticamente. Para mudar o prazo, defina `AUDIT_RETENTION_DAYS`.
 
