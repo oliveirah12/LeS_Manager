@@ -6,6 +6,7 @@ import { Global, Module } from '@nestjs/common';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AccessController, AccessGuard, AccessService, SessionCleanup } from './access/access';
+import { proxySetting } from './access/attempts';
 import { AuditController } from './audit/audit';
 import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
@@ -47,6 +48,9 @@ export async function createApp() {
     next();
   });
   app.getHttpAdapter().getInstance().disable('x-powered-by');
+  // Behind the HTTPS proxy, the client address comes from X-Forwarded-For.
+  const trustProxy = proxySetting();
+  if (trustProxy !== undefined) app.set('trust proxy', trustProxy);
   const web = resolve(__dirname, '../web');
   if (existsSync(resolve(web, 'index.html'))) app.useStaticAssets(web);
   return app;

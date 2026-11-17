@@ -10,6 +10,8 @@ test('API REST com PostgreSQL', {
 }, async t => {
   process.env.DATABASE_URL = databaseUrl;
   process.env.COOKIE_SECURE = 'false';
+  // Requests without X-Forwarded-For keep the socket address, so only the limit test below sets it.
+  process.env.TRUST_PROXY = '1';
   const { PrismaClient } = require('@prisma/client');
   const { Workbook } = require('exceljs');
   const { hashPassword } = require('../dist/api/access/security.js');
@@ -35,8 +37,8 @@ test('API REST com PostgreSQL', {
     },
   });
 
-  async function request(path, { method = 'GET', cookie, body } = {}) {
-    const headers = {};
+  async function request(path, { method = 'GET', cookie, body, headers: extra = {} } = {}) {
+    const headers = { ...extra };
     if (cookie) headers.cookie = cookie;
     if (body !== undefined && !(body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
@@ -155,6 +157,27 @@ test('API REST com PostgreSQL', {
     expectStatus(await request('/access/me', { cookie: otherSession.cookie }), 401);
     expectStatus(await request('/access/login', { method: 'POST', body: { email, password } }), 401);
     expectStatus(await request('/access/login', { method: 'POST', body: { email, password: newPassword } }), 200);
+  });
+
+  await t.test('limite de tentativas pelo endereço real e por conta', async () => {
+    const from = address => ({ 'x-forwarded-for': '203.0.113.' + address });
+    const login = (email, attempt, address) => request('/access/login', { method: 'POST', headers: from(address), body: { email, password: attempt } });
+    const email = run.toLowerCase() + '-bloqueio@example.com';
+    await db.user.create({
+      data: {
+        email, name: 'Pessoa bloqueada', passwordHash: await hashPassword(password),
+        profile: { create: { name: sku('BLOQUEIO'), permissions: ['stock:view'] } },
+      },
+    });
+    // Ten failures from different addresses lock the account, even for the right password.
+    for (let address = 1; address <= 10; address++) expectStatus(await login(email, 'Senha-errada1', address), 401);
+    expectStatus(await login(email, password, 11), 429);
+
+    // The address limit follows the forwarded client, not the proxy, and spares other clients.
+    const stranger = attempt => run.toLowerCase() + '-ninguem' + attempt + '@example.com';
+    for (let attempt = 0; attempt < 20; attempt++) expectStatus(await login(stranger(attempt), password, 100), 401);
+    expectStatus(await login(stranger(20), password, 100), 429);
+    expectStatus(await login(stranger(21), password, 101), 401);
   });
 
   await t.test('permissões independentes para catálogo, cadastros, estoque e financeiro', async () => {

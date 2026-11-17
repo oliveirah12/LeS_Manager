@@ -1,6 +1,6 @@
 import {
   Body, CanActivate, ConflictException, Controller, ExecutionContext, ForbiddenException, Get,
-  HttpCode, HttpException, Inject, Injectable, NotFoundException, Param, Patch, Post, Req, Res,
+  HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post, Req, Res,
   SetMetadata, UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -8,6 +8,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Audit, AUDIT, auditActor, auditChange, auditContext, beginAudit } from '../audit/recorder';
 import { DailyTask, Database, idField, nameField, parse, serial } from '../shared';
+import { AttemptLimiter } from './attempts';
 import {
   activationFields, administrator, canAccess, configurablePermissions, emailField, hashPassword,
   hashToken, newToken, passwordChangeFields, verifyPassword,
@@ -73,28 +74,37 @@ export class SessionCleanup extends DailyTask {
 
 @Injectable()
 export class AccessService {
-  private attempts = new Map<string, { count: number; expires: number }>();
+  // Every attempt from an address counts. Per account, only a success clears the count.
+  private byAddress = new AttemptLimiter(20, 60_000, 'Muitas tentativas. Aguarde um minuto.');
+  private byAccount = new AttemptLimiter(10, 15 * 60_000, 'Muitas tentativas para esta conta. Aguarde 15 minutos.');
   constructor(@Inject(Database) private db: Database) {}
 
-  limit(ip: string) {
-    const now = Date.now();
-    for (const [key, item] of this.attempts) if (item.expires <= now) this.attempts.delete(key);
-    const item = this.attempts.get(ip) ?? { count: 0, expires: now + 60_000 };
-    if (item.count >= 20) throw new HttpException('Muitas tentativas. Aguarde um minuto.', 429);
-    item.count++;
-    this.attempts.set(ip, item);
+  limit(ip: string) { this.byAddress.take(ip); }
+
+  /** Counts the attempt before it runs, so parallel guesses cannot pass the limit together. */
+  private async guarded<T>(email: string, attempt: () => Promise<T>) {
+    this.byAccount.take(email);
+    const result = await attempt();
+    this.byAccount.reset(email);
+    return result;
   }
 
-  async login(data: z.infer<typeof loginFields>, response: Response) {
+  login(data: z.infer<typeof loginFields>, response: Response) {
     auditContext({ 'E-mail': data.email });
-    const user = await this.db.user.findUnique({ where: { email: data.email } });
-    const valid = await verifyPassword(data.password, user?.passwordHash ?? null);
-    if (!user?.active || !user.passwordHash || !valid) throw new UnauthorizedException('E-mail ou senha inválidos. Para ativar uma conta nova, use Primeiro acesso.');
-    return this.openSession(user.id, user.passwordHash, response);
+    return this.guarded(data.email, async () => {
+      const user = await this.db.user.findUnique({ where: { email: data.email } });
+      const valid = await verifyPassword(data.password, user?.passwordHash ?? null);
+      if (!user?.active || !user.passwordHash || !valid) throw new UnauthorizedException('E-mail ou senha inválidos. Para ativar uma conta nova, use Primeiro acesso.');
+      return this.openSession(user.id, user.passwordHash, response);
+    });
   }
 
-  async activate(data: z.infer<typeof activationFields>, response: Response) {
+  activate(data: z.infer<typeof activationFields>, response: Response) {
     auditContext({ 'E-mail': data.email });
+    return this.guarded(data.email, () => this.redeemCode(data, response));
+  }
+
+  private async redeemCode(data: z.infer<typeof activationFields>, response: Response) {
     const where = {
       email: data.email, active: true, passwordHash: null, activationHash: hashToken(data.code),
       activationExpires: { gt: new Date() },
@@ -136,7 +146,11 @@ export class AccessService {
     return { ok: true };
   }
 
-  async changePassword(userId: string, data: z.infer<typeof passwordChangeFields>, response: Response) {
+  changePassword(identity: Identity, data: z.infer<typeof passwordChangeFields>, response: Response) {
+    return this.guarded(identity.email, () => this.replacePassword(identity.id, data, response));
+  }
+
+  private async replacePassword(userId: string, data: z.infer<typeof passwordChangeFields>, response: Response) {
     const user = await this.db.user.findUnique({ where: { id: userId }, select: { active: true, passwordHash: true } });
     if (!user?.active || !user.passwordHash || !await verifyPassword(data.currentPassword, user.passwordHash)) {
       throw new ForbiddenException('Senha atual incorreta.');
@@ -224,7 +238,7 @@ export class AccessController {
   @HttpCode(200)
   changePassword(@Req() request: Authenticated, @Body() body: unknown, @Res({ passthrough: true }) response: Response) {
     this.service.limit(request.ip ?? 'local');
-    return this.service.changePassword(request.identity.id, parse(passwordChangeFields, body), response);
+    return this.service.changePassword(request.identity, parse(passwordChangeFields, body), response);
   }
 
   @Require(administrator)

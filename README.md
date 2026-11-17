@@ -31,7 +31,9 @@ Cada tela tem seu próprio endereço, como `/#/estoque` ou `/#/financeiro/concil
 
 **Início** mostra, em blocos separados, o resumo do **Estoque** (produtos, valor pelo custo médio, kits e movimentações) e do **Financeiro** (saldo bancário, entradas, saídas e lançamentos a conciliar), conforme o perfil. Clique no logo para voltar a essa tela. **Catálogo** reúne as consultas de produtos e kits. Para incluir ou editar esses itens, abra **Cadastros → Produtos** ou **Cadastros → Kits** e use os formulários do painel lateral. Itens fora de linha podem ser **inativados**: eles saem do estoque e das listas de seleção, e o histórico é preservado. Um produto só pode ser inativado com saldo zerado e fora de kits ativos. Use o filtro **Inativos** para encontrá-los e reativá-los.
 
-Para hospedar o painel, mantenha frontend e API na mesma origem. Configure HTTPS no proxy, `COOKIE_SECURE=true` e um endereço de escuta apropriado em `HOST`. Restrinja o acesso ao banco e faça backup da base antes de atualizar versões.
+Para hospedar o painel, mantenha frontend e API na mesma origem. Configure HTTPS no proxy, `COOKIE_SECURE=true` e um endereço de escuta apropriado em `HOST`. Defina `TRUST_PROXY` com a quantidade de proxies à frente da API, normalmente `1`, para que o app enxergue o endereço real de cada visitante. Use essa opção somente quando o proxy for o único caminho até a porta da API.
+
+O login, o primeiro acesso e a troca de senha aceitam até 20 tentativas por minuto de cada endereço. Cada conta aceita até 10 tentativas sem sucesso em 15 minutos, e uma entrada correta zera essa contagem. Restrinja o acesso ao banco e faça backup da base antes de atualizar versões.
 
 ## Produção com Docker
 
