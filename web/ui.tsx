@@ -360,9 +360,9 @@ export type Kit = {
   id: string; sku: string; name: string; active: boolean; available: string;
   components: { productId: string; quantity: string; product: Product }[];
 };
-export type StockView = { products: Product[]; kits: Kit[]; units: Unit[] };
+/** Product in the stock view, with its value at average cost computed by the API with exact decimals. */
+export type StockProduct = Product & { value: string };
+export type StockView = { products: StockProduct[]; kits: Kit[]; units: Unit[]; totalValue: string };
 export const baseUnit = (product: Pick<Product, 'unit'>) => product.unit.family.units[0] ?? product.unit;
 export const productOptions = (products: Product[]) => products.map(product => ({ id: product.id, name: product.sku + ' · ' + product.name }));
 export const unitOptions = (units: Unit[], bySymbol = false) => units.map(unit => ({ id: bySymbol ? unit.symbol : unit.id, name: unit.symbol }));
-/** Stock value at average cost. For display only: the backend keeps the exact decimals. */
-export const stockValue = (product: Pick<Product, 'quantity' | 'currentCost'>) => Number(product.quantity) * Number(product.currentCost ?? 0);

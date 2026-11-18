@@ -391,6 +391,14 @@ test('API REST com PostgreSQL', {
     expectStatus(await status('kits', kit.id, true), 409);
     const stock = expectStatus(await admin('/stock'), 200);
     assert.equal(stock.products.some(row => row.id === product.id), false);
+    // The API values each product and sums the stock with exact decimals.
+    const { Prisma } = require('@prisma/client');
+    for (const row of stock.products) {
+      const value = new Prisma.Decimal(row.quantity).times(row.currentCost ?? 0).toDecimalPlaces(12);
+      assert.ok(new Prisma.Decimal(row.value).eq(value), row.sku + ': ' + row.value + ' ≠ ' + value.toFixed());
+    }
+    const expected = stock.products.reduce((sum, row) => sum.plus(row.value), new Prisma.Decimal(0));
+    assert.equal(new Prisma.Decimal(stock.totalValue).toFixed(), expected.toFixed());
     const catalog = expectStatus(await admin('/catalog'), 200);
     assert.equal(catalog.products.find(row => row.id === product.id).active, false);
     assert.equal((await productMovements(product.id, 'OUT')).length, 1);

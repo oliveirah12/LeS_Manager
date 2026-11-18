@@ -76,3 +76,13 @@ test('failure on a later page leaves the last successful update intact', async (
   assert.equal(db.writes, writes);
   assert.deepEqual(await finance.view(range), saved);
 });
+
+test('sums credits and debits exactly, in absolute values', () => {
+  const { statementTotals } = require('../dist/api/finance/finance.js');
+  const rows = [
+    { amount: '0.10', direction: 'C' }, { amount: '0.20', direction: 'C' },
+    { amount: '-1250.37', direction: 'D' }, { amount: '0.01', direction: 'D' },
+  ];
+  assert.deepEqual(statementTotals(rows), { credits: '0.30', debits: '1250.38' });
+  assert.deepEqual(statementTotals([]), { credits: '0.00', debits: '0.00' });
+});

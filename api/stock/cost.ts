@@ -11,3 +11,13 @@ export function averageCost(
   const total = balance.plus(quantity);
   return balance.times(currentCost).plus(quantity.times(unitCost)).div(total).toDecimalPlaces(12);
 }
+
+/** Value of a balance at its average cost. A balance without a known cost counts as zero. */
+export function stockValue(quantity: Prisma.Decimal, currentCost: Prisma.Decimal | null) {
+  return quantity.times(currentCost ?? 0).toDecimalPlaces(12);
+}
+
+/** Exact sum of the values, so totals match the accounting to the cent. */
+export function sumValues(values: Prisma.Decimal[]) {
+  return values.reduce((total, value) => total.plus(value), new Prisma.Decimal(0));
+}

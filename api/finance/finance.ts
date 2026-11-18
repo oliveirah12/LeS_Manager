@@ -45,6 +45,13 @@ function statementKeys(entries: BankEntry[]) {
     ? createHash('sha256').update(entry.id).digest('hex') : null);
 }
 
+/** Exact totals of credits and debits, in absolute values, so the panel never sums money in floating point. */
+export function statementTotals(entries: Pick<BankEntry, 'amount' | 'direction'>[]) {
+  const total = (credit: boolean) => entries.filter(entry => (entry.direction === 'C') === credit)
+    .reduce((sum, entry) => sum.plus(new Prisma.Decimal(entry.amount).abs()), new Prisma.Decimal(0)).toFixed(2);
+  return { credits: total(true), debits: total(false) };
+}
+
 function readEntries(entries: Prisma.JsonValue) {
   return entries as unknown as BankEntry[];
 }
@@ -78,7 +85,7 @@ export class FinanceService {
         });
       });
       return {
-        balance, transactions, importedDays: days.length,
+        balance, transactions, totals: statementTotals(transactions), importedDays: days.length,
         requestedDays: (Date.parse(range.to) - Date.parse(range.from)) / 86400000 + 1,
       };
     }, { isolationLevel: 'RepeatableRead' });

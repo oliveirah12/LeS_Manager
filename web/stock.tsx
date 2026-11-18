@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ArrowLeftRight, ClipboardList, Download, FileSpreadsheet, PackageMinus, Plus } from 'lucide-react';
 import {
   api, Badge, baseUnit, brl, dateTime, Field, fields, FileField, Filters, Form, Kit, Loading, matches, message, Modal, ModalForm, PageActions,
-  Product, productOptions, quantity, SearchInput, Segmented, Select, StockView, stockValue, Table, Tabs, Title, unitOptions, useClosePanel,
+  Product, productOptions, quantity, SearchInput, Segmented, Select, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
   useData, notify,
 } from './ui';
 
@@ -64,12 +64,11 @@ function Balances({ data, edit, move }: { data: StockView; edit: boolean; move: 
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'empty'>('all');
   const rows = data.products.filter(product => matches(query, product.sku, product.name) && (filter === 'all' || Number(product.quantity) === 0));
-  const total = data.products.reduce((sum, product) => sum + stockValue(product), 0);
   return <div className="tab-panel" role="tabpanel">
     <div className="toolbar">
       <SearchInput value={query} onChange={setQuery} />
       <Segmented label="Saldo" value={filter} onChange={setFilter} options={[{ id: 'all', name: 'Todos' }, { id: 'empty', name: 'Sem saldo' }]} />
-      <span className="summary">{data.products.length} produtos · <strong className="num">{brl(total)}</strong> em estoque</span>
+      <span className="summary">{data.products.length} produtos · <strong className="num">{brl(data.totalValue)}</strong> em estoque</span>
     </div>
     <Table empty={query || filter === 'empty' ? 'Nenhum produto encontrado.' : 'Nenhum produto ativo.'}
       columns={['Produto', { label: 'Saldo', end: true }, { label: 'Custo médio', end: true }, { label: 'Última compra', end: true },
@@ -79,7 +78,7 @@ function Balances({ data, edit, move }: { data: StockView; edit: boolean; move: 
         Number(product.quantity) === 0 ? <Badge tone="warn">Sem saldo</Badge> :
           <span><strong>{quantity(product.quantity)}</strong> <span className="muted">{baseUnit(product).symbol}</span></span>,
         brl(product.currentCost), <span className="muted">{brl(product.lastPurchaseCost)}</span>,
-        <strong>{brl(stockValue(product))}</strong>,
+        <strong>{brl(product.value)}</strong>,
         ...(edit ? [<button type="button" className="btn secondary small" onClick={() => move(product)}><ArrowLeftRight size={14} aria-hidden="true" />Movimentar</button>] : []),
       ])} />
   </div>;

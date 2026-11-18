@@ -21,3 +21,12 @@ test('keeps the stored precision of 12 decimal places', () => {
   assert.equal(average('1750', '0.01425', '1000', '0.0195'), '0.016159090909');
   assert.equal(average('2', '1', '1', '0'), '0.666666666667');
 });
+
+test('values the balance exactly and sums without floating point', () => {
+  const { stockValue, sumValues } = require('../dist/api/stock/cost.js');
+  assert.equal(stockValue(d('1750'), d('0.016159090909')).toString(), '28.27840909075');
+  assert.equal(stockValue(d('5'), null).toString(), '0');
+  // In floating point, 0.1 + 0.2 gives 0.30000000000000004.
+  assert.equal(sumValues([d('0.1'), d('0.2')]).toString(), '0.3');
+  assert.equal(sumValues([]).toString(), '0');
+});

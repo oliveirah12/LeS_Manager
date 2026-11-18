@@ -1,12 +1,14 @@
 import { ArrowDownRight, ArrowUpRight, Boxes, ChevronRight, Package, PackageX, RefreshCw, Tag, Wallet } from 'lucide-react';
 import type { Page } from './main';
 import {
-  baseUnit, brl, dateTime, Empty, Identity, Loading, message, PageActions, Product, quantity, relativeTime, StockView, stockValue, today, useData,
+  baseUnit, brl, dateTime, Empty, Identity, Loading, message, PageActions, Product, quantity, relativeTime, StockView, today, useData,
 } from './ui';
 
 type Movement = { id: string; kind: string; quantity: string; createdAt: string; product: Pick<Product, 'sku' | 'name' | 'unit'>; user: { name: string } };
 type Provider = { id: string; name: string };
-type Transaction = { key: string | null; direction: string; amount: string; reconciliation: unknown };
+type Transaction = { key: string | null; reconciliation: unknown };
+/** Exact sums computed by the API. */
+type Totals = { credits: string; debits: string };
 const kindLabels: Record<string, string> = {
   PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário',
 };
@@ -44,7 +46,6 @@ function StockSummary({ navigate }: { navigate: (page: Page) => void }) {
   const history = useData<{ movements: Movement[] }>('stock/movements');
   const products = view.data?.products ?? [];
   const empty = products.filter(product => Number(product.quantity) === 0);
-  const value = products.reduce((sum, product) => sum + stockValue(product), 0);
   const kits = view.data?.kits ?? [];
   return <section className="stack" aria-labelledby="home-stock">
     <div className="section-head">
@@ -54,7 +55,7 @@ function StockSummary({ navigate }: { navigate: (page: Page) => void }) {
     {message(view.error)}
     {view.loading && !view.data ? <Loading label="Carregando estoque…" /> : <div className="kpis">
       <div className="card kpi"><span>Produtos ativos</span><strong>{products.length}</strong><small>{empty.length ? empty.length + ' sem saldo' : 'Todos com saldo'}</small></div>
-      <div className="card kpi"><span>Valor em estoque</span><strong>{brl(value)}</strong><small>Pelo custo médio</small></div>
+      <div className="card kpi"><span>Valor em estoque</span><strong>{brl(view.data?.totalValue ?? null)}</strong><small>Pelo custo médio</small></div>
       <div className="card kpi"><span>Kits disponíveis</span><strong>{kits.filter(kit => Number(kit.available) > 0).length}</strong>
         <small>de {kits.length} ativos</small></div>
     </div>}
@@ -95,10 +96,9 @@ function FinanceSummary({ navigate, edit }: { navigate: (page: Page) => void; ed
   const to = today();
   const from = new Date(Date.parse(to) - 29 * 86400000).toISOString().slice(0, 10);
   const balance = useData<{ balance: { available: string; updatedAt: string } | null }>(provider ? 'finance/balance?' + new URLSearchParams({ provider: provider.id }) : null);
-  const statement = useData<{ transactions: Transaction[]; importedDays: number }>(provider ? 'finance?' + new URLSearchParams({ provider: provider.id, from, to }) : null);
+  const statement = useData<{ transactions: Transaction[]; importedDays: number; totals: Totals }>(provider ? 'finance?' + new URLSearchParams({ provider: provider.id, from, to }) : null);
   const transactions = statement.data?.transactions ?? [];
   const pending = transactions.filter(row => row.key && !row.reconciliation).length;
-  const total = (direction: string) => transactions.filter(row => row.direction === direction).reduce((sum, row) => sum + Math.abs(Number(row.amount)), 0);
   const current = balance.data?.balance;
   return <section className="stack" aria-labelledby="home-finance">
     <div className="section-head">
@@ -109,8 +109,8 @@ function FinanceSummary({ navigate, edit }: { navigate: (page: Page) => void; ed
     {(providers.loading || balance.loading) && !current ? <Loading label="Carregando dados bancários…" /> : <div className="kpis">
       <div className="card kpi"><span>Saldo disponível</span><strong>{brl(current?.available ?? null)}</strong>
         <small>{current ? 'Sincronizado ' + relativeTime(current.updatedAt) : 'Aguardando a primeira sincronização'}</small></div>
-      <div className="card kpi"><span>Entradas · 30 dias</span><strong style={{ color: 'var(--ok)' }}>{brl(total('C'))}</strong><small>Extrato importado</small></div>
-      <div className="card kpi"><span>Saídas · 30 dias</span><strong>{brl(total('D'))}</strong><small>Extrato importado</small></div>
+      <div className="card kpi"><span>Entradas · 30 dias</span><strong style={{ color: 'var(--ok)' }}>{brl(statement.data?.totals.credits ?? null)}</strong><small>Extrato importado</small></div>
+      <div className="card kpi"><span>Saídas · 30 dias</span><strong>{brl(statement.data?.totals.debits ?? null)}</strong><small>Extrato importado</small></div>
       <button type="button" className="card kpi" style={{ textAlign: 'left', cursor: 'pointer', color: 'inherit', font: 'inherit' }} onClick={() => navigate('reconciliation')}>
         <span>A conciliar · 30 dias</span><strong style={{ color: pending ? 'var(--warn)' : undefined }}>{pending}</strong>
         <small>{pending ? 'Abrir conciliação' : 'Tudo conferido'}</small></button>
