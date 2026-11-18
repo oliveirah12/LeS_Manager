@@ -10,6 +10,7 @@ import { Audit } from './audit';
 import { Catalog } from './catalog';
 import { Finance } from './finance';
 import { Home } from './home';
+import { pageFromHash } from './format';
 import { InstallApp } from './pwa';
 import { referenceKinds, Registrations } from './registrations';
 import { Stock } from './stock';
@@ -62,16 +63,12 @@ const paths: Record<Page, string> = {
 };
 const hashOf = (page: Page) => '#/' + paths[page];
 
-function pageFromHash(): Page | undefined {
-  let path = location.hash.replace(/^#\/?/, '').replace(/\/+$/, '');
-  try { path = decodeURIComponent(path).toLowerCase(); } catch { return undefined; }
-  return (Object.keys(paths) as Page[]).find(page => paths[page] === path);
-}
+const currentPage = () => pageFromHash(location.hash, paths);
 
 function useHashPage() {
-  const [page, setPage] = useState(pageFromHash);
+  const [page, setPage] = useState(currentPage);
   useEffect(() => {
-    const changed = () => setPage(pageFromHash());
+    const changed = () => setPage(currentPage());
     addEventListener('hashchange', changed);
     return () => removeEventListener('hashchange', changed);
   }, []);
