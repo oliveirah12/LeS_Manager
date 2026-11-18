@@ -7,7 +7,7 @@ Painel interno instalável como PWA para catálogo, estoque e consultas ao Inter
 Requer Node.js 22.18 ou superior e PostgreSQL. O Docker Compose oferece um banco local de desenvolvimento. Se já tiver PostgreSQL, use uma base vazia e ajuste `DATABASE_URL`.
 
 ```powershell
-Copy-Item .env.example .env
+Copy-Item .env.example .env   # preencha CONFIG_ENCRYPTION_KEY com o comando indicado no arquivo
 docker compose up -d
 npm ci
 npm run db:generate
@@ -40,13 +40,15 @@ O login, o primeiro acesso e a troca de senha aceitam até 20 tentativas por min
 O `Dockerfile` gera uma imagem com a API e o painel, e o `compose.prod.yaml` sobe essa imagem com o PostgreSQL. O banco não fica exposto fora do Docker, e o app escuta em `127.0.0.1:3000` para ficar atrás de um proxy HTTPS, como Caddy ou Nginx.
 
 ```powershell
-Copy-Item .env.prod.example .env.prod   # defina POSTGRES_PASSWORD e, se usar, o Inter
+Copy-Item .env.prod.example .env.prod   # defina POSTGRES_PASSWORD e CONFIG_ENCRYPTION_KEY
 docker compose -f compose.prod.yaml --env-file .env.prod up -d --build
 docker compose -f compose.prod.yaml --env-file .env.prod exec app npm run db:migrate
 docker compose -f compose.prod.yaml --env-file .env.prod exec app npm run admin:create:prod -- "Seu nome" admin@empresa.com
 ```
 
-Coloque `cert.pem` e `key.pem` do Inter na pasta indicada em `INTER_CERT_DIR` (padrão `./certs`). Ela é montada somente para leitura e fica fora da imagem. O contêiner verifica `/api/health`, que confirma a API e o banco.
+O contêiner verifica `/api/health`, que confirma a API e o banco. As credenciais do banco não ficam no servidor: elas são configuradas pelo painel, como descrito em **Financeiro e conciliação**.
+
+**Guarde a `CONFIG_ENCRYPTION_KEY` junto do backup do banco.** Ela cifra o Client Secret e a chave privada salvos no painel. Sem ela, um backup restaurado traz todo o resto, mas esses dois ficam ilegíveis, e será preciso enviá-los de novo em **Financeiro → Integração**. Trocar a chave tem o mesmo efeito.
 
 Para atualizar, faça backup da base, rode `git pull`, repita o `up -d --build` e depois o `db:migrate`. As migrações são aplicadas manualmente para que nenhuma alteração no banco aconteça sem um backup antes.
 
@@ -63,7 +65,9 @@ O custo do estoque usa a **média ponderada móvel**. Cada compra ou carga inici
 
 ## Financeiro e conciliação
 
-Crie uma integração no Inter com permissão de consulta de extrato. Comece com `INTER_ENV=sandbox` e preencha as variáveis comentadas em `.env.example`. Aponte para os arquivos PEM do certificado e da chave privada fora do repositório. `INTER_ACCOUNT` é opcional quando a integração identifica uma única conta. Reinicie a API e use **Financeiro → Extrato → Sincronizar período**. O sandbox usa dados fictícios. [Portal do Inter Empresas](https://developers.inter.co/sandbox)
+Crie uma integração no Inter com permissão de consulta de extrato e baixe o certificado e a chave privada. Depois, um administrador abre **Financeiro → Integração**, escolhe o ambiente, informa o Client ID, o Client Secret e, se houver mais de uma conta, a conta corrente, e envia os dois arquivos PEM. O painel confere se a chave corresponde ao certificado e se ele está dentro da validade. Use **Testar conexão** e depois **Financeiro → Extrato → Sincronizar período**. Comece pelo ambiente Sandbox, que usa dados fictícios. [Portal do Inter Empresas](https://developers.inter.co/sandbox)
+
+O Client Secret e a chave privada são gravados cifrados com a `CONFIG_ENCRYPTION_KEY` e nunca voltam para a tela, nem entram na auditoria. Para trocar só o certificado, envie os arquivos novos e deixe o secret em branco. A tela avisa 30 dias antes do vencimento do certificado. Somente administradores veem e alteram a integração.
 
 A atualização consulta todas as páginas antes de gravar. Cada dia completo substitui a versão anterior daquele dia em uma transação única. Se o banco falhar durante a consulta, o painel mantém o último saldo e extrato gravados.
 

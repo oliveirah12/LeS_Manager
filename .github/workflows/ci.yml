@@ -30,6 +30,8 @@ jobs:
     env:
       DATABASE_URL: postgresql://les:les_ci@localhost:5432/les_test
       TEST_DATABASE_URL: postgresql://les:les_ci@localhost:5432/les_test
+      # Test-only key; production uses its own secret from .env.prod.
+      CONFIG_ENCRYPTION_KEY: bGVzLW1hbmFnZXItY2ktY2hhdmUtZGUtdGVzdGVzISE=
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
