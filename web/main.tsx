@@ -24,7 +24,7 @@ const groups = [
     { id: 'products', label: 'Produtos' }, { id: 'kits', label: 'Kits' },
   ] },
   { id: 'finance', label: 'Financeiro', icon: Wallet, section: 'ops', permission: 'finance:view', pages: [
-    { id: 'balance', label: 'Saldo' }, { id: 'statement', label: 'Extrato' }, { id: 'reconciliation', label: 'Conciliação' },
+    { id: 'balance', label: 'Saldo' }, { id: 'statement', label: 'Extrato' }, { id: 'reconciliation', label: 'Conciliação' }, { id: 'integration', label: 'Integração' },
   ] },
   { id: 'registrations', label: 'Cadastros', icon: Layers, section: 'admin', permission: 'registrations:view', pages: [
     { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' },
@@ -48,6 +48,7 @@ const pageDescriptions: Record<Page, string> = {
   stock: 'Saldos e custos na unidade base de cada produto.',
   balance: 'Saldo da conta bancária na última sincronização.', statement: 'Transações bancárias por período.',
   reconciliation: 'Confira os lançamentos do banco com as referências internas.',
+  integration: 'Credenciais e certificado usados para ler o saldo e o extrato.',
   audit: 'Inclusões, alterações, acessos e tentativas negadas dos últimos 12 meses.',
   admin: 'Perfis de acesso e contas da equipe.', 'admin-account': 'Seus dados e sua senha.', account: 'Seus dados e sua senha.',
 };
@@ -58,7 +59,7 @@ const paths: Record<Page, string> = {
   'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits',
   GRUPO: 'cadastros/grupos', MARCA: 'cadastros/marcas', COR: 'cadastros/cores', DEPARTAMENTO: 'cadastros/departamentos',
   families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque',
-  balance: 'financeiro/saldo', statement: 'financeiro/extrato', reconciliation: 'financeiro/conciliacao',
+  balance: 'financeiro/saldo', statement: 'financeiro/extrato', reconciliation: 'financeiro/conciliacao', integration: 'financeiro/integracao',
   audit: 'auditoria', admin: 'acessos/usuarios', 'admin-account': 'acessos/minha-conta', account: 'conta',
 };
 const hashOf = (page: Page) => '#/' + paths[page];
@@ -166,6 +167,7 @@ function App() {
     ...group,
     pages: [...group.pages].filter(page => {
       if (page.id === 'register-products' || page.id === 'register-kits') return can('catalog:operate');
+      if (page.id === 'integration') return can('admin');
       return !group.permission || can(group.permission);
     }),
   })).filter(group => group.pages.length);
@@ -254,8 +256,9 @@ function App() {
     {(page === 'GRUPO' || page === 'MARCA' || page === 'COR' || page === 'DEPARTAMENTO' || page === 'families' || page === 'units') &&
       <Registrations key={page} page={page} edit={can('registrations:operate')} admin={admin} />}
     {page === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}
-    {(page === 'balance' || page === 'statement' || page === 'reconciliation') &&
-      <Finance key={page} page={page} edit={can('finance:operate')} openStatement={() => navigate('statement')} />}
+    {(page === 'balance' || page === 'statement' || page === 'reconciliation' || page === 'integration') &&
+      <Finance key={page} page={page} edit={can('finance:operate')} admin={admin} openStatement={() => navigate('statement')}
+        openIntegration={() => navigate('integration')} />}
     {page === 'admin' && <Administration onUserChanged={async id => { if (id === identity.id) await signIn(); }} />}
     {page === 'audit' && <Audit />}
     {(page === 'account' || page === 'admin-account') && <AccountSettings identity={identity} changed={setIdentity}

@@ -94,7 +94,7 @@ export class BankConnectionService {
   /** The reader built from the saved credentials, reused until the configuration changes. */
   async reader(provider: BankProvider) {
     const row = await this.db.bankConnection.findUnique({ where: { provider: provider.id } });
-    if (!row) throw new ConflictException('Configure a integração em Financeiro → Integração.');
+    if (!row) throw new ConflictException('A integração com o banco ainda não foi configurada. Um administrador pode configurá-la em Financeiro → Integração.');
     const cached = this.readers.get(provider.id);
     if (cached?.version === row.updatedAt.getTime()) return cached.reader;
     const reader = provider.connect({

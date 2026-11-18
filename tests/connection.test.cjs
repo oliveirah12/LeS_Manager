@@ -84,7 +84,7 @@ test('the first save needs the secret and both files', { skip }, async () => {
 
 test('reuses the reader until the configuration changes', { skip }, async () => {
   const service = new BankConnectionService(memoryDatabase());
-  await assert.rejects(service.reader(provider), /Configure a integração/);
+  await assert.rejects(service.reader(provider), /não foi configurada/);
   await service.save(provider, fields, files(), 'user-1');
   const first = await service.reader(provider);
   assert.equal(await service.reader(provider), first);

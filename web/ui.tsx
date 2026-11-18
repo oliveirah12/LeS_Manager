@@ -222,17 +222,21 @@ export function Form({ children, action, label, reset = false, disabled = false,
   </form>;
 }
 
-export function FileField({ name, label, accept }: { name: string; label: string; accept: string }) {
+export function FileField({ name, label, accept, required = true, hint }: {
+  name: string; label: string; accept: string; required?: boolean; hint?: string;
+}) {
   return <label className="file-field">{label}
-    <input type="file" name={name} accept={accept} required />
+    <input type="file" name={name} accept={accept} required={required} />
+    {hint && <span className="hint">{hint}</span>}
   </label>;
 }
 
-export function Field({ name, label, type = 'text', defaultValue, required = true, placeholder, hint, inputMode }: {
+export function Field({ name, label, type = 'text', defaultValue, required = true, placeholder, hint, inputMode, autoComplete }: {
   name: string; label: string; type?: string; defaultValue?: string; required?: boolean; placeholder?: string; hint?: string;
-  inputMode?: 'decimal' | 'numeric' | 'text' | 'email';
+  inputMode?: 'decimal' | 'numeric' | 'text' | 'email'; autoComplete?: string;
 }) {
-  return <label>{label}<input name={name} type={type} defaultValue={defaultValue} required={required} placeholder={placeholder} inputMode={inputMode} />
+  return <label>{label}<input name={name} type={type} defaultValue={defaultValue} required={required} placeholder={placeholder}
+    inputMode={inputMode} autoComplete={autoComplete} />
     {hint && <span className="hint">{hint}</span>}</label>;
 }
 

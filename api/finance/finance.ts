@@ -224,7 +224,9 @@ export class FinanceController {
     const provider = bankProvider(data.provider);
     auditContext({ Provedor: provider.name });
     return this.connections.save(provider, data, {
-      certificate: files.certificate?.[0]?.buffer, privateKey: files.privateKey?.[0]?.buffer,
+      // An empty file input means "keep the saved file".
+      certificate: files.certificate?.[0]?.size ? files.certificate[0].buffer : undefined,
+      privateKey: files.privateKey?.[0]?.size ? files.privateKey[0].buffer : undefined,
     }, request.identity.id);
   }
 
