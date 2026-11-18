@@ -9,7 +9,7 @@ type Balance = { available: string; updatedAt: string };
 type Provider = { id: string; name: string };
 type Transaction = { key: string | null; date: string; direction: string; amount: string; type: string; title: string; description: string;
   reconciliation: { reference: string | null; updatedAt: string } | null };
-type BankView = { transactions: Transaction[]; importedDays: number; requestedDays: number };
+type BankView = { transactions: Transaction[]; totals: { credits: string; debits: string }; importedDays: number; requestedDays: number };
 type Range = { from: string; to: string };
 type Page = 'balance' | 'statement' | 'reconciliation';
 
@@ -78,7 +78,6 @@ function Statement({ provider, reconciling, edit }: { provider: Provider; reconc
   const [status, setStatus] = useState<'pending' | 'done' | 'all'>(reconciling ? 'pending' : 'all');
   const { data, error, loading, reload } = useData<BankView>('finance?' + new URLSearchParams({ ...range, provider: provider.id }));
   const transactions = data?.transactions ?? [];
-  const sum = (rows: Transaction[]) => rows.reduce((total, row) => total + Math.abs(Number(row.amount)), 0);
   const pending = transactions.filter(row => row.key && !row.reconciliation);
   const rows = transactions.filter(row => matches(query, row.title, row.type, row.description, row.reconciliation?.reference) &&
     (status === 'all' || (status === 'pending' ? row.key && !row.reconciliation : row.reconciliation)));
@@ -97,9 +96,9 @@ function Statement({ provider, reconciling, edit }: { provider: Provider; reconc
     </div>
     {message(error)}
     {data && <div className="kpis">
-      <div className="card kpi"><span>Entradas</span><strong style={{ color: 'var(--ok)' }}>{brl(sum(transactions.filter(credit)))}</strong>
+      <div className="card kpi"><span>Entradas</span><strong style={{ color: 'var(--ok)' }}>{brl(data?.totals.credits ?? null)}</strong>
         <small>{transactions.filter(credit).length} lançamentos</small></div>
-      <div className="card kpi"><span>Saídas</span><strong>{brl(sum(transactions.filter(row => !credit(row))))}</strong>
+      <div className="card kpi"><span>Saídas</span><strong>{brl(data?.totals.debits ?? null)}</strong>
         <small>{transactions.filter(row => !credit(row)).length} lançamentos</small></div>
       {reconciling ? <div className="card kpi"><span>A conciliar</span><strong style={{ color: pending.length ? 'var(--warn)' : undefined }}>{pending.length}</strong>
         <small>{transactions.length - pending.length} conferidos ou sem identificador</small></div>

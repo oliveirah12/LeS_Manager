@@ -4,7 +4,8 @@ import {
 import { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 
-Prisma.Decimal.set({ precision: 64 });
+// Without the exponent limits, values below 1e-7 would reach the API as "5e-8" instead of "0.00000005".
+Prisma.Decimal.set({ precision: 64, toExpNeg: -40, toExpPos: 40 });
 
 @Injectable()
 export class Database extends PrismaClient implements OnModuleDestroy {

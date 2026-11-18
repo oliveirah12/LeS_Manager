@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { Require } from '../access/access';
 import { Audit, auditChange } from '../audit/recorder';
 import { Database, idField, nameField, parse, positive, serial, skuField, storedDecimal } from '../shared';
+import { stockValue, sumValues } from '../stock/cost';
 
 const referenceField = z.object({ kind: z.enum(ReferenceKind), name: nameField });
 const symbolField = z.string().trim().min(1).max(24);
@@ -92,7 +93,9 @@ export class CatalogService {
       ...kit,
       available: Prisma.Decimal.min(...kit.components.map(component => component.product.quantity.div(component.quantity).floor())),
     }));
-    return { products, kits: kitsWithAvailability };
+    // Values are computed here with exact decimals, so the panel only formats them.
+    const valued = products.map(product => ({ ...product, value: stockValue(product.quantity, product.currentCost) }));
+    return { products: valued, kits: kitsWithAvailability, totalValue: sumValues(valued.map(product => product.value)) };
   }
 
   async assertReferences(tx: Prisma.TransactionClient, data: z.infer<typeof productUpdate>) {
