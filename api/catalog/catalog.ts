@@ -221,6 +221,8 @@ export class CatalogController {
     });
   }
 
+  // Units define how every quantity is stored, so only administrators create families and units.
+  // Units cannot be edited, since the movement history already holds quantities converted with them.
   @Require('admin')
   @Audit('Criar família de medida')
   @Post('families')

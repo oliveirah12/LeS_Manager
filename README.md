@@ -52,7 +52,7 @@ Para atualizar, faça backup da base, rode `git pull`, repita o `up -d --build` 
 
 ## Conferir o primeiro fluxo
 
-1. Em **Cadastros → Famílias de medida**, crie Peças com base `un` e Peso com base `g`. Em **Cadastros → Unidades de medida**, cadastre `kg` com fator `1000`.
+1. Em **Cadastros → Famílias de medida**, crie Peças com base `un` e Peso com base `g`. Em **Cadastros → Unidades de medida**, cadastre `kg` com fator `1000`. Somente administradores cadastram famílias e unidades, porque o fator define como todas as quantidades são gravadas. Confira o fator antes de salvar, pois unidades não podem ser editadas.
 2. Em **Estoque**, baixe o modelo de carga inicial. Preencha dois SKUs novos, um em `un` e outro em `kg`. A coluna Custo informa o valor por unidade declarada na mesma linha. Classificações são opcionais e devem existir no catálogo quando preenchidas.
 3. Gere a prévia e confirme. Registre uma saída do item por peso em `g` e confira quantidade, custo por grama e usuário no histórico.
 4. Use a contagem em lote ou o segundo modelo XLSX para inventário. Confirme somente depois de conferir as diferenças. Uma movimentação posterior à prévia exige uma nova conferência.
