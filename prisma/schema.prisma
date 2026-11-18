@@ -45,6 +45,7 @@ model User {
   inventoryBatches  InventoryBatch[]
   imports           InitialImport[]
   bankReconciliations BankReconciliation[]
+  bankConnections   BankConnection[]
 }
 
 model Session {
@@ -207,4 +208,19 @@ model BankReconciliation {
   userId    String
   user      User     @relation(fields: [userId], references: [id])
   @@id([provider, date, key])
+}
+
+/// Bank credentials set up in the panel. secret and privateKey are encrypted with api/vault.ts.
+model BankConnection {
+  provider           String   @id
+  environment        String
+  clientId           String
+  account            String?
+  secret             String
+  certificate        String
+  privateKey         String
+  certificateExpires DateTime
+  updatedAt          DateTime @updatedAt
+  updatedById        String
+  updatedBy          User     @relation(fields: [updatedById], references: [id])
 }

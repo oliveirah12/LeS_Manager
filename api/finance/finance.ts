@@ -1,12 +1,18 @@
 import { createHash } from 'node:crypto';
-import { BadGatewayException, BadRequestException, Body, ConflictException, Controller, Get, Inject, Injectable, Post, Query, Req } from '@nestjs/common';
+import {
+  BadGatewayException, BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Inject, Injectable, Post, Query, Req,
+  UploadedFiles, UseInterceptors,
+} from '@nestjs/common';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
+import { administrator } from '../access/security';
 import { Audit, auditChange, auditContext, auditTarget } from '../audit/recorder';
 import { Database, parse, serial } from '../shared';
-import { BankEntry, BankReader } from './bank';
-import { BankProvider, bankProvider, providers } from './providers';
+import { BankEntry } from './bank';
+import { BankConnectionService, connectionFields } from './connection';
+import { BankSource, bankProvider, providers } from './providers';
 
 const providerFields = z.object({ provider: z.string().optional() });
 const rangeFields = providerFields.extend({ from: z.iso.date(), to: z.iso.date() });
@@ -58,7 +64,6 @@ function readEntries(entries: Prisma.JsonValue) {
 
 @Injectable()
 export class FinanceService {
-  private readers = new Map<string, BankReader>();
   // Kept in memory, which fits the single API instance of this version. More instances need a shared lock.
   private refreshing = new Set<string>();
   constructor(@Inject(Database) private db: Database) {}
@@ -115,17 +120,17 @@ export class FinanceService {
     });
   }
 
-  async refresh(range: Range, source: BankProvider) {
+  async refresh(range: Range, source: BankSource) {
     const { id: provider } = source;
     if (this.refreshing.has(provider)) throw new ConflictException('Já existe uma atualização em andamento para este provedor.');
     this.refreshing.add(provider);
     const startedAt = new Date();
     try {
+      // A missing configuration answers with its own message instead of a generic bank failure.
+      const bank = await source.open();
       let balance: string;
       let days: Map<string, BankEntry[]>;
       try {
-        let bank = this.readers.get(provider);
-        if (!bank) { bank = source.open(); this.readers.set(provider, bank); }
         balance = await bank.balance();
         days = groupByDay(range, await bank.statement(range.from, range.to));
       } catch {
@@ -160,7 +165,10 @@ export class FinanceService {
 
 @Controller('finance')
 export class FinanceController {
-  constructor(@Inject(FinanceService) private finance: FinanceService) {}
+  constructor(
+    @Inject(FinanceService) private finance: FinanceService,
+    @Inject(BankConnectionService) private connections: BankConnectionService,
+  ) {}
 
   @Require('finance:view')
   @Get('providers')
@@ -183,7 +191,8 @@ export class FinanceController {
   refresh(@Body() body: unknown) {
     const range = dateRange(body);
     auditContext({ Provedor: bankProvider(range.provider).name, De: range.from, 'Até': range.to });
-    return this.finance.refresh(range, bankProvider(range.provider));
+    const provider = bankProvider(range.provider);
+    return this.finance.refresh(range, { ...provider, open: () => this.connections.reader(provider) });
   }
 
   @Require('finance:operate')
@@ -195,4 +204,35 @@ export class FinanceController {
     auditTarget([provider, data.date, data.key].join(':'));
     return this.finance.reconcile(provider, data, request.identity.id);
   }
+
+  @Require(administrator)
+  @Get('connection')
+  connection(@Query() query: unknown) { return this.connections.describe(bankProvider(parse(providerFields, query).provider)); }
+
+  @Require(administrator)
+  @Audit('Alterar integração bancária')
+  @Post('connection')
+  @HttpCode(200)
+  @UseInterceptors(FileFieldsInterceptor([{ name: 'certificate', maxCount: 1 }, { name: 'privateKey', maxCount: 1 }], {
+    limits: { fileSize: 64 * 1024, files: 2 },
+  }))
+  saveConnection(
+    @Req() request: Authenticated, @Body() body: unknown,
+    @UploadedFiles() files: { certificate?: Express.Multer.File[]; privateKey?: Express.Multer.File[] } = {},
+  ) {
+    const data = parse(connectionFields, body);
+    const provider = bankProvider(data.provider);
+    auditContext({ Provedor: provider.name });
+    return this.connections.save(provider, data, {
+      // An empty file input means "keep the saved file".
+      certificate: files.certificate?.[0]?.size ? files.certificate[0].buffer : undefined,
+      privateKey: files.privateKey?.[0]?.size ? files.privateKey[0].buffer : undefined,
+    }, request.identity.id);
+  }
+
+  @Require(administrator)
+  @Audit(false)
+  @Post('connection/test')
+  @HttpCode(200)
+  testConnection(@Body() body: unknown) { return this.connections.test(bankProvider(parse(providerFields, body).provider)); }
 }

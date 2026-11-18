@@ -12,6 +12,7 @@ test('API REST com PostgreSQL', {
   process.env.COOKIE_SECURE = 'false';
   // Requests without X-Forwarded-For keep the socket address, so only the limit test below sets it.
   process.env.TRUST_PROXY = '1';
+  process.env.CONFIG_ENCRYPTION_KEY ??= require('node:crypto').randomBytes(32).toString('base64');
   const { PrismaClient } = require('@prisma/client');
   const { Workbook } = require('exceljs');
   const { hashPassword } = require('../dist/api/access/security.js');
@@ -407,6 +408,51 @@ test('API REST com PostgreSQL', {
 
     expectStatus(await status('products', product.id, true), 200);
     expectStatus(await movement(product.id, unit.id, 'PURCHASE', '1', '3'), 201);
+  });
+
+  await t.test('integração bancária: somente administradores, sem expor segredos', async () => {
+    const { makeCertificate } = require('./certificates.cjs');
+    const pair = makeCertificate('Empresa HTTP');
+    const secret = 'segredo-http-' + run;
+    const form = () => {
+      const data = new FormData();
+      for (const [key, value] of Object.entries({ environment: 'sandbox', clientId: 'cliente-' + run, secret, account: '1234' })) data.append(key, value);
+      data.append('certificate', new Blob([pair.certificate]), 'cert.crt');
+      data.append('privateKey', new Blob([pair.privateKey]), 'key.key');
+      return data;
+    };
+    const saved = expectStatus(await admin('/finance/connection', { method: 'POST', body: form() }), 200);
+    assert.equal(saved.configured, true);
+    assert.equal(saved.certificate.subject, 'Empresa HTTP');
+    const described = expectStatus(await admin('/finance/connection'), 200);
+    for (const text of [JSON.stringify(saved), JSON.stringify(described)]) {
+      assert.equal(text.includes(secret), false);
+      assert.equal(text.includes('PRIVATE KEY'), false);
+    }
+    const stored = await db.bankConnection.findUniqueOrThrow({ where: { provider: 'inter' } });
+    assert.match(stored.secret, /^v1:/);
+    assert.equal(stored.secret.includes(secret), false);
+    const audit = expectStatus(await admin('/audit?' + new URLSearchParams({ action: 'Alterar integração bancária' })), 200);
+    assert.ok(audit.events.length);
+    const trail = JSON.stringify(audit);
+    assert.equal(trail.includes(secret), false);
+    assert.equal(trail.includes('PRIVATE KEY'), false);
+    assert.equal(trail.includes('BEGIN CERTIFICATE'), false);
+
+    // Someone who operates the finance module still cannot see or change the integration.
+    const email = run.toLowerCase() + '-financeiro@example.com';
+    await db.user.create({
+      data: {
+        email, name: 'Pessoa do financeiro', passwordHash: await hashPassword(password),
+        profile: { create: { name: sku('FINANCEIRO'), permissions: ['finance:operate'] } },
+      },
+    });
+    const session = await request('/access/login', { method: 'POST', headers: { 'x-forwarded-for': '203.0.113.200' }, body: { email, password } });
+    expectStatus(session, 200);
+    const finance = (path, options = {}) => request(path, { ...options, cookie: session.cookie });
+    expectStatus(await finance('/finance/connection'), 403);
+    expectStatus(await finance('/finance/connection', { method: 'POST', body: form() }), 403);
+    expectStatus(await finance('/finance/connection/test', { method: 'POST', body: {} }), 403);
   });
 
   await t.test('a limpeza remove somente prévias antigas não confirmadas', async () => {

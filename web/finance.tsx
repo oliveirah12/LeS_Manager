@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { CalendarRange, CheckCircle2, ChevronRight, RefreshCw } from 'lucide-react';
+import { CalendarRange, CheckCircle2, ChevronRight, PlugZap, RefreshCw, Settings } from 'lucide-react';
 import {
-  api, Badge, brl, dateTime, displayDate, Empty, Field, fields, Loading, matches, message, ModalForm, notify, PageActions, relativeTime,
+  api, Badge, brl, dateTime, displayDate, Empty, Field, FileField, fields, Loading, matches, message, ModalForm, notify, PageActions, relativeTime,
   SearchInput, Segmented, Select, Table, today, useData,
 } from './ui';
 
@@ -11,7 +11,12 @@ type Transaction = { key: string | null; date: string; direction: string; amount
   reconciliation: { reference: string | null; updatedAt: string } | null };
 type BankView = { transactions: Transaction[]; totals: { credits: string; debits: string }; importedDays: number; requestedDays: number };
 type Range = { from: string; to: string };
-type Page = 'balance' | 'statement' | 'reconciliation';
+type Page = 'balance' | 'statement' | 'reconciliation' | 'integration';
+/** What the API tells about the saved integration. Secrets never come back. */
+type Connection = { provider: string; configured: false } | {
+  provider: string; configured: true; environment: 'sandbox' | 'production'; clientId: string; account: string | null;
+  certificate: { subject: string; expiresAt: string }; updatedAt: string; updatedBy: string;
+};
 
 const shift = (date: string, days: number) => new Date(Date.parse(date) + days * 86400000).toISOString().slice(0, 10);
 const presets = () => {
@@ -24,7 +29,9 @@ const presets = () => {
 };
 const credit = (row: Transaction) => row.direction === 'C';
 
-export function Finance({ page, edit, openStatement }: { page: Page; edit: boolean; openStatement: () => void }) {
+export function Finance({ page, edit, admin, openStatement, openIntegration }: {
+  page: Page; edit: boolean; admin: boolean; openStatement: () => void; openIntegration: () => void;
+}) {
   const [selected, setSelected] = useState('');
   const providers = useData<Provider[]>('finance/providers');
   const provider = providers.data?.find(item => item.id === selected) ?? providers.data?.[0];
@@ -34,8 +41,106 @@ export function Finance({ page, edit, openStatement }: { page: Page; edit: boole
     {(providers.data?.length ?? 0) > 1 && <div className="toolbar" style={{ maxWidth: 320 }}>
       <Select name="provider" label="Banco" defaultValue={provider.id} options={providers.data ?? []} onChange={id => { if (id) setSelected(id); }} />
     </div>}
-    {page === 'balance' ? <BalanceScreen provider={provider} edit={edit} openStatement={openStatement} /> :
-      <Statement key={provider.id} provider={provider} reconciling={page === 'reconciliation'} edit={edit} />}
+    {page === 'integration' ? <Integration key={provider.id} provider={provider} /> : <>
+      {admin && <MissingIntegration provider={provider} open={openIntegration} />}
+      {page === 'balance' ? <BalanceScreen provider={provider} edit={edit} openStatement={openStatement} /> :
+        <Statement key={provider.id} provider={provider} reconciling={page === 'reconciliation'} edit={edit} />}
+    </>}
+  </>;
+}
+
+const environments = [{ id: 'sandbox', name: 'Sandbox (dados de teste)' }, { id: 'production', name: 'Produção' }];
+const daysUntil = (date: string) => Math.ceil((Date.parse(date) - Date.now()) / 86400000);
+
+/** Reminds administrators to set up the bank before the first sync fails. */
+function MissingIntegration({ provider, open }: { provider: Provider; open: () => void }) {
+  const { data } = useData<Connection>('finance/connection?' + new URLSearchParams({ provider: provider.id }));
+  if (!data || data.configured) return null;
+  return <div className="info" role="status" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+    <span>A integração com o {provider.name} ainda não foi configurada. Sem ela, o saldo e o extrato não são sincronizados.</span>
+    <button type="button" className="btn secondary small" onClick={open}><Settings size={14} aria-hidden="true" />Configurar integração</button>
+  </div>;
+}
+
+/** Shows the certificate expiry with a warning a month ahead. */
+function Expiry({ date }: { date: string }) {
+  const days = daysUntil(date);
+  const label = 'Vence em ' + displayDate(date.slice(0, 10));
+  if (days <= 0) return <Badge tone="danger">Venceu em {displayDate(date.slice(0, 10))}</Badge>;
+  if (days <= 30) return <Badge tone="warn">{label} · faltam {days} {days === 1 ? 'dia' : 'dias'}</Badge>;
+  return <span>{label}</span>;
+}
+
+function Integration({ provider }: { provider: Provider }) {
+  const { data, error, loading, reload } = useData<Connection>('finance/connection?' + new URLSearchParams({ provider: provider.id }));
+  const [editing, setEditing] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string }>();
+  const current = data?.configured ? data : undefined;
+
+  async function test() {
+    setTesting(true);
+    setResult(undefined);
+    try {
+      await api('finance/connection/test', { provider: provider.id });
+      setResult({ ok: true, text: 'Conectado ao ' + provider.name + '. O saldo foi lido com sucesso.' });
+    } catch (err) {
+      setResult({ ok: false, text: (err as Error).message });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return <>
+    <PageActions>
+      {current && <button type="button" className="btn secondary" disabled={testing} onClick={test}>
+        {testing ? <span className="spinner" aria-hidden="true" /> : <PlugZap size={16} aria-hidden="true" />}{testing ? 'Testando…' : 'Testar conexão'}</button>}
+      <button type="button" className="btn" onClick={() => setEditing(true)}><Settings size={16} aria-hidden="true" />
+        {current ? 'Editar configuração' : 'Configurar'}</button>
+    </PageActions>
+    {message(error)}
+    {result && <p role="status" className={result.ok ? 'success' : 'alert'}>{result.ok && <CheckCircle2 size={16} aria-hidden="true" />} {result.text}</p>}
+    {loading && !data ? <Loading label="Carregando integração…" /> : <section className="card" style={{ padding: 24, display: 'grid', gap: 10, maxWidth: 560 }}>
+      <span className="muted">Situação · {provider.name}</span>
+      {current ? <>
+        <strong style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <CheckCircle2 size={18} aria-hidden="true" style={{ color: 'var(--ok)' }} />Configurada
+          <Badge tone={current.environment === 'production' ? 'brand' : undefined}>{current.environment === 'production' ? 'Produção' : 'Sandbox'}</Badge>
+        </strong>
+        <span>Client ID <span className="mono">{current.clientId}</span>{current.account && <> · Conta {current.account}</>}</span>
+        <span>Certificado de <strong>{current.certificate.subject}</strong> · <Expiry date={current.certificate.expiresAt} /></span>
+        <span className="muted" style={{ fontSize: '.85rem' }}>Alterada por {current.updatedBy} {relativeTime(current.updatedAt)}</span>
+      </> : <>
+        <strong>Não configurada</strong>
+        <span className="muted">Crie uma integração no portal do {provider.name} com permissão de consulta de extrato. Comece pelo ambiente
+          Sandbox, depois troque para Produção com as credenciais definitivas.</span>
+      </>}
+    </section>}
+    {editing && <ModalForm title={current ? 'Editar integração' : 'Configurar integração'} subtitle={provider.name} label="Salvar"
+      close={() => setEditing(false)} action={async form => {
+        // Blank fields keep what is saved: the browser would otherwise send empty files and an empty secret.
+        for (const name of ['certificate', 'privateKey']) {
+          const file = form.get(name);
+          if (file instanceof File && !file.size) form.delete(name);
+        }
+        if (!form.get('secret')) form.delete('secret');
+        form.set('provider', provider.id);
+        await api('finance/connection', form);
+        setResult(undefined);
+        notify('Integração salva.');
+        await reload();
+      }}>
+      <Select name="environment" label="Ambiente" options={environments} defaultValue={current?.environment ?? 'sandbox'} />
+      <Field name="clientId" label="Client ID" defaultValue={current?.clientId} autoComplete="off" />
+      <Field name="secret" label="Client Secret" type="password" required={!current} autoComplete="new-password"
+        hint={current ? 'Deixe em branco para manter o atual.' : undefined} />
+      <Field name="account" label="Conta corrente" required={false} defaultValue={current?.account ?? ''} autoComplete="off"
+        hint="Opcional quando a integração tem uma única conta." />
+      <FileField name="certificate" label="Certificado (.crt ou .pem)" accept=".crt,.pem,.cer" required={!current}
+        hint={current ? 'Envie somente para trocar o certificado atual.' : undefined} />
+      <FileField name="privateKey" label="Chave privada (.key ou .pem)" accept=".key,.pem" required={!current}
+        hint="A chave fica cifrada no servidor e nunca é exibida." />
+    </ModalForm>}
   </>;
 }
 
