@@ -50,6 +50,8 @@ Coloque `cert.pem` e `key.pem` do Inter na pasta indicada em `INTER_CERT_DIR` (p
 
 Para atualizar, faça backup da base, rode `git pull`, repita o `up -d --build` e depois o `db:migrate`. As migrações são aplicadas manualmente para que nenhuma alteração no banco aconteça sem um backup antes.
 
+Rode uma única instância da API. Os limites de tentativas de login e a trava da sincronização bancária ficam na memória do processo. Para usar mais de uma instância, mova esse estado para o banco ou para um Redis antes.
+
 ## Conferir o primeiro fluxo
 
 1. Em **Cadastros → Famílias de medida**, crie Peças com base `un` e Peso com base `g`. Em **Cadastros → Unidades de medida**, cadastre `kg` com fator `1000`. Somente administradores cadastram famílias e unidades, porque o fator define como todas as quantidades são gravadas. Confira o fator antes de salvar, pois unidades não podem ser editadas.

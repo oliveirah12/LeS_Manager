@@ -52,6 +52,7 @@ function readEntries(entries: Prisma.JsonValue) {
 @Injectable()
 export class FinanceService {
   private readers = new Map<string, BankReader>();
+  // Kept in memory, which fits the single API instance of this version. More instances need a shared lock.
   private refreshing = new Set<string>();
   constructor(@Inject(Database) private db: Database) {}
 
