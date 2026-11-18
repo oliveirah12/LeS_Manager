@@ -59,7 +59,7 @@ Rode uma única instância da API. Os limites de tentativas de login e a trava d
 3. Gere a prévia e confirme. Registre uma saída do item por peso em `g` e confira quantidade, custo por grama e usuário no histórico.
 4. Use a contagem em lote ou o segundo modelo XLSX para inventário. Confirme somente depois de conferir as diferenças. Uma movimentação posterior à prévia exige uma nova conferência.
 
-O custo do estoque usa a **média ponderada móvel**. Cada compra ou carga inicial recalcula o custo médio do produto, e as saídas gravam o custo médio vigente no momento. A tela de estoque também mostra o custo da última compra, apenas para consulta.
+O custo do estoque usa a **média ponderada móvel**. Cada compra ou carga inicial recalcula o custo médio do produto, e as saídas gravam o custo médio vigente no momento. A tela de estoque também mostra o custo da última compra, apenas para consulta. Quando o produto tem saldo sem custo conhecido, como após um ajuste positivo antes da primeira compra, a compra seguinte define o custo de todo o saldo.
 
 ## Financeiro e conciliação
 
