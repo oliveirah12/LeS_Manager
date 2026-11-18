@@ -30,3 +30,11 @@ test('values the balance exactly and sums without floating point', () => {
   assert.equal(sumValues([d('0.1'), d('0.2')]).toString(), '0.3');
   assert.equal(sumValues([]).toString(), '0');
 });
+
+test('the API sends decimals without scientific notation', () => {
+  require('../dist/api/shared.js');
+  const json = value => JSON.parse(JSON.stringify({ value: d(value) })).value;
+  assert.equal(json('0.00000005'), '0.00000005');
+  assert.equal(json('0.000000000001'), '0.000000000001');
+  assert.equal(json('123456789012345678901234'), '123456789012345678901234');
+});
