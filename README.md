@@ -31,7 +31,9 @@ Cada tela tem seu próprio endereço, como `/#/estoque` ou `/#/financeiro/concil
 
 **Início** mostra, em blocos separados, o resumo do **Estoque** (produtos, valor pelo custo médio, kits e movimentações) e do **Financeiro** (saldo bancário, entradas, saídas e lançamentos a conciliar), conforme o perfil. Clique no logo para voltar a essa tela. **Catálogo** reúne as consultas de produtos e kits. Para incluir ou editar esses itens, abra **Cadastros → Produtos** ou **Cadastros → Kits** e use os formulários do painel lateral. Itens fora de linha podem ser **inativados**: eles saem do estoque e das listas de seleção, e o histórico é preservado. Um produto só pode ser inativado com saldo zerado e fora de kits ativos. Use o filtro **Inativos** para encontrá-los e reativá-los.
 
-Para hospedar o painel, mantenha frontend e API na mesma origem. Configure HTTPS no proxy, `COOKIE_SECURE=true` e um endereço de escuta apropriado em `HOST`. Restrinja o acesso ao banco e faça backup da base antes de atualizar versões.
+Para hospedar o painel, mantenha frontend e API na mesma origem. Configure HTTPS no proxy, `COOKIE_SECURE=true` e um endereço de escuta apropriado em `HOST`. Defina `TRUST_PROXY` com a quantidade de proxies à frente da API, normalmente `1`, para que o app enxergue o endereço real de cada visitante. Use essa opção somente quando o proxy for o único caminho até a porta da API.
+
+O login, o primeiro acesso e a troca de senha aceitam até 20 tentativas por minuto de cada endereço. Cada conta aceita até 10 tentativas sem sucesso em 15 minutos, e uma entrada correta zera essa contagem. Restrinja o acesso ao banco e faça backup da base antes de atualizar versões.
 
 ## Produção com Docker
 
@@ -48,14 +50,16 @@ Coloque `cert.pem` e `key.pem` do Inter na pasta indicada em `INTER_CERT_DIR` (p
 
 Para atualizar, faça backup da base, rode `git pull`, repita o `up -d --build` e depois o `db:migrate`. As migrações são aplicadas manualmente para que nenhuma alteração no banco aconteça sem um backup antes.
 
+Rode uma única instância da API. Os limites de tentativas de login e a trava da sincronização bancária ficam na memória do processo. Para usar mais de uma instância, mova esse estado para o banco ou para um Redis antes.
+
 ## Conferir o primeiro fluxo
 
-1. Em **Cadastros → Famílias de medida**, crie Peças com base `un` e Peso com base `g`. Em **Cadastros → Unidades de medida**, cadastre `kg` com fator `1000`.
+1. Em **Cadastros → Famílias de medida**, crie Peças com base `un` e Peso com base `g`. Em **Cadastros → Unidades de medida**, cadastre `kg` com fator `1000`. Somente administradores cadastram famílias e unidades, porque o fator define como todas as quantidades são gravadas. Confira o fator antes de salvar, pois unidades não podem ser editadas.
 2. Em **Estoque**, baixe o modelo de carga inicial. Preencha dois SKUs novos, um em `un` e outro em `kg`. A coluna Custo informa o valor por unidade declarada na mesma linha. Classificações são opcionais e devem existir no catálogo quando preenchidas.
 3. Gere a prévia e confirme. Registre uma saída do item por peso em `g` e confira quantidade, custo por grama e usuário no histórico.
 4. Use a contagem em lote ou o segundo modelo XLSX para inventário. Confirme somente depois de conferir as diferenças. Uma movimentação posterior à prévia exige uma nova conferência.
 
-O custo do estoque usa a **média ponderada móvel**. Cada compra ou carga inicial recalcula o custo médio do produto, e as saídas gravam o custo médio vigente no momento. A tela de estoque também mostra o custo da última compra, apenas para consulta.
+O custo do estoque usa a **média ponderada móvel**. Cada compra ou carga inicial recalcula o custo médio do produto, e as saídas gravam o custo médio vigente no momento. A tela de estoque também mostra o custo da última compra, apenas para consulta. Quando o produto tem saldo sem custo conhecido, como após um ajuste positivo antes da primeira compra, a compra seguinte define o custo de todo o saldo.
 
 ## Financeiro e conciliação
 
@@ -67,9 +71,11 @@ O Inter é o provedor disponível nesta versão. Para integrar outro banco, impl
 
 ## Auditoria
 
-O menu **Auditoria** está disponível a administradores. Ele registra inclusões, alterações, movimentações de estoque, sincronização e conciliação bancária, além dos eventos de segurança: entradas, falhas de login, ativações, trocas de senha, códigos gerados e tentativas negadas de alteração. Consultas e prévias não são registradas. Cada evento mostra o usuário, o resultado e os valores antes e depois dos campos alterados. Filtre por usuário, ação, resultado e período. Senhas, códigos de acesso e tokens ficam fora do histórico.
+O menu **Auditoria** está disponível a administradores. Ele registra inclusões, alterações, movimentações de estoque, sincronização e conciliação bancária, além dos eventos de segurança: entradas, falhas de login, ativações, trocas de senha, códigos gerados e tentativas negadas de alteração por usuários conectados. Consultas e prévias não são registradas, nem chamadas sem sessão válida, excesso de tentativas ou pedidos vindos de outros sites, que são recusados antes do registro. Cada evento mostra o usuário, o resultado e os valores antes e depois dos campos alterados. Filtre por usuário, ação, resultado e período. Senhas, códigos de acesso e tokens ficam fora do histórico.
 
 Os eventos com mais de 12 meses são removidos automaticamente. Para mudar o prazo, defina `AUDIT_RETENTION_DAYS`.
+
+Prévias de inventário e de carga inicial que não forem confirmadas em 7 dias são removidas automaticamente. As confirmadas ficam guardadas como histórico.
 
 ## Testes
 

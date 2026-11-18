@@ -1,6 +1,6 @@
 import {
   Body, CanActivate, ConflictException, Controller, ExecutionContext, ForbiddenException, Get,
-  HttpCode, HttpException, Inject, Injectable, NotFoundException, Param, Patch, Post, Req, Res,
+  HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post, Req, Res,
   SetMetadata, UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -8,6 +8,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Audit, AUDIT, auditActor, auditChange, auditContext, beginAudit } from '../audit/recorder';
 import { DailyTask, Database, idField, nameField, parse, serial } from '../shared';
+import { AttemptLimiter } from './attempts';
 import {
   activationFields, administrator, canAccess, configurablePermissions, emailField, hashPassword,
   hashToken, newToken, passwordChangeFields, verifyPassword,
@@ -15,6 +16,8 @@ import {
 
 export const Require = (...permissions: string[]) => SetMetadata('permissions', permissions);
 export const Public = () => SetMetadata('public', true);
+/** Applies the per-address attempt limit to the route. */
+export const Limited = () => SetMetadata('limited', true);
 const cookieName = 'les_session';
 const sessionAge = 8 * 60 * 60 * 1000;
 const activationAge = 24 * 60 * 60 * 1000;
@@ -35,16 +38,26 @@ function sessionToken(request: Request) {
 
 @Injectable()
 export class AccessGuard implements CanActivate {
+  // Every attempt from an address counts, before any work or audit row.
+  private byAddress = new AttemptLimiter(20, 60_000, 'Muitas tentativas. Aguarde um minuto.');
   constructor(@Inject(Database) private db: Database, @Inject(Reflector) private reflector: Reflector) {}
 
+  /**
+   * Refuses cross-site writes, rate-limited excess and anonymous calls before opening the audit event,
+   * so nobody fills the audit trail without an account. Public routes, such as login, are always audited.
+   */
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<Authenticated>();
-    const action = this.reflector.get<string | false | undefined>(AUDIT, context.getHandler());
-    if (action) await beginAudit(this.db, context, action);
+    const handler = context.getHandler();
+    const action = this.reflector.get<string | false | undefined>(AUDIT, handler);
     if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && request.headers['sec-fetch-site'] === 'cross-site') {
       throw new ForbiddenException();
     }
-    if (this.reflector.get('public', context.getHandler())) return true;
+    if (this.reflector.get('limited', handler)) this.byAddress.take(request.ip ?? 'local');
+    if (this.reflector.get('public', handler)) {
+      if (action) await beginAudit(this.db, context, action);
+      return true;
+    }
     const token = sessionToken(request);
     if (!token) throw new UnauthorizedException('Entre para continuar.');
     const session = await this.db.session.findUnique({
@@ -55,7 +68,9 @@ export class AccessGuard implements CanActivate {
     }
     const { id, name, email, profile } = session.user;
     request.identity = { id, name, email, profileName: profile.name, permissions: profile.permissions };
-    const required = this.reflector.get<string[]>('permissions', context.getHandler()) ?? [];
+    // From here on the caller is known, so a refusal for lack of permission is recorded.
+    if (action) await beginAudit(this.db, context, action);
+    const required = this.reflector.get<string[]>('permissions', handler) ?? [];
     if (!required.every(permission => canAccess(profile.permissions, permission))) throw new ForbiddenException('Seu perfil não tem acesso a esta operação.');
     return true;
   }
@@ -73,28 +88,34 @@ export class SessionCleanup extends DailyTask {
 
 @Injectable()
 export class AccessService {
-  private attempts = new Map<string, { count: number; expires: number }>();
+  // Per account, only a success clears the count. The per-address limit lives in AccessGuard.
+  private byAccount = new AttemptLimiter(10, 15 * 60_000, 'Muitas tentativas para esta conta. Aguarde 15 minutos.');
   constructor(@Inject(Database) private db: Database) {}
 
-  limit(ip: string) {
-    const now = Date.now();
-    for (const [key, item] of this.attempts) if (item.expires <= now) this.attempts.delete(key);
-    const item = this.attempts.get(ip) ?? { count: 0, expires: now + 60_000 };
-    if (item.count >= 20) throw new HttpException('Muitas tentativas. Aguarde um minuto.', 429);
-    item.count++;
-    this.attempts.set(ip, item);
+  /** Counts the attempt before it runs, so parallel guesses cannot pass the limit together. */
+  private async guarded<T>(email: string, attempt: () => Promise<T>) {
+    this.byAccount.take(email);
+    const result = await attempt();
+    this.byAccount.reset(email);
+    return result;
   }
 
-  async login(data: z.infer<typeof loginFields>, response: Response) {
+  login(data: z.infer<typeof loginFields>, response: Response) {
     auditContext({ 'E-mail': data.email });
-    const user = await this.db.user.findUnique({ where: { email: data.email } });
-    const valid = await verifyPassword(data.password, user?.passwordHash ?? null);
-    if (!user?.active || !user.passwordHash || !valid) throw new UnauthorizedException('E-mail ou senha inválidos. Para ativar uma conta nova, use Primeiro acesso.');
-    return this.openSession(user.id, user.passwordHash, response);
+    return this.guarded(data.email, async () => {
+      const user = await this.db.user.findUnique({ where: { email: data.email } });
+      const valid = await verifyPassword(data.password, user?.passwordHash ?? null);
+      if (!user?.active || !user.passwordHash || !valid) throw new UnauthorizedException('E-mail ou senha inválidos. Para ativar uma conta nova, use Primeiro acesso.');
+      return this.openSession(user.id, user.passwordHash, response);
+    });
   }
 
-  async activate(data: z.infer<typeof activationFields>, response: Response) {
+  activate(data: z.infer<typeof activationFields>, response: Response) {
     auditContext({ 'E-mail': data.email });
+    return this.guarded(data.email, () => this.redeemCode(data, response));
+  }
+
+  private async redeemCode(data: z.infer<typeof activationFields>, response: Response) {
     const where = {
       email: data.email, active: true, passwordHash: null, activationHash: hashToken(data.code),
       activationExpires: { gt: new Date() },
@@ -136,7 +157,11 @@ export class AccessService {
     return { ok: true };
   }
 
-  async changePassword(userId: string, data: z.infer<typeof passwordChangeFields>, response: Response) {
+  changePassword(identity: Identity, data: z.infer<typeof passwordChangeFields>, response: Response) {
+    return this.guarded(identity.email, () => this.replacePassword(identity.id, data, response));
+  }
+
+  private async replacePassword(userId: string, data: z.infer<typeof passwordChangeFields>, response: Response) {
     const user = await this.db.user.findUnique({ where: { id: userId }, select: { active: true, passwordHash: true } });
     if (!user?.active || !user.passwordHash || !await verifyPassword(data.currentPassword, user.passwordHash)) {
       throw new ForbiddenException('Senha atual incorreta.');
@@ -180,20 +205,20 @@ export class AccessController {
   constructor(@Inject(AccessService) private service: AccessService, @Inject(Database) private db: Database) {}
 
   @Public()
+  @Limited()
   @Audit('Entrar')
   @Post('login')
   @HttpCode(200)
-  login(@Req() request: Request, @Body() body: unknown, @Res({ passthrough: true }) response: Response) {
-    this.service.limit(request.ip ?? 'local');
+  login(@Body() body: unknown, @Res({ passthrough: true }) response: Response) {
     return this.service.login(parse(loginFields, body), response);
   }
 
   @Public()
+  @Limited()
   @Audit('Ativar conta')
   @Post('activate')
   @HttpCode(200)
-  activate(@Req() request: Request, @Body() body: unknown, @Res({ passthrough: true }) response: Response) {
-    this.service.limit(request.ip ?? 'local');
+  activate(@Body() body: unknown, @Res({ passthrough: true }) response: Response) {
     return this.service.activate(parse(activationFields, body), response);
   }
 
@@ -219,12 +244,12 @@ export class AccessController {
     return { ...request.identity, name: data.name };
   }
 
+  @Limited()
   @Audit('Alterar própria senha')
   @Post('me/password')
   @HttpCode(200)
   changePassword(@Req() request: Authenticated, @Body() body: unknown, @Res({ passthrough: true }) response: Response) {
-    this.service.limit(request.ip ?? 'local');
-    return this.service.changePassword(request.identity.id, parse(passwordChangeFields, body), response);
+    return this.service.changePassword(request.identity, parse(passwordChangeFields, body), response);
   }
 
   @Require(administrator)

@@ -10,6 +10,8 @@ test('API REST com PostgreSQL', {
 }, async t => {
   process.env.DATABASE_URL = databaseUrl;
   process.env.COOKIE_SECURE = 'false';
+  // Requests without X-Forwarded-For keep the socket address, so only the limit test below sets it.
+  process.env.TRUST_PROXY = '1';
   const { PrismaClient } = require('@prisma/client');
   const { Workbook } = require('exceljs');
   const { hashPassword } = require('../dist/api/access/security.js');
@@ -35,8 +37,8 @@ test('API REST com PostgreSQL', {
     },
   });
 
-  async function request(path, { method = 'GET', cookie, body } = {}) {
-    const headers = {};
+  async function request(path, { method = 'GET', cookie, body, headers: extra = {} } = {}) {
+    const headers = { ...extra };
     if (cookie) headers.cookie = cookie;
     if (body !== undefined && !(body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
@@ -102,6 +104,11 @@ test('API REST com PostgreSQL', {
     const anonymous = await request('/stock');
     expectStatus(anonymous, 401);
     assert.equal(anonymous.cacheControl, 'no-store');
+    // Calls without a valid session are refused before the audit, so they cannot fill it.
+    const eventsBefore = await db.auditEvent.count();
+    expectStatus(await request('/stock/movements', { method: 'POST', body: {} }), 401);
+    expectStatus(await request('/stock/movements', { method: 'POST', cookie: 'les_session=' + 'x'.repeat(32), body: {} }), 401);
+    assert.equal(await db.auditEvent.count(), eventsBefore);
     const profile = expectStatus(await post('/access/profiles', { name: sku('LEITURA'), permissions: ['stock:view'] }), 201);
     const email = run.toLowerCase() + '-estoque@example.com';
     const user = expectStatus(await post('/access/users', { name: 'Pessoa de estoque', email, profileId: profile.id }), 201);
@@ -155,6 +162,27 @@ test('API REST com PostgreSQL', {
     expectStatus(await request('/access/me', { cookie: otherSession.cookie }), 401);
     expectStatus(await request('/access/login', { method: 'POST', body: { email, password } }), 401);
     expectStatus(await request('/access/login', { method: 'POST', body: { email, password: newPassword } }), 200);
+  });
+
+  await t.test('limite de tentativas pelo endereço real e por conta', async () => {
+    const from = address => ({ 'x-forwarded-for': '203.0.113.' + address });
+    const login = (email, attempt, address) => request('/access/login', { method: 'POST', headers: from(address), body: { email, password: attempt } });
+    const email = run.toLowerCase() + '-bloqueio@example.com';
+    await db.user.create({
+      data: {
+        email, name: 'Pessoa bloqueada', passwordHash: await hashPassword(password),
+        profile: { create: { name: sku('BLOQUEIO'), permissions: ['stock:view'] } },
+      },
+    });
+    // Ten failures from different addresses lock the account, even for the right password.
+    for (let address = 1; address <= 10; address++) expectStatus(await login(email, 'Senha-errada1', address), 401);
+    expectStatus(await login(email, password, 11), 429);
+
+    // The address limit follows the forwarded client, not the proxy, and spares other clients.
+    const stranger = attempt => run.toLowerCase() + '-ninguem' + attempt + '@example.com';
+    for (let attempt = 0; attempt < 20; attempt++) expectStatus(await login(stranger(attempt), password, 100), 401);
+    expectStatus(await login(stranger(20), password, 100), 429);
+    expectStatus(await login(stranger(21), password, 101), 401);
   });
 
   await t.test('permissões independentes para catálogo, cadastros, estoque e financeiro', async () => {
@@ -371,6 +399,21 @@ test('API REST com PostgreSQL', {
 
     expectStatus(await status('products', product.id, true), 200);
     expectStatus(await movement(product.id, unit.id, 'PURCHASE', '1', '3'), 201);
+  });
+
+  await t.test('a limpeza remove somente prévias antigas não confirmadas', async () => {
+    const { PreviewCleanup } = require('../dist/api/stock/stock.js');
+    const { id: userId } = await db.user.findUniqueOrThrow({ where: { email: adminEmail } });
+    const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    const batch = data => db.inventoryBatch.create({ data: { userId, ...data } });
+    const abandoned = await batch({ createdAt: old });
+    const confirmed = await batch({ createdAt: old, confirmedAt: old });
+    const recent = await batch({});
+    const oldImport = await db.initialImport.create({ data: { userId, data: [], createdAt: old } });
+    await app.get(PreviewCleanup).removeExpired();
+    const kept = await db.inventoryBatch.findMany({ where: { id: { in: [abandoned.id, confirmed.id, recent.id] } } });
+    assert.deepEqual(kept.map(row => row.id).sort(), [confirmed.id, recent.id].sort());
+    assert.equal(await db.initialImport.findUnique({ where: { id: oldImport.id } }), null);
   });
 
   await t.test('a planilha inválida não grava produtos e a confirmação da carga é idempotente', async () => {

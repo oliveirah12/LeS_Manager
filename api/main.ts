@@ -6,6 +6,7 @@ import { Global, Module } from '@nestjs/common';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AccessController, AccessGuard, AccessService, SessionCleanup } from './access/access';
+import { proxySetting } from './access/attempts';
 import { AuditController } from './audit/audit';
 import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
@@ -13,7 +14,7 @@ import { FinanceController, FinanceService } from './finance/finance';
 import { HealthController } from './health';
 import { Database, DatabaseErrors } from './shared';
 import { StockController } from './stock/controller';
-import { StockService } from './stock/stock';
+import { PreviewCleanup, StockService } from './stock/stock';
 
 @Global()
 @Module({ providers: [Database], exports: [Database] })
@@ -25,7 +26,7 @@ class AccessModule {}
 @Module({ controllers: [CatalogController], providers: [CatalogService], exports: [CatalogService] })
 class CatalogModule {}
 
-@Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService] })
+@Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService, PreviewCleanup] })
 class StockModule {}
 
 @Module({ controllers: [FinanceController], providers: [FinanceService] })
@@ -47,6 +48,9 @@ export async function createApp() {
     next();
   });
   app.getHttpAdapter().getInstance().disable('x-powered-by');
+  // Behind the HTTPS proxy, the client address comes from X-Forwarded-For.
+  const trustProxy = proxySetting();
+  if (trustProxy !== undefined) app.set('trust proxy', trustProxy);
   const web = resolve(__dirname, '../web');
   if (existsSync(resolve(web, 'index.html'))) app.useStaticAssets(web);
   return app;

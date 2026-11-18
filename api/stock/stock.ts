@@ -4,7 +4,11 @@ import { z } from 'zod';
 import { CatalogService, inBase, productInclude } from '../catalog/catalog';
 import { auditChange, auditContext } from '../audit/recorder';
 import { averageCost } from './cost';
-import { Database, decimalField, idField, money, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal } from '../shared';
+import {
+  DailyTask, Database, decimalField, idField, money, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal,
+} from '../shared';
+
+const previewAge = 7 * 24 * 60 * 60 * 1000;
 
 export const movementFields = z.object({
   productId: idField, unitId: idField, kind: z.enum(['PURCHASE', 'OUT', 'ADJUSTMENT']),
@@ -186,5 +190,22 @@ export class StockService {
       await tx.initialImport.update({ where: { id }, data: { confirmedAt } });
       return { id, confirmedAt };
     });
+  }
+}
+
+/** Removes previews that were never confirmed after a week. Confirmed ones stay as history. */
+@Injectable()
+export class PreviewCleanup extends DailyTask {
+  constructor(@Inject(Database) private db: Database) { super(); }
+
+  async removeExpired(now = new Date()) {
+    const where = { confirmedAt: null, createdAt: { lt: new Date(now.getTime() - previewAge) } };
+    // Inventory rows go with their batch through the cascade in the schema.
+    await this.db.inventoryBatch.deleteMany({ where });
+    await this.db.initialImport.deleteMany({ where });
+  }
+
+  protected async run() {
+    await this.removeExpired().catch(() => console.error('Falha ao remover prévias não confirmadas.'));
   }
 }
