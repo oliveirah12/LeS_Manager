@@ -1,5 +1,4 @@
 import { Agent, request } from 'node:https';
-import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { BankEntry, BankReader } from './bank';
 
@@ -19,6 +18,10 @@ const tokenFields = z.object({ access_token: z.string().min(1), expires_in: z.nu
 
 type Transport = (path: string, headers?: Record<string, string>, body?: string) => Promise<unknown>;
 type Config = { clientId: string; secret: string; account?: string };
+/** Credentials kept in the database through BankConnectionService. The PEM texts stay in memory. */
+export type InterConfig = {
+  environment: string; clientId: string; secret: string; account: string | null; certificate: string; privateKey: string;
+};
 
 function httpsTransport(host: string, agent: Agent): Transport {
   return (path, headers, body) => new Promise((resolve, reject) => {
@@ -51,15 +54,10 @@ export class InterReader implements BankReader {
   private token?: { value: string; expiresAt: number };
   constructor(private config: Config, private transport: Transport) {}
 
-  static fromEnv() {
-    const { INTER_ENV, INTER_CLIENT_ID, INTER_CLIENT_SECRET, INTER_CERT_PATH, INTER_KEY_PATH, INTER_ACCOUNT } = process.env;
-    if (!INTER_CLIENT_ID || !INTER_CLIENT_SECRET || !INTER_CERT_PATH || !INTER_KEY_PATH) {
-      throw new Error('Configure as credenciais e o certificado do Inter.');
-    }
-    if (INTER_ENV !== 'sandbox' && INTER_ENV !== 'production') throw new Error('Defina INTER_ENV como sandbox ou production.');
-    const agent = new Agent({ cert: readFileSync(INTER_CERT_PATH), key: readFileSync(INTER_KEY_PATH), keepAlive: true });
-    return new InterReader({ clientId: INTER_CLIENT_ID, secret: INTER_CLIENT_SECRET, account: INTER_ACCOUNT },
-      httpsTransport(INTER_ENV === 'production' ? production : sandbox, agent));
+  static fromConfig(config: InterConfig) {
+    const agent = new Agent({ cert: config.certificate, key: config.privateKey, keepAlive: true });
+    return new InterReader({ clientId: config.clientId, secret: config.secret, account: config.account ?? undefined },
+      httpsTransport(config.environment === 'production' ? production : sandbox, agent));
   }
 
   private async get(path: string) {

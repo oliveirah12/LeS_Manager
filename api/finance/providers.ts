@@ -1,11 +1,14 @@
 import { BadRequestException } from '@nestjs/common';
 import { BankReader } from './bank';
-import { InterReader } from './inter';
+import { InterConfig, InterReader } from './inter';
 
-export type BankProvider = { id: string; name: string; open: () => BankReader };
+/** A bank the panel can connect to. connect builds the reader from the credentials saved in the panel. */
+export type BankProvider = { id: string; name: string; connect: (config: InterConfig) => BankReader };
+/** What a refresh needs: the provider and a way to obtain its reader. */
+export type BankSource = Pick<BankProvider, 'id' | 'name'> & { open: () => BankReader | Promise<BankReader> };
 
 export const providers: readonly BankProvider[] = [
-  { id: 'inter', name: 'Inter Empresas', open: () => InterReader.fromEnv() },
+  { id: 'inter', name: 'Inter Empresas', connect: config => InterReader.fromConfig(config) },
 ];
 
 export function bankProvider(id?: string) {

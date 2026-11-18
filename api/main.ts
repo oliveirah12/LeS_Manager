@@ -10,6 +10,7 @@ import { proxySetting } from './access/attempts';
 import { AuditController } from './audit/audit';
 import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
+import { BankConnectionService } from './finance/connection';
 import { FinanceController, FinanceService } from './finance/finance';
 import { HealthController } from './health';
 import { Database, DatabaseErrors } from './shared';
@@ -29,7 +30,7 @@ class CatalogModule {}
 @Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService, PreviewCleanup] })
 class StockModule {}
 
-@Module({ controllers: [FinanceController], providers: [FinanceService] })
+@Module({ controllers: [FinanceController], providers: [FinanceService, BankConnectionService] })
 class FinanceModule {}
 
 @Module({ controllers: [AuditController], providers: [AuditRetention] })
