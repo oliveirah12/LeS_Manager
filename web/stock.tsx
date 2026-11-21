@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { ArrowLeftRight, ClipboardList, Download, FileSpreadsheet, PackageMinus, Plus } from 'lucide-react';
+import { ArrowLeftRight, ClipboardList, Download, Eye, FileSpreadsheet, PackageMinus, Plus } from 'lucide-react';
 import {
   api, Badge, baseUnit, brl, dateTime, Field, fields, FileField, Filters, Form, Kit, Loading, matches, message, Modal, ModalForm, PageActions,
-  Product, productOptions, quantity, SearchInput, Segmented, Select, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
+  Product, productOptions, quantity, SearchInput, Segmented, Select, StockKit, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
   useData, notify,
 } from './ui';
 
@@ -11,7 +11,7 @@ type HistoryPage = { movements: History[]; nextCursor: string | null };
 type HistoryFilters = { productId?: string; kind?: string; from?: string; to?: string };
 type CountPreview = { id: string; rows: { product: { sku: string; name: string; unit: Product['unit'] }; expected: string; counted: string; difference: string }[] };
 type InitialPreview = { id: string; rows: { sku: string; name: string; unit: string; quantity: string; unitCost?: string }[] };
-type Dialog = { kind: 'movement'; product?: Product } | { kind: 'kit'; kit: Kit } | { kind: 'inventory' } | { kind: 'initial' };
+type Dialog = { kind: 'movement'; product?: Product } | { kind: 'kit'; kit: Kit } | { kind: 'kitDetails'; kit: StockKit } | { kind: 'inventory' } | { kind: 'initial' };
 const kinds = [{ id: 'PURCHASE', name: 'Compra' }, { id: 'OUT', name: 'Saída' }, { id: 'ADJUSTMENT', name: 'Ajuste' }] as const;
 const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário' };
 
@@ -38,7 +38,7 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
     {message(stock.error)}
     {!data ? stock.loading && <Loading label="Carregando estoque…" /> : <>
       {tab === 'balances' && <Balances data={data} edit={edit} move={product => setDialog({ kind: 'movement', product })} />}
-      {tab === 'kits' && <Kits data={data} edit={edit} out={kit => setDialog({ kind: 'kit', kit })} />}
+      {tab === 'kits' && <Kits data={data} edit={edit} out={kit => setDialog({ kind: 'kit', kit })} details={kit => setDialog({ kind: 'kitDetails', kit })} />}
       {tab === 'history' && <HistoryTab key={version} products={data.products} />}
     </>}
 
@@ -53,6 +53,8 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
       <Field name="quantity" label="Quantidade de kits" inputMode="numeric" />
       <Field name="reason" label="Motivo" placeholder="Pedido, venda ou observação" />
     </ModalForm>}
+    {dialog?.kind === 'kitDetails' && <Modal wide title={'Componentes de ' + dialog.kit.sku} subtitle={dialog.kit.name} close={() => setDialog(undefined)}>
+      <KitDetails kit={dialog.kit} /></Modal>}
     {data && dialog?.kind === 'inventory' && <Modal wide title="Inventário físico" subtitle="Informe só os SKUs contados e confira as diferenças antes de aplicar."
       close={() => setDialog(undefined)}><Inventory data={data} saved={saved} /></Modal>}
     {dialog?.kind === 'initial' && <Modal wide title="Carga inicial por planilha" subtitle="Cadastra produtos novos com o saldo e o custo iniciais."
@@ -84,16 +86,44 @@ function Balances({ data, edit, move }: { data: StockView; edit: boolean; move: 
   </div>;
 }
 
-function Kits({ data, edit, out }: { data: StockView; edit: boolean; out: (kit: Kit) => void }) {
+function KitCost({ kit }: { kit: StockKit }) {
+  return <span><strong>{brl(kit.totalCost)}</strong>{kit.partialCost && <> <Badge tone="warn">Parcial</Badge></>}</span>;
+}
+
+function KitDetails({ kit }: { kit: StockKit }) {
+  const percent = (value: string | null) => value === null ? '—' : Number(value).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '%';
+  return <div className="stack">
+    {kit.partialCost && <div className="info">Há componente sem custo registrado, então o total considera apenas os demais.</div>}
+    <Table columns={['Componente', { label: 'Por kit', end: true }, { label: 'Saldo', end: true }, { label: 'Rende', end: true },
+      { label: 'Custo médio', end: true }, { label: 'Custo no kit', end: true }, { label: '% do kit', end: true }]}
+      rows={kit.components.map(item => {
+        const unit = baseUnit(item.product).symbol;
+        return [
+          <Title name={item.product.name} code={item.product.sku} />,
+          quantity(item.quantity) + ' ' + unit, quantity(item.product.quantity) + ' ' + unit,
+          <span>{quantity(item.yields)} {Number(item.yields) === 1 ? 'kit' : 'kits'}{Number(item.yields) === Number(kit.available) && <> <Badge tone="warn">Limita</Badge></>}</span>,
+          brl(item.product.currentCost), <strong>{brl(item.cost)}</strong>, percent(item.share),
+        ];
+      })}
+      footer={<>
+        <span>Dá para montar <strong>{quantity(kit.available)}</strong> {Number(kit.available) === 1 ? 'kit' : 'kits'}</span>
+        <span>Custo total: <KitCost kit={kit} /></span>
+      </>} />
+  </div>;
+}
+
+function Kits({ data, edit, out, details }: { data: StockView; edit: boolean; out: (kit: Kit) => void; details: (kit: StockKit) => void }) {
   const [query, setQuery] = useState('');
   const rows = data.kits.filter(kit => matches(query, kit.sku, kit.name));
   return <div className="tab-panel" role="tabpanel">
     <div className="toolbar"><SearchInput value={query} onChange={setQuery} placeholder="Buscar kit" /></div>
     <Table empty="Nenhum kit ativo."
-      columns={['Kit', 'Componentes', { label: 'Disponível', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
+      columns={['Kit', 'Componentes', { label: 'Custo total', end: true }, { label: 'Disponível', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
       rows={rows.map(kit => [
         <Title name={kit.name} code={kit.sku} />,
-        <span className="muted">{kit.components.map(item => quantity(item.quantity) + ' ' + baseUnit(item.product).symbol + ' ' + item.product.sku).join(' · ')}</span>,
+        <button type="button" className="btn ghost small" aria-label={'Ver componentes de ' + kit.sku} onClick={() => details(kit)}>
+          <Eye size={14} aria-hidden="true" />{kit.components.length} {kit.components.length === 1 ? 'componente' : 'componentes'}</button>,
+        <KitCost kit={kit} />,
         Number(kit.available) > 0 ? <strong>{quantity(kit.available)}</strong> : <Badge tone="warn">Indisponível</Badge>,
         ...(edit ? [<button type="button" className="btn secondary small" disabled={Number(kit.available) <= 0} onClick={() => out(kit)}>
           <PackageMinus size={14} aria-hidden="true" />Dar saída</button>] : []),

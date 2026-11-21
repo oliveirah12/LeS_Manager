@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost, costPerBaseUnit } = require('../dist/api/stock/cost.js');
+const { averageCost, costPerBaseUnit, kitCosting } = require('../dist/api/stock/cost.js');
 
 const d = value => new Prisma.Decimal(value);
 const average = (balance, current, quantity, cost) =>
@@ -26,6 +26,30 @@ test('splits the total paid over the quantity in base units', () => {
   assert.equal(costPerBaseUnit(d('100'), d('4')).toString(), '25');
   assert.equal(costPerBaseUnit(d('100'), d('36')).toString(), '2.777777777778');
   assert.equal(costPerBaseUnit(d('0'), d('5')).toString(), '0');
+});
+
+const component = (quantity, balance, cost) => ({ quantity: d(quantity), product: { quantity: d(balance), currentCost: cost === null ? null : d(cost) } });
+
+test('costs a kit from its components and finds what limits it', () => {
+  const kit = kitCosting([component('120', '1000', '0.1'), component('4', '12', '0.25')]);
+  assert.equal(kit.totalCost.toString(), '13');
+  assert.equal(kit.partialCost, false);
+  assert.equal(kit.available.toString(), '3');
+  assert.deepEqual(kit.components.map(item => [item.cost.toString(), item.share.toString(), item.yields.toString()]), [
+    ['12', '92.31', '8'], ['1', '7.69', '3'],
+  ]);
+});
+
+test('marks the kit total as partial when a component has no cost', () => {
+  const kit = kitCosting([component('2', '10', '5'), component('1', '10', null)]);
+  assert.equal(kit.totalCost.toString(), '10');
+  assert.equal(kit.partialCost, true);
+  assert.equal(kit.components[1].cost, null);
+  assert.equal(kit.components[1].share, null);
+});
+
+test('a kit that costs zero has no share to divide', () => {
+  assert.equal(kitCosting([component('1', '1', '0')]).components[0].share, null);
 });
 
 test('values the balance exactly and sums without floating point', () => {

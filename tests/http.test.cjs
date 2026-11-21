@@ -328,6 +328,14 @@ test('API REST com PostgreSQL', {
     assert.equal((await productRow(first.id)).quantity.toString(), '3');
     assert.equal((await productRow(second.id)).quantity.toString(), '30');
     assert.equal(await db.movement.count({ where: { kitId: kit.id, kind: 'KIT_OUT' } }), 2);
+
+    const view = expectStatus(await admin('/stock'), 200).kits.find(row => row.id === kit.id);
+    const [firstRow, secondRow] = [await productRow(first.id), await productRow(second.id)];
+    assert.ok(firstRow.currentCost.times(2).plus(secondRow.currentCost.times(100)).toDecimalPlaces(10)
+      .eq(new (require('@prisma/client').Prisma.Decimal)(view.totalCost).toDecimalPlaces(10)));
+    assert.equal(view.partialCost, false);
+    assert.equal(view.available, '0');
+    assert.equal(view.components.find(row => row.productId === first.id).yields, '1');
   });
 
   await t.test('saídas concorrentes nunca deixam saldo negativo', async () => {

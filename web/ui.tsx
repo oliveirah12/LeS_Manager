@@ -365,7 +365,12 @@ export type Kit = {
 };
 /** Product in the stock view, with its value at average cost computed by the API with exact decimals. */
 export type StockProduct = Product & { value: string };
-export type StockView = { products: StockProduct[]; kits: Kit[]; units: Unit[]; totalValue: string };
+/** Costs computed by the API from the components' current average. */
+export type StockKit = Omit<Kit, 'components'> & {
+  components: (Kit['components'][number] & { cost: string | null; share: string | null; yields: string })[];
+  totalCost: string; partialCost: boolean;
+};
+export type StockView = { products: StockProduct[]; kits: StockKit[]; units: Unit[]; totalValue: string };
 export const baseUnit = (product: Pick<Product, 'unit'>) => product.unit.family.units[0] ?? product.unit;
 export const productOptions = (products: Product[]) => products.map(product => ({ id: product.id, name: product.sku + ' · ' + product.name }));
 export const unitOptions = (units: Unit[], bySymbol = false) => units.map(unit => ({ id: bySymbol ? unit.symbol : unit.id, name: unit.symbol }));
