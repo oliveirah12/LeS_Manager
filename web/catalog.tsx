@@ -3,7 +3,7 @@ import { ClipboardList, Pencil, Plus, Power, PowerOff, Trash2 } from 'lucide-rea
 import { RecipeEditor } from './recipe';
 import { RegistrationData, referenceKinds } from './registrations';
 import {
-  api, applyFilters, Badge, baseUnit, Field, fields, Form, Kit, Loading, matches, message, Modal, ModalForm, notify, PageActions, Product, productOptions,
+  api, applyFilters, Badge, baseUnit, brl, Field, fields, Form, Kit, Loading, matches, message, Modal, ModalForm, notify, PageActions, Product, productOptions,
   quantity, SearchInput, Segmented, Select, StockKit, StockView, Table, TableFilter, TableFilters, Title, unitOptions, useClosePanel, useData, yesNo, yesNoOptions,
 } from './ui';
 
@@ -24,8 +24,24 @@ const productFilters = (data: CatalogView): TableFilter<CatalogView['products'][
 const kitFilters = (data: CatalogView): TableFilter<StockKit>[] => [
   { id: 'component', label: 'Produto componente', options: productOptions(data.products), value: row => row.components.map(item => item.productId) },
 ];
-export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boolean }) {
+type Balance = { id: string; quantity: string; reserved: string; available: string; currentCost: string | null; value: string };
+const balanceOptions = [{ id: 'available', name: 'Com saldo livre' }, { id: 'reserved', name: 'Com reserva' }, { id: 'empty', name: 'Sem saldo' }];
+function balanceStates(balance?: Balance) {
+  if (!balance || Number(balance.quantity) <= 0) return ['empty'];
+  return [...(Number(balance.available) > 0 ? ['available'] : []), ...(Number(balance.reserved) > 0 ? ['reserved'] : [])];
+}
+const inputFilters = (data: CatalogView, balances?: Balance[]): TableFilter<CatalogView['products'][number]>[] => [
+  { id: 'typeId', label: 'Tipo', options: data.productTypes.filter(type => type.isInput), value: row => row.typeId },
+  ...referenceKinds.filter(kind => kind.id !== 'DEPARTAMENTO').map(kind => ({
+    id: kind.field, label: kind.name, options: data.references.filter(item => item.kind === kind.id),
+    value: (row: Product) => row[kind.field],
+  })),
+  ...(balances ? [{ id: 'balance', label: 'Saldo', options: balanceOptions, value: (row: Product) => balanceStates(balances.find(item => item.id === row.id)) }] : []),
+];
+
+export function Catalog({ page, edit, seeStock = false }: { page: 'products' | 'inputs' | 'kits'; edit: boolean; seeStock?: boolean }) {
   const { data, error, loading, reload } = useData<CatalogView>('catalog');
+  const { data: balances, error: balanceError } = useData<Balance[]>(page === 'inputs' && seeStock ? 'catalog/balances' : null);
   const [product, setProduct] = useState<Product | null>();
   const [kit, setKit] = useState<Kit | null>();
   const [status, setStatus] = useState<Status>();
@@ -58,15 +74,26 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
         <Plus size={16} aria-hidden="true" />{page === 'products' ? 'Novo produto' : 'Novo kit'}</button>
     </PageActions>}
     <div className="toolbar">
-      <SearchInput value={query} onChange={setQuery} placeholder={page === 'products' ? 'Buscar por SKU ou nome' : 'Buscar kit'} />
+      <SearchInput value={query} onChange={setQuery} placeholder={page === 'kits' ? 'Buscar kit' : page === 'inputs' ? 'Buscar insumo' : 'Buscar por SKU ou nome'} />
       <Segmented label="Situação" value={situation} onChange={setSituation}
         options={[{ id: 'active', name: 'Ativos' }, { id: 'inactive', name: 'Inativos' }, { id: 'all', name: 'Todos' }]} />
     </div>
-    {message(error)}
+    {message(error ?? balanceError)}
     {!data ? loading && <Loading label="Carregando catálogo…" /> : <>
-      {page === 'products'
-        ? <TableFilters filters={productFilters(data)} selected={selected} onChange={setSelected} />
-        : <TableFilters filters={kitFilters(data)} selected={selected} onChange={setSelected} />}
+      {page === 'products' && <TableFilters filters={productFilters(data)} selected={selected} onChange={setSelected} />}
+      {page === 'inputs' && <TableFilters key={balances ? 'stock' : 'plain'} filters={inputFilters(data, balances)} selected={selected} onChange={setSelected} />}
+      {page === 'kits' && <TableFilters filters={kitFilters(data)} selected={selected} onChange={setSelected} />}
+      {page === 'inputs' && <Table empty="Nenhum insumo encontrado."
+        columns={['Insumo', 'Tipo', ...(balances ? [{ label: 'Saldo', end: true }, { label: 'Reservado', end: true }, { label: 'Custo médio', end: true }] : []), 'Situação']}
+        rows={applyFilters(visible(data.products.filter(row => data.productTypes.find(type => type.id === row.typeId)?.isInput)), inputFilters(data, balances), selected).map(row => {
+          const balance = balances?.find(item => item.id === row.id);
+          const symbol = baseUnit(row).symbol;
+          return [
+            <Title name={row.name} code={row.sku} />, data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
+            ...(balances ? [quantity(balance?.quantity ?? '0') + ' ' + symbol, quantity(balance?.reserved ?? '0') + ' ' + symbol, brl(balance?.currentCost)] : []),
+            situationBadge(row),
+          ];
+        })} />}
       {page === 'products' && <Table empty="Nenhum produto encontrado."
         columns={['Produto', 'Tipo', 'Unidade', 'Classificação', 'Situação', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
         rows={applyFilters(visible(data.products), productFilters(data), selected).map(row => [

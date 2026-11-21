@@ -247,6 +247,21 @@ export class CatalogService {
     };
   }
 
+  /** Balance and cost of every product, kept apart from the catalog because they need stock:view. */
+  async balances() {
+    const [products, reservations] = await Promise.all([
+      this.db.product.findMany({ select: { id: true, quantity: true, currentCost: true } }),
+      this.db.productionConsumption.groupBy({ by: ['inputId'], where: { item: { order: { status: 'PRINTING' } } }, _sum: { planned: true } }),
+    ]);
+    const reservedById = new Map(reservations.map(row => [row.inputId, row._sum.planned ?? new Prisma.Decimal(0)]));
+    return products.map(product => {
+      const reserved = reservedById.get(product.id) ?? new Prisma.Decimal(0);
+      return {
+        ...product, reserved, available: Prisma.Decimal.max(0, product.quantity.minus(reserved)), value: stockValue(product.quantity, product.currentCost),
+      };
+    });
+  }
+
   async stockView() {
     const [products, kits, reservations] = await Promise.all([
       this.db.product.findMany({
@@ -421,6 +436,10 @@ export class CatalogController {
   @Require('catalog:view')
   @Get()
   overview() { return this.catalog.overview(); }
+
+  @Require('stock:view')
+  @Get('balances')
+  balances() { return this.catalog.balances(); }
 
   @Require('registrations:view')
   @Get('registrations')
