@@ -10,7 +10,11 @@ type History = { id: string; product: Product; user: { name: string }; createdAt
 type HistoryPage = { movements: History[]; nextCursor: string | null };
 type HistoryFilters = { productId?: string; kind?: string; from?: string; to?: string };
 type CountPreview = { id: string; rows: { product: { sku: string; name: string; unit: Product['unit'] }; expected: string; counted: string; difference: string }[] };
-type InitialPreview = { id: string; rows: { sku: string; name: string; unit: string; quantity: string; unitCost?: string }[] };
+type InitialPreview = {
+  id: string;
+  rows: { sku: string; name: string; unit: string; quantity: string; typeName: string; totalCost?: string; declaredCost: string | null; wastePercent?: string }[];
+  recipes: { product: string; input: string; quantity: string; unit: string }[];
+};
 type Dialog = { kind: 'movement'; product?: Product } | { kind: 'kit'; kit: Kit } | { kind: 'kitDetails'; kit: StockKit } | { kind: 'inventory' } | { kind: 'initial' };
 const kinds = [{ id: 'PURCHASE', name: 'Compra' }, { id: 'OUT', name: 'Saída' }, { id: 'ADJUSTMENT', name: 'Ajuste' }] as const;
 const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário', PRODUCTION_IN: 'Entrada de produção', PRODUCTION_OUT: 'Consumo de produção' };
@@ -295,8 +299,16 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
   const closePanel = useClosePanel();
   if (preview) return <div className="stack">
     <div className="section-head"><div><h3>Prévia da carga inicial</h3><p>{preview.rows.length} produtos novos serão cadastrados.</p></div></div>
-    <Table columns={['Produto', { label: 'Saldo informado', end: true }, { label: 'Custo', end: true }]}
-      rows={preview.rows.map(row => [<Title name={row.name} code={row.sku} />, quantity(row.quantity) + ' ' + row.unit, brl(row.unitCost ?? null)])} />
+    <Table columns={['Produto', 'Tipo', { label: 'Saldo informado', end: true }, { label: 'Custo total', end: true }, { label: 'Custo por unidade', end: true }, { label: 'Perda', end: true }]}
+      rows={preview.rows.map(row => [
+        <Title name={row.name} code={row.sku} />, row.typeName, quantity(row.quantity) + ' ' + row.unit, brl(row.totalCost),
+        row.declaredCost === null ? '—' : brl(row.declaredCost) + ' / ' + row.unit, row.wastePercent ? quantity(row.wastePercent) + '%' : '—',
+      ])} />
+    {preview.recipes.length > 0 && <>
+      <h3>Fichas técnicas</h3>
+      <Table columns={['Produto', 'Insumo', { label: 'Consumo por unidade', end: true }]}
+        rows={preview.recipes.map(row => [row.product, row.input, quantity(row.quantity) + ' ' + row.unit])} />
+    </>}
     <Form key={preview.id} label="Confirmar carga inicial" extra={<button type="button" className="btn secondary" onClick={() => setPreview(undefined)}>Voltar</button>}
       action={async () => {
         await api('stock/initial/' + preview.id + '/confirm', {});
@@ -305,7 +317,8 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
       }} />
   </div>;
   return <div className="stack">
-    <div className="info">Use SKUs novos e unidades e classificações já cadastradas. O custo é por unidade informada na mesma linha.</div>
+    <div className="info">Use SKUs novos e os tipos, unidades e classificações da aba Listas. Informe o custo total da linha, e o sistema calcula o valor por unidade.
+      Para produtos fabricados, preencha a aba Ficha técnica com o consumo de uma unidade.</div>
     <a className="btn secondary" style={{ alignSelf: 'flex-start' }} href="/api/stock/initial/template"><Download size={16} aria-hidden="true" />Baixar modelo</a>
     <Upload action={async file => { setPreview(undefined); setPreview(await api<InitialPreview>('stock/initial/preview', file)); }} />
   </div>;

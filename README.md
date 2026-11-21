@@ -57,7 +57,7 @@ Rode uma única instância da API. Os limites de tentativas de login e a trava d
 ## Conferir o primeiro fluxo
 
 1. Em **Cadastros → Famílias de medida**, crie Peças com base `un` e Peso com base `g`. Em **Cadastros → Unidades de medida**, cadastre `kg` com fator `1000`. Somente administradores cadastram famílias e unidades, porque o fator define como todas as quantidades são gravadas. Confira o fator antes de salvar, pois unidades não podem ser editadas.
-2. Em **Estoque**, baixe o modelo de carga inicial. Preencha dois SKUs novos, um em `un` e outro em `kg`. A coluna Custo informa o valor por unidade declarada na mesma linha. Classificações são opcionais e devem existir no catálogo quando preenchidas.
+2. Em **Estoque**, baixe o modelo de carga inicial. Preencha dois SKUs novos, um em `un` e outro em `kg`. A coluna **Custo total** informa quanto vale o saldo da linha, e o sistema calcula o valor por unidade. Tipo, Perda e classificações são opcionais, e a aba **Listas** mostra os valores cadastrados. Para produtos fabricados, a aba **Ficha técnica** recebe o consumo de uma unidade, com insumos da mesma carga ou já cadastrados. Planilhas antigas continuam aceitas, e nelas a coluna Custo segue valendo por unidade.
 3. Gere a prévia e confirme. Registre uma saída do item por peso em `g` e confira quantidade, custo por grama e usuário no histórico.
 4. Use a contagem em lote ou o segundo modelo XLSX para inventário. Confirme somente depois de conferir as diferenças. Uma movimentação posterior à prévia exige uma nova conferência.
 

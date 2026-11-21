@@ -1,7 +1,8 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { MovementKind, Prisma, Product } from '@prisma/client';
 import { z } from 'zod';
-import { CatalogService, inBase, productInclude } from '../catalog/catalog';
+import { CatalogService, defaultProductType, inBase, productInclude } from '../catalog/catalog';
+import { formsCycle } from '../catalog/recipe';
 import { auditChange, auditContext } from '../audit/recorder';
 import { averageCost, costPerBaseUnit } from './cost';
 import {
@@ -18,10 +19,15 @@ export const kitOutFields = z.object({ quantity: positive.refine(value => value.
 const countRow = z.object({ sku: skuField, quantity: nonnegative, unit: nameField });
 export const countFields = z.object({ rows: z.array(countRow).min(1).max(500) });
 const initialRow = z.object({
-  sku: skuField, name: nameField, unit: nameField, quantity: nonnegative, unitCost: nonnegative.optional(),
+  sku: skuField, name: nameField, type: nameField.optional(), unit: nameField, quantity: nonnegative,
+  unitCost: nonnegative.optional(), totalCost: nonnegative.optional(),
+  wastePercent: nonnegative.refine(value => value.lte(100) && value.decimalPlaces() <= 2, 'Informe a perda entre 0 e 100, com até 2 casas').optional(),
   group: nameField.optional(), brand: nameField.optional(), color: nameField.optional(), department: nameField.optional(),
-}).refine(row => row.quantity.eq(0) || row.unitCost !== undefined, 'Informe o custo do saldo inicial.');
-export const initialFields = z.object({ rows: z.array(initialRow).min(1).max(500) });
+}).refine(row => row.unitCost === undefined || row.totalCost === undefined, 'Use apenas uma coluna de custo.')
+  .refine(row => row.quantity.eq(0) || row.unitCost !== undefined || row.totalCost !== undefined, 'Informe o custo do saldo inicial.')
+  .refine(row => row.totalCost === undefined || row.quantity.gt(0), 'O custo total exige quantidade maior que zero.');
+const initialRecipe = z.object({ product: skuField, input: skuField, quantity: positive, unit: nameField });
+export const initialFields = z.object({ rows: z.array(initialRow).min(1).max(500), recipes: z.array(initialRecipe).max(500).default([]) });
 type Count = z.infer<typeof countFields>;
 type Initial = z.infer<typeof initialFields>;
 
@@ -152,41 +158,87 @@ export class StockService {
   }
 
   private async initialLookups(tx: Prisma.TransactionClient, data: Initial) {
-    const [existing, units, references] = await Promise.all([
+    const [existing, units, references, types, storedInputs] = await Promise.all([
       tx.product.findMany({ where: { sku: { in: data.rows.map(row => row.sku) } }, select: { sku: true } }),
-      tx.unit.findMany({ where: { symbol: { in: data.rows.map(row => row.unit) } } }),
+      tx.unit.findMany({ where: { symbol: { in: [...data.rows, ...data.recipes].map(row => row.unit) } } }),
       tx.reference.findMany(),
+      tx.productType.findMany(),
+      tx.product.findMany({ where: { sku: { in: data.recipes.map(row => row.input) } }, include: { unit: true, type: true } }),
     ]);
     if (existing.length) throw new ConflictException('SKUs já cadastrados: ' + existing.map(product => product.sku).join(', '));
-    return data.rows.map(row => {
+    const items = data.rows.map(row => {
       const unit = units.find(item => item.symbol === row.unit);
       if (!unit) throw new BadRequestException('Unidade desconhecida no SKU ' + row.sku + ': ' + row.unit);
+      const type = row.type ? types.find(item => item.name === row.type) : types.find(item => item.id === defaultProductType);
+      if (!type) throw new BadRequestException('Tipo desconhecido no SKU ' + row.sku + ': ' + row.type);
+      if (row.wastePercent?.gt(0) && !type.isManufactured) throw new BadRequestException('Perda só vale para produto fabricado: ' + row.sku + '.');
       const find = (kind: 'GRUPO' | 'MARCA' | 'COR' | 'DEPARTAMENTO', name?: string) => {
         if (!name) return undefined;
         const reference = references.find(item => item.kind === kind && item.name === name);
         if (!reference) throw new BadRequestException('Classificação desconhecida no SKU ' + row.sku + ': ' + name);
         return reference.id;
       };
+      const quantity = inBase(unit, unit.familyId, row.quantity);
+      const cost = row.totalCost !== undefined ? storedDecimal(costPerBaseUnit(row.totalCost, quantity))
+        : row.unitCost !== undefined ? storedDecimal(money(row.unitCost.div(unit.factor))) : null;
       return {
         product: {
-          sku: row.sku, name: row.name, unitId: unit.id, groupId: find('GRUPO', row.group), brandId: find('MARCA', row.brand),
+          sku: row.sku, name: row.name, typeId: type.id, wastePercent: row.wastePercent, unitId: unit.id,
+          groupId: find('GRUPO', row.group), brandId: find('MARCA', row.brand),
           colorId: find('COR', row.color), departmentId: find('DEPARTAMENTO', row.department),
         },
-        quantity: inBase(unit, unit.familyId, row.quantity),
-        cost: row.unitCost === undefined ? null : storedDecimal(money(row.unitCost.div(unit.factor))),
+        quantity, cost, type, familyId: unit.familyId,
       };
     });
+    const seen = new Set<string>();
+    const recipes = data.recipes.map(row => {
+      const label = row.product + ' / ' + row.input;
+      if (seen.has(label)) throw new BadRequestException('Insumo repetido na ficha: ' + label + '.');
+      seen.add(label);
+      const product = items.find(item => item.product.sku === row.product);
+      if (!product) throw new BadRequestException('A ficha precisa ser de um SKU desta carga: ' + row.product + '.');
+      if (!product.type.isManufactured) throw new BadRequestException(row.product + ' não é de um tipo fabricado.');
+      if (row.product === row.input) throw new BadRequestException('Um produto não pode consumir a si mesmo: ' + row.product + '.');
+      const batchInput = items.find(item => item.product.sku === row.input);
+      const stored = storedInputs.find(item => item.sku === row.input);
+      if (!batchInput && !stored) throw new BadRequestException('Insumo não encontrado: ' + row.input + '.');
+      if (stored && !stored.active) throw new BadRequestException('Insumo inativo: ' + row.input + '.');
+      if (!(batchInput?.type ?? stored!.type).isInput) throw new BadRequestException(row.input + ' não é de um tipo usado como insumo.');
+      const unit = units.find(item => item.symbol === row.unit);
+      if (!unit) throw new BadRequestException('Unidade desconhecida na ficha ' + label + ': ' + row.unit);
+      return { product: row.product, input: row.input, inputId: stored?.id, quantity: inBase(unit, batchInput?.familyId ?? stored!.unit.familyId, row.quantity) };
+    });
+    // Stored products never consume a new SKU, so a cycle can only exist among the rows of this batch.
+    const edges = recipes.map(row => ({ productId: row.product, inputId: row.input }));
+    for (const sku of new Set(recipes.map(row => row.product))) {
+      if (formsCycle(sku, edges.filter(edge => edge.productId === sku).map(edge => edge.inputId), edges)) {
+        throw new BadRequestException('A ficha faria ' + sku + ' consumir a si mesmo por meio de outro insumo.');
+      }
+    }
+    return { items, recipes };
   }
 
   previewInitial(data: Initial, userId: string) {
     distinctSkus(data.rows);
     return serial(this.db, async tx => {
-      await this.initialLookups(tx, data);
+      const { items } = await this.initialLookups(tx, data);
       const rows = data.rows.map(row => ({
-        ...row, quantity: row.quantity.toFixed(), ...(row.unitCost === undefined ? {} : { unitCost: row.unitCost.toFixed() }),
+        ...row, quantity: row.quantity.toFixed(),
+        ...(row.unitCost === undefined ? {} : { unitCost: row.unitCost.toFixed() }),
+        ...(row.totalCost === undefined ? {} : { totalCost: row.totalCost.toFixed() }),
+        ...(row.wastePercent === undefined ? {} : { wastePercent: row.wastePercent.toFixed() }),
       }));
-      const batch = await tx.initialImport.create({ data: { userId, data: rows as Prisma.InputJsonValue } });
-      return { id: batch.id, rows };
+      const recipes = data.recipes.map(row => ({ ...row, quantity: row.quantity.toFixed() }));
+      const batch = await tx.initialImport.create({ data: { userId, data: { rows, recipes } as Prisma.InputJsonValue } });
+      return {
+        id: batch.id, recipes,
+        rows: rows.map((row, index) => {
+          const { unitCost, totalCost, quantity } = data.rows[index];
+          // Cost per declared unit, shown before confirming. The stored value is per base unit.
+          const declaredCost = totalCost === undefined ? unitCost : costPerBaseUnit(totalCost, quantity);
+          return { ...row, typeName: items[index].type.name, declaredCost: declaredCost?.toFixed() ?? null };
+        }),
+      };
     });
   }
 
@@ -195,12 +247,22 @@ export class StockService {
       const batch = await tx.initialImport.findFirst({ where: { id, userId } });
       if (!batch) throw new NotFoundException('Prévia não encontrada.');
       if (batch.confirmedAt) return { id, confirmedAt: batch.confirmedAt };
-      const data = parse(initialFields, { rows: batch.data });
-      for (const item of await this.initialLookups(tx, data)) {
+      // Previews created before the technical sheet stored only the list of rows.
+      const data = parse(initialFields, Array.isArray(batch.data) ? { rows: batch.data } : batch.data);
+      const { items, recipes } = await this.initialLookups(tx, data);
+      const ids = new Map<string, string>();
+      for (const item of items) {
         const product = await this.catalog.createProduct(tx, item.product);
+        ids.set(product.sku, product.id);
         if (!item.quantity.eq(0) || item.cost !== null) {
           await this.record(tx, product, item.quantity, 'INITIAL', userId, 'Carga inicial ' + id, item.cost);
         }
+      }
+      if (recipes.length) {
+        auditContext({ 'Linhas de ficha técnica': recipes.length });
+        await tx.productInput.createMany({
+          data: recipes.map(row => ({ productId: ids.get(row.product)!, inputId: row.inputId ?? ids.get(row.input)!, quantity: row.quantity })),
+        });
       }
       const confirmedAt = new Date();
       await tx.initialImport.update({ where: { id }, data: { confirmedAt } });

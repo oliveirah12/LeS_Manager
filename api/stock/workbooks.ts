@@ -3,22 +3,102 @@ import { inflateRawSync } from 'node:zlib';
 import { Prisma } from '@prisma/client';
 import ExcelJS from 'exceljs';
 
+type Column = readonly [header: string, key: string];
 const formats = {
   initial: [
-    ['SKU', 'sku'], ['Nome', 'name'], ['Unidade', 'unit'], ['Quantidade', 'quantity'], ['Custo', 'unitCost'],
+    ['SKU', 'sku'], ['Nome', 'name'], ['Tipo', 'type'], ['Unidade', 'unit'], ['Quantidade', 'quantity'], ['Custo total', 'totalCost'], ['Perda (%)', 'wastePercent'],
     ['Grupo', 'group'], ['Marca', 'brand'], ['Cor', 'color'], ['Departamento', 'department'],
   ],
   inventory: [['SKU', 'sku'], ['Quantidade', 'quantity'], ['Unidade', 'unit']],
-} as const;
+} as const satisfies Record<string, readonly Column[]>;
 export type WorkbookKind = keyof typeof formats;
+/** Files made before the total cost keep their meaning: "Custo" is the cost per declared unit. */
+const legacyCost: Column = ['Custo', 'unitCost'];
+const recipeSheet = 'Ficha técnica';
+const recipeColumns: readonly Column[] = [['SKU do produto', 'product'], ['SKU do insumo', 'input'], ['Quantidade', 'quantity'], ['Unidade', 'unit']];
+const requiredInitial = ['SKU', 'Nome', 'Unidade', 'Quantidade'];
+const decimalKeys = new Set(['quantity', 'unitCost', 'totalCost', 'wastePercent']);
+const lastRow = 501;
+/** Current registrations offered as dropdowns, by column header. */
+export type WorkbookLists = Record<string, string[]>;
 
-export async function workbookTemplate(kind: WorkbookKind) {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet(kind === 'initial' ? 'Carga inicial' : 'Inventário');
-  sheet.columns = formats[kind].map(([header, key]) => ({ header, key, width: 22, style: { numFmt: '@' } }));
+function addSheet(workbook: ExcelJS.Workbook, name: string, columns: readonly Column[]) {
+  const sheet = workbook.addWorksheet(name);
+  sheet.columns = columns.map(([header, key]) => ({ header, key, width: 22, style: { numFmt: '@' } }));
   sheet.getRow(1).font = { bold: true };
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
+  return sheet;
+}
+
+function addDropdowns(sheet: ExcelJS.Worksheet, columns: readonly Column[], ranges: Map<string, string>) {
+  columns.forEach(([header], index) => {
+    const range = ranges.get(header);
+    if (!range) return;
+    for (let line = 2; line <= lastRow; line++) {
+      sheet.getCell(line, index + 1).dataValidation = {
+        type: 'list', allowBlank: true, formulae: [range], showErrorMessage: true,
+        errorTitle: header, error: 'Escolha um valor da aba Listas.',
+      };
+    }
+  });
+}
+
+export async function workbookTemplate(kind: WorkbookKind, lists: WorkbookLists = {}) {
+  const workbook = new ExcelJS.Workbook();
+  if (kind === 'inventory') {
+    addSheet(workbook, 'Inventário', formats.inventory);
+    return Buffer.from(await workbook.xlsx.writeBuffer());
+  }
+  const sheet = addSheet(workbook, 'Carga inicial', formats.initial);
+  const recipes = addSheet(workbook, recipeSheet, recipeColumns);
+  const listSheet = workbook.addWorksheet('Listas');
+  const ranges = new Map<string, string>();
+  Object.entries(lists).forEach(([header, values], index) => {
+    const column = listSheet.getColumn(index + 1);
+    column.width = 22;
+    listSheet.getCell(1, index + 1).value = header;
+    values.forEach((value, line) => { listSheet.getCell(line + 2, index + 1).value = value; });
+    if (values.length) ranges.set(header, 'Listas!$' + column.letter + '$2:$' + column.letter + '$' + (values.length + 1));
+  });
+  listSheet.getRow(1).font = { bold: true };
+  addDropdowns(sheet, formats.initial, ranges);
+  addDropdowns(recipes, recipeColumns, ranges);
   return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+/** Reads a sheet by its headers, so column order does not matter and older templates still work. */
+function readSheet(sheet: ExcelJS.Worksheet, known: readonly Column[], required: readonly string[]) {
+  if (sheet.rowCount > lastRow || sheet.columnCount > known.length) {
+    throw new BadRequestException('Use o modelo e preencha até 500 linhas.');
+  }
+  const columns = new Map<number, string | null>();
+  const headers = new Set<string>();
+  for (let index = 1; index <= sheet.columnCount; index++) {
+    const header = sheet.getRow(1).getCell(index).text.trim();
+    const column = known.find(item => item[0] === header);
+    if ((header && !column) || headers.has(header)) throw new BadRequestException('Cabeçalho incorreto. Baixe o modelo desta operação.');
+    if (header) headers.add(header);
+    columns.set(index, column?.[1] ?? null);
+  }
+  if (required.some(header => !headers.has(header))) throw new BadRequestException('Cabeçalho incorreto. Baixe o modelo desta operação.');
+  if (headers.has('Custo') && headers.has('Custo total')) throw new BadRequestException('Use apenas uma coluna de custo.');
+  const rows: Record<string, string>[] = [];
+  for (let line = 2; line <= sheet.rowCount; line++) {
+    const row = sheet.getRow(line);
+    const values: Record<string, string> = {};
+    for (const [index, key] of columns) {
+      const value = row.getCell(index).value;
+      if (value == null || value === '') continue;
+      if (!key) throw new BadRequestException('Há valor em uma coluna sem título na linha ' + line + '.');
+      if (typeof value !== 'string' && typeof value !== 'number') {
+        throw new BadRequestException('Use valores simples, sem fórmulas, na linha ' + line + '.');
+      }
+      const text = typeof value === 'number' && decimalKeys.has(key) ? new Prisma.Decimal(value).toFixed() : String(value).trim();
+      if (text) values[key] = text;
+    }
+    if (Object.keys(values).length) rows.push(values);
+  }
+  return rows;
 }
 
 export async function workbookRows(kind: WorkbookKind, file?: Express.Multer.File) {
@@ -33,32 +113,13 @@ export async function workbookRows(kind: WorkbookKind, file?: Express.Multer.Fil
     throw new BadRequestException('Arquivo .xlsx inválido ou grande demais.');
   }
   const sheet = workbook.worksheets[0];
-  if (!sheet || sheet.rowCount > 501 || sheet.columnCount > formats[kind].length) {
-    throw new BadRequestException('Use o modelo e preencha até 500 linhas.');
-  }
-  const columns = formats[kind];
-  for (const [index, [header]] of columns.entries()) {
-    if (sheet.getRow(1).getCell(index + 1).text.trim() !== header) {
-      throw new BadRequestException('Cabeçalho incorreto. Baixe o modelo desta operação.');
-    }
-  }
-  const rows: Record<string, string>[] = [];
-  for (let line = 2; line <= sheet.rowCount; line++) {
-    const row = sheet.getRow(line);
-    const values: Record<string, string> = {};
-    for (const [index, [, key]] of columns.entries()) {
-      const value = row.getCell(index + 1).value;
-      if (value == null || value === '') continue;
-      if (typeof value !== 'string' && typeof value !== 'number') {
-        throw new BadRequestException('Use valores simples, sem fórmulas, na linha ' + line + '.');
-      }
-      const isDecimal = key === 'quantity' || key === 'unitCost';
-      const text = typeof value === 'number' && isDecimal ? new Prisma.Decimal(value).toFixed() : String(value).trim();
-      if (text) values[key] = text;
-    }
-    if (Object.keys(values).length) rows.push(values);
-  }
-  return { rows };
+  if (!sheet) throw new BadRequestException('Use o modelo e preencha até 500 linhas.');
+  if (kind === 'inventory') return { rows: readSheet(sheet, formats.inventory, formats.inventory.map(([header]) => header)) };
+  const recipes = workbook.getWorksheet(recipeSheet);
+  return {
+    rows: readSheet(sheet, [...formats.initial, legacyCost], requiredInitial),
+    recipes: recipes ? readSheet(recipes, recipeColumns, recipeColumns.map(([header]) => header)) : [],
+  };
 }
 
 // Bound decompression before handing the uploaded ZIP to ExcelJS.
