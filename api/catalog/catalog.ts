@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post,
+  BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post,
 } from '@nestjs/common';
 import { Prisma, ReferenceKind } from '@prisma/client';
 import { z } from 'zod';
@@ -19,7 +19,7 @@ export const productFields = z.object({
   sku: skuField, name: nameField, unitId: idField,
   groupId: idField.nullish(), brandId: idField.nullish(), colorId: idField.nullish(), departmentId: idField.nullish(),
 });
-const productUpdate = productFields.omit({ sku: true, unitId: true });
+const productUpdate = productFields.partial({ sku: true, unitId: true });
 const statusFields = z.strictObject({ active: z.boolean() });
 const situation = (active: boolean) => active ? 'Ativo' : 'Inativo';
 const kitFields = z.object({
@@ -51,6 +51,18 @@ const kitValues = (kit: AuditedKit) => ({
   Componentes: kit.components.map(item => item.product.sku + ' × ' + item.quantity.toFixed()).sort(),
 });
 const kitAudit = { components: { include: { product: { select: { sku: true } } } } } as const;
+const productUsage = {
+  _count: { select: { movements: true, kitComponents: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } } } },
+} as const;
+const kitUsage = { _count: { select: { movements: true } } } as const;
+
+/** Why a product is part of the history. Such a product cannot be deleted or moved to another unit family. */
+function productBlock(usage: { movements: number; kitComponents: number; inventoryRows: number }) {
+  if (usage.movements) return 'O produto tem movimentações no histórico.';
+  if (usage.kitComponents) return 'O produto compõe um kit.';
+  return usage.inventoryRows ? 'O produto consta em inventário confirmado.' : null;
+}
+const kitBlock = (usage: { movements: number }) => usage.movements ? 'O kit tem saídas no histórico.' : null;
 
 export function inBase(unit: { familyId: string; factor: Prisma.Decimal }, familyId: string, quantity: Prisma.Decimal) {
   if (unit.familyId !== familyId) throw new BadRequestException('A unidade não pertence à família de medida do produto.');
@@ -73,13 +85,17 @@ export class CatalogService {
   async overview() {
     const [registrations, products, kits] = await Promise.all([
       this.registrations(),
-      this.db.product.findMany({ select: catalogProduct, orderBy: { sku: 'asc' } }),
+      this.db.product.findMany({ select: { ...catalogProduct, ...productUsage }, orderBy: { sku: 'asc' } }),
       this.db.kit.findMany({
-        include: { components: { include: { product: { select: catalogProduct } } } },
+        include: { components: { include: { product: { select: catalogProduct } } }, ...kitUsage },
         orderBy: { sku: 'asc' },
       }),
     ]);
-    return { ...registrations, products, kits };
+    return {
+      ...registrations,
+      products: products.map(({ _count, ...product }) => ({ ...product, deleteBlock: productBlock(_count) })),
+      kits: kits.map(({ _count, ...kit }) => ({ ...kit, deleteBlock: kitBlock(_count) })),
+    };
   }
 
   async stockView() {
@@ -118,11 +134,49 @@ export class CatalogService {
   async updateProduct(id: string, data: z.infer<typeof productUpdate>) {
     return serial(this.db, async tx => {
       await this.assertReferences(tx, data);
-      const before = await tx.product.findUnique({ where: { id }, select: productAudit });
+      const before = await tx.product.findUnique({
+        where: { id }, select: { ...productAudit, unitId: true, unit: { select: { symbol: true, familyId: true } }, ...productUsage },
+      });
       if (!before) throw new NotFoundException('Produto não encontrado.');
-      await tx.product.update({ where: { id }, data });
+      const newUnitId = data.unitId && data.unitId !== before.unitId ? data.unitId : undefined;
+      if (newUnitId) {
+        const unit = await tx.unit.findUnique({ where: { id: newUnitId } });
+        if (!unit) throw new NotFoundException('Unidade não encontrada.');
+        // Balances are stored in the family's base unit, so a new family would reinterpret them.
+        const block = productBlock(before._count);
+        if (unit.familyId !== before.unit.familyId && block) throw new ConflictException(block + ' Escolha uma unidade da mesma família.');
+      }
+      // The revision change invalidates inventory previews counted with the previous unit.
+      await tx.product.update({ where: { id }, data: { ...data, ...(newUnitId ? { revision: { increment: 1 } } : {}) } });
       auditChange(productValues(before), productValues(await tx.product.findUniqueOrThrow({ where: { id }, select: productAudit })));
       return tx.product.findUniqueOrThrow({ where: { id }, select: catalogProduct });
+    });
+  }
+
+  /** Deletes a product that never entered the history. Unconfirmed count previews do not hold it back. */
+  deleteProduct(id: string) {
+    return serial(this.db, async tx => {
+      const product = await tx.product.findUnique({ where: { id }, select: { ...productAudit, ...productUsage } });
+      if (!product) throw new NotFoundException('Produto não encontrado.');
+      const block = productBlock(product._count);
+      if (block) throw new ConflictException(block + ' Inative o produto em vez de excluir.');
+      await tx.inventoryRow.deleteMany({ where: { productId: id } });
+      await tx.product.delete({ where: { id } });
+      auditChange(productValues(product), null);
+      return { id };
+    });
+  }
+
+  deleteKit(id: string) {
+    return serial(this.db, async tx => {
+      const kit = await tx.kit.findUnique({ where: { id }, include: { ...kitAudit, ...kitUsage } });
+      if (!kit) throw new NotFoundException('Kit não encontrado.');
+      const block = kitBlock(kit._count);
+      if (block) throw new ConflictException(block + ' Inative o kit em vez de excluir.');
+      await tx.kitComponent.deleteMany({ where: { kitId: id } });
+      await tx.kit.delete({ where: { id } });
+      auditChange(kitValues(kit), null);
+      return { id };
     });
   }
 
@@ -274,6 +328,11 @@ export class CatalogController {
   }
 
   @Require('catalog:operate')
+  @Audit('Excluir produto')
+  @Delete('products/:id')
+  removeProduct(@Param('id') id: string) { return this.catalog.deleteProduct(parse(idField, id)); }
+
+  @Require('catalog:operate')
   @Audit('Criar kit')
   @Post('kits')
   addKit(@Body() body: unknown) { return this.catalog.saveKit(parse(kitFields, body)); }
@@ -292,4 +351,9 @@ export class CatalogController {
   kitStatus(@Param('id') id: string, @Body() body: unknown) {
     return this.catalog.setKitActive(parse(idField, id), parse(statusFields, body).active);
   }
+
+  @Require('catalog:operate')
+  @Audit('Excluir kit')
+  @Delete('kits/:id')
+  removeKit(@Param('id') id: string) { return this.catalog.deleteKit(parse(idField, id)); }
 }

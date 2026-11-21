@@ -373,6 +373,42 @@ test('API REST com PostgreSQL', {
     assert.equal((await productMovements(uncounted.id, 'INVENTORY')).length, 0);
   });
 
+  await t.test('edição e exclusão respeitam o histórico', async () => {
+    const symbol = 'T' + Date.now();
+    const family = expectStatus(await post('/catalog/families', { name: 'Família ' + symbol, baseSymbol: symbol }), 201);
+    const otherUnit = family.units[0];
+    const patch = (path, body) => admin(path, { method: 'PATCH', body });
+    const remove = path => admin(path, { method: 'DELETE' });
+
+    const unused = await createProduct('SEM-USO', unit.id);
+    const newSku = sku('RENOMEADO');
+    const changed = expectStatus(await patch('/catalog/products/' + unused.id, { sku: newSku, name: 'Sem uso', unitId: otherUnit.id }), 200);
+    assert.equal(changed.sku, newSku);
+    assert.equal(changed.unitId, otherUnit.id);
+    expectStatus(await remove('/catalog/products/' + unused.id), 200);
+    assert.equal(await db.product.count({ where: { id: unused.id } }), 0);
+
+    const used = await createProduct('COM-USO', unit.id);
+    expectStatus(await movement(used.id, unit.id, 'PURCHASE', '2', '3'), 201);
+    expectStatus(await patch('/catalog/products/' + used.id, { name: 'Com uso', unitId: otherUnit.id }), 409);
+    expectStatus(await remove('/catalog/products/' + used.id), 409);
+
+    const component = await createProduct('COMPONENTE', unit.id);
+    const newKit = () => post('/catalog/kits', {
+      sku: sku('KIT-EXCLUSAO'), name: 'Kit para excluir', components: [{ productId: component.id, quantity: '1', unitId: unit.id }],
+    });
+    const freeKit = expectStatus(await newKit(), 201);
+    expectStatus(await remove('/catalog/products/' + component.id), 409);
+    expectStatus(await remove('/catalog/kits/' + freeKit.id), 200);
+    expectStatus(await remove('/catalog/products/' + component.id), 200);
+
+    const soldKit = expectStatus(await post('/catalog/kits', {
+      sku: sku('KIT-VENDIDO'), name: 'Kit vendido', components: [{ productId: used.id, quantity: '1', unitId: unit.id }],
+    }), 201);
+    expectStatus(await post(`/stock/kits/${soldKit.id}/out`, { quantity: '1', reason: 'Venda' }), 201);
+    expectStatus(await remove('/catalog/kits/' + soldKit.id), 409);
+  });
+
   await t.test('inativação exige saldo zerado, bloqueia movimentações e preserva o histórico', async () => {
     const product = await createProduct('INATIVO', unit.id);
     expectStatus(await movement(product.id, unit.id, 'PURCHASE', '2', '3'), 201);

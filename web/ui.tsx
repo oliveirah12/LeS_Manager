@@ -357,10 +357,10 @@ export type Identity = { id: string; name: string; email: string; profileName: s
 export type Unit = { id: string; symbol: string; factor: string; familyId: string; isBase: boolean };
 export type Product = {
   id: string; sku: string; name: string; active: boolean; unit: Unit & { family: { units: Unit[] } }; quantity: string; currentCost: string | null; lastPurchaseCost: string | null;
-  groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null;
+  groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null; deleteBlock?: string | null;
 };
 export type Kit = {
-  id: string; sku: string; name: string; active: boolean; available: string;
+  id: string; sku: string; name: string; active: boolean; available: string; deleteBlock?: string | null;
   components: { productId: string; quantity: string; product: Product }[];
 };
 /** Product in the stock view, with its value at average cost computed by the API with exact decimals. */
