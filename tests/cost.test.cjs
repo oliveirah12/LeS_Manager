@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost, belowMinimum, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, recipeEstimate } = require('../dist/api/stock/cost.js');
+const { averageCost, belowMinimum, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, recipeEstimate, saleMargin } = require('../dist/api/stock/cost.js');
 
 const d = value => new Prisma.Decimal(value);
 const average = (balance, current, quantity, cost) =>
@@ -164,6 +164,15 @@ test('the minimum is compared with the free balance', () => {
   assert.equal(belowMinimum(d('100'), d('50'), d('50')), false);
   assert.equal(belowMinimum(d('0'), d('0'), d('0')), false);
   assert.equal(belowMinimum(d('0'), d('0'), null), false);
+});
+
+test('the margin is measured over the sale price', () => {
+  const margin = saleMargin(d('50'), d('30'));
+  assert.equal(margin.profit.toString(), '20');
+  assert.equal(margin.percent.toString(), '40');
+  assert.equal(saleMargin(d('10'), d('15')).percent.toString(), '-50');
+  assert.equal(saleMargin(null, d('15')), null);
+  assert.equal(saleMargin(d('10'), null), null);
 });
 
 test('reserved balance does not count toward the kits available', () => {

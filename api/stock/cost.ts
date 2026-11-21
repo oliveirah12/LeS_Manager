@@ -37,6 +37,13 @@ export function belowMinimum(quantity: Prisma.Decimal, reserved: Prisma.Decimal,
   return minStock !== null && minStock.gt(0) && quantity.minus(reserved).lt(minStock);
 }
 
+/** Profit per unit and margin over the sale price. Without a price or a known cost there is no margin to show. */
+export function saleMargin(salePrice: Prisma.Decimal | null, cost: Prisma.Decimal | null) {
+  if (salePrice === null || cost === null || salePrice.lte(0)) return null;
+  const profit = salePrice.minus(cost).toDecimalPlaces(12);
+  return { profit, percent: profit.div(salePrice).times(100).toDecimalPlaces(2) };
+}
+
 type CostingItem = { productId: string; planned: Prisma.Decimal; lost: Prisma.Decimal };
 type CostingRow = { productId: string; inputId: string; planned: Prisma.Decimal; familyId: string; unitCost: Prisma.Decimal | null };
 
