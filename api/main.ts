@@ -14,6 +14,7 @@ import { RecipeController, RecipeService } from './catalog/recipe';
 import { BankConnectionService } from './finance/connection';
 import { FinanceController, FinanceService } from './finance/finance';
 import { HealthController } from './health';
+import { ProductionController, ProductionService } from './production/production';
 import { Database, DatabaseErrors } from './shared';
 import { StockController } from './stock/controller';
 import { PreviewCleanup, StockService } from './stock/stock';
@@ -34,10 +35,16 @@ class StockModule {}
 @Module({ controllers: [FinanceController], providers: [FinanceService, BankConnectionService] })
 class FinanceModule {}
 
+@Module({ controllers: [ProductionController], providers: [ProductionService] })
+class ProductionModule {}
+
 @Module({ controllers: [AuditController], providers: [AuditRetention] })
 class AuditModule {}
 
-@Module({ imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, AuditModule], controllers: [HealthController] })
+@Module({
+  imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, ProductionModule, AuditModule],
+  controllers: [HealthController],
+})
 class AppModule {}
 
 export async function createApp() {

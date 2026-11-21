@@ -27,6 +27,11 @@ export function sumValues(values: Prisma.Decimal[]) {
   return values.reduce((total, value) => total.plus(value), new Prisma.Decimal(0));
 }
 
+/** Cost of one hour of a printer: the energy it draws plus its own wear. */
+export function printerHourCost(powerWatts: Prisma.Decimal, energyRate: Prisma.Decimal, hourlyCost: Prisma.Decimal) {
+  return powerWatts.div(1000).times(energyRate).plus(hourlyCost).toDecimalPlaces(12);
+}
+
 type CostedComponent = { quantity: Prisma.Decimal; product: { quantity: Prisma.Decimal; currentCost: Prisma.Decimal | null } };
 
 /**

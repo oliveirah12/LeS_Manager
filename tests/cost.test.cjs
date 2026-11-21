@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost, costPerBaseUnit, kitCosting } = require('../dist/api/stock/cost.js');
+const { averageCost, costPerBaseUnit, kitCosting, printerHourCost } = require('../dist/api/stock/cost.js');
 
 const d = value => new Prisma.Decimal(value);
 const average = (balance, current, quantity, cost) =>
@@ -50,6 +50,11 @@ test('marks the kit total as partial when a component has no cost', () => {
 
 test('a kit that costs zero has no share to divide', () => {
   assert.equal(kitCosting([component('1', '1', '0')]).components[0].share, null);
+});
+
+test('a printer hour adds the energy drawn to the wear', () => {
+  assert.equal(printerHourCost(d('200'), d('0.9'), d('2')).toString(), '2.18');
+  assert.equal(printerHourCost(d('350.5'), d('0'), d('1.5')).toString(), '1.5');
 });
 
 test('values the balance exactly and sums without floating point', () => {

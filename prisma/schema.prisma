@@ -132,6 +132,20 @@ model ProductInput {
   @@index([inputId])
 }
 
+model Printer {
+  id         String  @id @default(uuid())
+  name       String  @unique
+  powerWatts Decimal @db.Decimal(12, 2)
+  hourlyCost Decimal @db.Decimal(30, 12)
+  active     Boolean @default(true)
+}
+
+/// Single row with the values shared by every production order.
+model ProductionSettings {
+  id         String  @id @default("default")
+  energyRate Decimal @default(0) @db.Decimal(30, 12)
+}
+
 model Movement {
   id        String       @id @default(uuid())
   kind      MovementKind

@@ -468,6 +468,18 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/catalog/products/' + filament.id, { method: 'DELETE' }), 200);
   });
 
+  await t.test('impressoras somam energia e desgaste no custo por hora', async () => {
+    const name = sku('IMPRESSORA');
+    const printer = expectStatus(await post('/production/printers', { name, powerWatts: '200', hourlyCost: '2' }), 201);
+    expectStatus(await post('/production/printers', { name, powerWatts: '200', hourlyCost: '2' }), 409);
+    expectStatus(await post('/production/printers', { name: sku('INVALIDA'), powerWatts: '0', hourlyCost: '2' }), 400);
+    expectStatus(await admin('/production/energy-rate', { method: 'PUT', body: { energyRate: '0,9' } }), 200);
+    const listed = expectStatus(await admin('/production/printers'), 200).printers.find(row => row.id === printer.id);
+    assert.equal(listed.hourCost, '2.18');
+    expectStatus(await post(`/production/printers/${printer.id}/status`, { active: false }), 200);
+    expectStatus(await admin('/production/printers/' + printer.id, { method: 'DELETE' }), 200);
+  });
+
   await t.test('inativação exige saldo zerado, bloqueia movimentações e preserva o histórico', async () => {
     const product = await createProduct('INATIVO', unit.id);
     expectStatus(await movement(product.id, unit.id, 'PURCHASE', '2', '3'), 201);
