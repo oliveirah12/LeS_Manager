@@ -1,7 +1,7 @@
 import {
   BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post,
 } from '@nestjs/common';
-import { Prisma, ReferenceKind } from '@prisma/client';
+import { Prisma, ProductionStatus, ReferenceKind } from '@prisma/client';
 import { z } from 'zod';
 import { Require } from '../access/access';
 import { Audit, auditChange } from '../audit/recorder';
@@ -56,14 +56,17 @@ const kitValues = (kit: AuditedKit) => ({
 const kitAudit = { components: { include: { product: { select: { sku: true } } } } } as const;
 const productUsage = {
   _count: { select: {
-    movements: true, kitComponents: true, recipe: true, usedInRecipes: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } },
+    movements: true, kitComponents: true, recipe: true, usedInRecipes: true, productionItems: true, productionInputs: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } },
   } },
 } as const;
 const kitUsage = { _count: { select: { movements: true } } } as const;
 
 /** Why a product is in use. Such a product cannot be deleted or moved to another unit family. */
-function productBlock(usage: { movements: number; kitComponents: number; inventoryRows: number; recipe: number; usedInRecipes: number }) {
+function productBlock(usage: {
+  movements: number; kitComponents: number; inventoryRows: number; recipe: number; usedInRecipes: number; productionItems: number; productionInputs: number;
+}) {
   if (usage.movements) return 'O produto tem movimentações no histórico.';
+  if (usage.productionItems || usage.productionInputs) return 'O produto consta em ordens de produção.';
   if (usage.kitComponents) return 'O produto compõe um kit.';
   if (usage.inventoryRows) return 'O produto consta em inventário confirmado.';
   if (usage.recipe) return 'O produto tem ficha técnica.';
@@ -145,16 +148,21 @@ export class CatalogService {
   }
 
   async stockView() {
-    const [products, kits] = await Promise.all([
+    const [products, kits, reservations] = await Promise.all([
       this.db.product.findMany({ where: { active: true }, include: productInclude, orderBy: { sku: 'asc' } }),
       this.db.kit.findMany({
         where: { active: true }, include: { components: { include: { product: { include: productInclude } } } }, orderBy: { sku: 'asc' },
       }),
+      this.db.productionConsumption.groupBy({ by: ['inputId'], where: { item: { order: { status: 'PRINTING' } } }, _sum: { planned: true } }),
     ]);
+    const reserved = (id: string) => reservations.find(row => row.inputId === id)?._sum.planned ?? new Prisma.Decimal(0);
     // Values are computed here with exact decimals, so the panel only formats them.
-    const valued = products.map(product => ({ ...product, value: stockValue(product.quantity, product.currentCost) }));
+    const valued = products.map(product => ({ ...product, reserved: reserved(product.id), value: stockValue(product.quantity, product.currentCost) }));
     return {
-      products: valued, kits: kits.map(kit => ({ ...kit, ...kitCosting(kit.components) })),
+      products: valued,
+      kits: kits.map(kit => ({
+        ...kit, ...kitCosting(kit.components.map(item => ({ ...item, product: { ...item.product, reserved: reserved(item.productId) } }))),
+      })),
       totalValue: sumValues(valued.map(product => product.value)),
     };
   }
@@ -249,6 +257,10 @@ export class CatalogService {
         if (recipes.length) {
           throw new ConflictException('Retire ' + product.sku + ' das fichas técnicas de: ' + recipes.map(item => item.product.sku).join(', ') + '.');
         }
+        const open = { in: ['PLANNED', 'PRINTING'] as ProductionStatus[] };
+        const orders = await tx.productionItem.count({ where: { productId: id, order: { status: open } } }) +
+          await tx.productionConsumption.count({ where: { inputId: id, item: { order: { status: open } } } });
+        if (orders) throw new ConflictException('Conclua ou cancele as ordens de produção em aberto que usam ' + product.sku + '.');
       }
       auditChange({ 'Situação': situation(product.active) }, { 'Situação': situation(active) });
       // The revision change invalidates inventory previews that counted this product.

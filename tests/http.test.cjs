@@ -480,6 +480,68 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/production/printers/' + printer.id, { method: 'DELETE' }), 200);
   });
 
+  await t.test('ordem de produção reserva, baixa o consumo real e congela o custo', async () => {
+    const [filamentType, printedType] = [2, 3].map(n => '00000000-0000-4000-8000-00000000000' + n);
+    const typed = async (name, typeId) => {
+      const product = await createProduct(name, unit.id);
+      expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name, typeId } }), 200);
+      return product;
+    };
+    const filament = await typed('ORDEM-FILAMENTO', filamentType);
+    const printed = await typed('ORDEM-PECA', printedType);
+    expectStatus(await movement(filament.id, unit.id, 'PURCHASE', '3000', '0.1'), 201);
+    expectStatus(await admin(`/catalog/products/${printed.id}/recipe`, {
+      method: 'PUT', body: { wastePercent: '5', inputs: [{ inputId: filament.id, unitId: unit.id, quantity: '120' }] },
+    }), 200);
+    expectStatus(await admin('/production/energy-rate', { method: 'PUT', body: { energyRate: '0.9' } }), 200);
+    const printer = expectStatus(await post('/production/printers', { name: sku('ORDEM-IMPRESSORA'), powerWatts: '200', hourlyCost: '2' }), 201);
+    const newOrder = pieces => post('/production/orders', {
+      printerId: printer.id, plannedStart: '2026-11-21T10:00:00.000Z', estimatedMinutes: 600, items: [{ productId: printed.id, quantity: pieces }],
+    });
+    const action = (id, name, body) => post(`/production/orders/${id}/${name}`, body);
+    const started = '2026-11-21T10:00:00.000Z';
+    const closing = { finishedAt: '2026-11-21T20:00:00.000Z', items: [{ productId: printed.id, lost: '1' }], inputs: [{ inputId: filament.id, used: '2520' }] };
+
+    const tooBig = expectStatus(await newOrder('100'), 201);
+    expectStatus(await action(tooBig.id, 'start', { startedAt: started }), 409);
+    expectStatus(await action(tooBig.id, 'cancel', {}), 200);
+
+    const order = expectStatus(await newOrder('20'), 201);
+    assert.equal(order.inputs[0].planned, '2520');
+    expectStatus(await action(order.id, 'finish', closing), 409);
+    expectStatus(await action(order.id, 'start', { startedAt: started }), 200);
+    assert.equal((await productRow(filament.id)).quantity.toString(), '3000');
+    const stock = expectStatus(await admin('/stock'), 200).products.find(row => row.id === filament.id);
+    assert.equal(stock.reserved, '2520');
+    expectStatus(await movement(filament.id, unit.id, 'OUT', '500'), 409);
+    expectStatus(await movement(filament.id, unit.id, 'OUT', '480'), 201);
+
+    const preview = expectStatus(await action(order.id, 'preview', { ...closing, absorbLoss: true }), 200);
+    assert.equal(preview.items[0].unitCost, '14.410526315789');
+    assert.equal((await productRow(printed.id)).quantity.toString(), '0');
+    const finished = expectStatus(await action(order.id, 'finish', closing), 200);
+    assert.equal(finished.status, 'DONE');
+    assert.equal(finished.totalCost, '273.8');
+    assert.equal(finished.items[0].unitCost, '13.69');
+    assert.equal(finished.lossCost, '13.69');
+    assert.equal((await productRow(filament.id)).quantity.toString(), '0');
+    const piece = await productRow(printed.id);
+    assert.equal(piece.quantity.toString(), '19');
+    assert.equal(piece.currentCost.toString(), '13.69');
+    assert.equal(await db.movement.count({ where: { productionOrderId: order.id } }), 2);
+    expectStatus(await action(order.id, 'cancel', {}), 409);
+    expectStatus(await admin('/production/printers/' + printer.id, { method: 'DELETE' }), 409);
+    expectStatus(await admin('/catalog/products/' + printed.id, { method: 'DELETE' }), 409);
+
+    expectStatus(await movement(filament.id, unit.id, 'PURCHASE', '1000', '0.1'), 201);
+    const canceled = expectStatus(await newOrder('5'), 201);
+    expectStatus(await action(canceled.id, 'start', { startedAt: started }), 200);
+    const closed = expectStatus(await action(canceled.id, 'cancel', { inputs: [{ inputId: filament.id, used: '100' }] }), 200);
+    assert.equal(closed.lossCost, '10');
+    assert.equal((await productRow(filament.id)).quantity.toString(), '900');
+    assert.equal(expectStatus(await admin('/stock'), 200).products.find(row => row.id === filament.id).reserved, '0');
+  });
+
   await t.test('inativação exige saldo zerado, bloqueia movimentações e preserva o histórico', async () => {
     const product = await createProduct('INATIVO', unit.id);
     expectStatus(await movement(product.id, unit.id, 'PURCHASE', '2', '3'), 201);

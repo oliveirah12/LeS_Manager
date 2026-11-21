@@ -11,17 +11,22 @@ const controllers = [
   require('../dist/api/catalog/catalog.js').CatalogController,
   require('../dist/api/catalog/recipe.js').RecipeController,
   require('../dist/api/finance/finance.js').FinanceController,
+  require('../dist/api/production/orders.js').ProductionOrderController,
   require('../dist/api/production/production.js').ProductionController,
   require('../dist/api/stock/controller.js').StockController,
 ];
 
 test('production routes require the production permission', () => {
-  const { ProductionController } = require('../dist/api/production/production.js');
-  for (const name of Object.getOwnPropertyNames(ProductionController.prototype)) {
-    const handler = ProductionController.prototype[name];
-    const method = Reflect.getMetadata(METHOD_METADATA, handler);
-    if (method === undefined) continue;
-    assert.deepEqual(Reflect.getMetadata('permissions', handler), [method === RequestMethod.GET ? 'production:view' : 'production:operate'], name);
+  const productionControllers = [
+    require('../dist/api/production/production.js').ProductionController, require('../dist/api/production/orders.js').ProductionOrderController,
+  ];
+  for (const controller of productionControllers) {
+    for (const name of Object.getOwnPropertyNames(controller.prototype)) {
+      const handler = controller.prototype[name];
+      const method = Reflect.getMetadata(METHOD_METADATA, handler);
+      if (method === undefined) continue;
+      assert.deepEqual(Reflect.getMetadata('permissions', handler), [method === RequestMethod.GET ? 'production:view' : 'production:operate'], name);
+    }
   }
 });
 

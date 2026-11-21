@@ -14,6 +14,7 @@ import { RecipeController, RecipeService } from './catalog/recipe';
 import { BankConnectionService } from './finance/connection';
 import { FinanceController, FinanceService } from './finance/finance';
 import { HealthController } from './health';
+import { ProductionOrderController, ProductionOrderService } from './production/orders';
 import { ProductionController, ProductionService } from './production/production';
 import { Database, DatabaseErrors } from './shared';
 import { StockController } from './stock/controller';
@@ -29,13 +30,15 @@ class AccessModule {}
 @Module({ controllers: [CatalogController, RecipeController], providers: [CatalogService, RecipeService], exports: [CatalogService] })
 class CatalogModule {}
 
-@Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService, PreviewCleanup] })
+@Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService, PreviewCleanup], exports: [StockService] })
 class StockModule {}
 
 @Module({ controllers: [FinanceController], providers: [FinanceService, BankConnectionService] })
 class FinanceModule {}
 
-@Module({ controllers: [ProductionController], providers: [ProductionService] })
+@Module({
+  imports: [StockModule], controllers: [ProductionController, ProductionOrderController], providers: [ProductionService, ProductionOrderService],
+})
 class ProductionModule {}
 
 @Module({ controllers: [AuditController], providers: [AuditRetention] })

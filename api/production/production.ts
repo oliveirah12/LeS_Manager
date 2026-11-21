@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, ConflictException, Controller, Delete, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post, Put } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { Require } from '../access/access';
@@ -19,6 +19,7 @@ const printerValues = (printer: { name: string; powerWatts: Prisma.Decimal; hour
   Nome: printer.name, 'Potência (W)': printer.powerWatts.toFixed(), 'Custo por hora': printer.hourlyCost.toFixed(),
 });
 const situation = (active: boolean) => active ? 'Ativa' : 'Inativa';
+const printerBlock = (orders: number) => orders ? 'A impressora já foi usada em ordens de produção.' : null;
 
 @Injectable()
 export class ProductionService {
@@ -27,11 +28,13 @@ export class ProductionService {
   async printers() {
     const [settings, printers] = await Promise.all([
       this.db.productionSettings.findUniqueOrThrow({ where: { id: settingsId } }),
-      this.db.printer.findMany({ orderBy: { name: 'asc' } }),
+      this.db.printer.findMany({ include: { _count: { select: { orders: true } } }, orderBy: { name: 'asc' } }),
     ]);
     return {
       energyRate: settings.energyRate,
-      printers: printers.map(printer => ({ ...printer, hourCost: printerHourCost(printer.powerWatts, settings.energyRate, printer.hourlyCost) })),
+      printers: printers.map(({ _count, ...printer }) => ({
+        ...printer, deleteBlock: printerBlock(_count.orders), hourCost: printerHourCost(printer.powerWatts, settings.energyRate, printer.hourlyCost),
+      })),
     };
   }
 
@@ -56,8 +59,10 @@ export class ProductionService {
 
   deletePrinter(id: string) {
     return serial(this.db, async tx => {
-      const printer = await tx.printer.findUnique({ where: { id } });
+      const printer = await tx.printer.findUnique({ where: { id }, include: { _count: { select: { orders: true } } } });
       if (!printer) throw new NotFoundException('Impressora não encontrada.');
+      const block = printerBlock(printer._count.orders);
+      if (block) throw new ConflictException(block + ' Inative a impressora em vez de excluir.');
       await tx.printer.delete({ where: { id } });
       auditChange(printerValues(printer), null);
       return { id };

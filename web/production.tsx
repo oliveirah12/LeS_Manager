@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Pencil, Plus, Power, PowerOff, Trash2, Zap } from 'lucide-react';
-import { api, Badge, brl, decimal, Field, fields, Loading, message, ModalForm, notify, PageActions, Section, Table, useData } from './ui';
+import { api, Badge, brl, decimal, Field, fields, Loading, message, Modal, ModalForm, notify, PageActions, Section, Table, useData } from './ui';
 
-type Printer = { id: string; name: string; powerWatts: string; hourlyCost: string; hourCost: string; active: boolean };
+type Printer = { id: string; name: string; powerWatts: string; hourlyCost: string; hourCost: string; active: boolean; deleteBlock: string | null };
 type PrinterView = { energyRate: string; printers: Printer[] };
 
 export function Printers({ edit }: { edit: boolean }) {
@@ -34,7 +34,8 @@ export function Printers({ edit }: { edit: boolean }) {
             <button type="button" className="btn secondary small" onClick={() => setPrinter(row)}><Pencil size={14} aria-hidden="true" />Editar</button>
             <button type="button" className="btn ghost small" onClick={() => setStatus(row)}>
               {row.active ? <PowerOff size={14} aria-hidden="true" /> : <Power size={14} aria-hidden="true" />}{row.active ? 'Inativar' : 'Reativar'}</button>
-            <button type="button" className="btn ghost small" onClick={() => setRemoval(row)}><Trash2 size={14} aria-hidden="true" />Excluir</button>
+            <button type="button" className={'btn ghost small' + (row.deleteBlock ? ' unavailable' : '')} title={row.deleteBlock ?? undefined}
+              onClick={() => setRemoval(row)}><Trash2 size={14} aria-hidden="true" />Excluir</button>
           </div>] : []),
         ])} />
     </div>}
@@ -67,7 +68,10 @@ export function Printers({ edit }: { edit: boolean }) {
       }}>
       <p className="muted">{status.active ? 'A impressora deixa de aparecer para novas produções.' : 'A impressora volta a aparecer para novas produções.'}</p>
     </ModalForm>}
-    {edit && removal && <ModalForm title={'Excluir ' + removal.name} label="Excluir definitivamente" danger close={() => setRemoval(undefined)} action={async () => {
+    {edit && removal?.deleteBlock && <Modal title={'Não é possível excluir ' + removal.name} close={() => setRemoval(undefined)}>
+      <p className="muted">{removal.deleteBlock} Se ela saiu de uso, use Inativar para preservar o histórico.</p>
+    </Modal>}
+    {edit && removal && !removal.deleteBlock && <ModalForm title={'Excluir ' + removal.name} label="Excluir definitivamente" danger close={() => setRemoval(undefined)} action={async () => {
       await api('production/printers/' + removal.id, undefined, 'DELETE');
       await done(removal.name + ' excluída.');
     }}>

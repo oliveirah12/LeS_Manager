@@ -13,7 +13,7 @@ type CountPreview = { id: string; rows: { product: { sku: string; name: string; 
 type InitialPreview = { id: string; rows: { sku: string; name: string; unit: string; quantity: string; unitCost?: string }[] };
 type Dialog = { kind: 'movement'; product?: Product } | { kind: 'kit'; kit: Kit } | { kind: 'kitDetails'; kit: StockKit } | { kind: 'inventory' } | { kind: 'initial' };
 const kinds = [{ id: 'PURCHASE', name: 'Compra' }, { id: 'OUT', name: 'Saída' }, { id: 'ADJUSTMENT', name: 'Ajuste' }] as const;
-const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário' };
+const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário', PRODUCTION_IN: 'Entrada de produção', PRODUCTION_OUT: 'Consumo de produção' };
 
 export function Stock({ edit, importInitial }: { edit: boolean; importInitial: boolean }) {
   const stock = useData<StockView>('stock');
@@ -78,7 +78,8 @@ function Balances({ data, edit, move }: { data: StockView; edit: boolean; move: 
       rows={rows.map(product => [
         <Title name={product.name} code={product.sku} />,
         Number(product.quantity) === 0 ? <Badge tone="warn">Sem saldo</Badge> :
-          <span><strong>{quantity(product.quantity)}</strong> <span className="muted">{baseUnit(product).symbol}</span></span>,
+          <span><strong>{quantity(product.quantity)}</strong> <span className="muted">{baseUnit(product).symbol}</span>
+            {Number(product.reserved) > 0 && <span className="hint" style={{ display: 'block' }}>{quantity(product.reserved!)} reservado</span>}</span>,
         brl(product.currentCost), <span className="muted">{brl(product.lastPurchaseCost)}</span>,
         <strong>{brl(product.value)}</strong>,
         ...(edit ? [<button type="button" className="btn secondary small" onClick={() => move(product)}><ArrowLeftRight size={14} aria-hidden="true" />Movimentar</button>] : []),
@@ -203,7 +204,8 @@ function MovementForm({ data, initial, saved }: { data: StockView; initial?: Pro
     </fieldset>
     <Select name="productId" label="Produto" defaultValue={initial?.id} options={productOptions(data.products)}
       onChange={id => { setProduct(id); setUnit(data.products.find(item => item.id === id)?.unit.id ?? ''); }} />
-    {product && <p className="hint">Saldo atual: <strong>{quantity(product.quantity)} {baseUnit(product).symbol}</strong> · custo médio {brl(product.currentCost)}</p>}
+    {product && <p className="hint">Saldo atual: <strong>{quantity(product.quantity)} {baseUnit(product).symbol}</strong> · custo médio {brl(product.currentCost)}
+      {Number(product.reserved) > 0 && <> · <strong>{quantity(product.reserved!)} {baseUnit(product).symbol}</strong> reservado para impressão</>}</p>}
     <div className="form-grid">
       <label>{kind === 'ADJUSTMENT' ? 'Variação (+ entrada / − saída)' : 'Quantidade'}
         <input name="quantity" inputMode="decimal" required value={amount} onChange={event => setAmount(event.target.value)} /></label>
