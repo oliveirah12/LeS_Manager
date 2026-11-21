@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost, costPerBaseUnit, kitCosting, printerHourCost, productionCosting } = require('../dist/api/stock/cost.js');
+const { averageCost, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting } = require('../dist/api/stock/cost.js');
 
 const d = value => new Prisma.Decimal(value);
 const average = (balance, current, quantity, cost) =>
@@ -112,6 +112,35 @@ test('real consumption is shared by the planned share of each item', () => {
     used: new Map([['pla', d('200')]]), machineCost: d('0'), absorbLoss: false,
   });
   assert.deepEqual(job.rows.map(row => row.used.toString()), ['150', '50']);
+});
+
+test('the budget of a planned order keeps a shared input at its planned amount', () => {
+  const budget = productionBudget({
+    items: [{ productId: 'a', planned: d('3') }, { productId: 'b', planned: d('1') }],
+    rows: [
+      { productId: 'a', inputId: 'pla', planned: d('75'), familyId: 'mass', unitCost: d('0.1') },
+      { productId: 'b', inputId: 'pla', planned: d('25'), familyId: 'mass', unitCost: d('0.1') },
+    ],
+    minutes: 90, hourCost: d('2'),
+  });
+  assert.equal(budget.machineCost.toString(), '3');
+  assert.equal(budget.materialCost.toString(), '10');
+  assert.equal(budget.totalCost.toString(), '13');
+  assert.deepEqual(budget.items.map(item => item.unitCost.toString()), ['3.25', '3.25']);
+  assert.equal(budget.partialCost, false);
+});
+
+test('the budget is partial when an input has no known cost', () => {
+  const budget = productionBudget({
+    items: [{ productId: 'a', planned: d('2') }],
+    rows: [
+      { productId: 'a', inputId: 'pla', planned: d('10'), familyId: 'mass', unitCost: d('1') },
+      { productId: 'a', inputId: 'paint', planned: d('5'), familyId: 'mass', unitCost: null },
+    ],
+    minutes: 60, hourCost: d('1'),
+  });
+  assert.equal(budget.totalCost.toString(), '11');
+  assert.equal(budget.partialCost, true);
 });
 
 test('reserved balance does not count toward the kits available', () => {

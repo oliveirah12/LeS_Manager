@@ -76,6 +76,25 @@ export function productionCosting({ items, rows, used, machineCost, absorbLoss }
   };
 }
 
+/**
+ * Estimate of an order that has not run: planned inputs at their current cost and the estimated machine time.
+ * It is never stored, so it follows every change in cost, printer or energy rate until the order finishes.
+ */
+export function productionBudget({ items, rows, minutes, hourCost }: {
+  items: Omit<CostingItem, 'lost'>[]; rows: CostingRow[]; minutes: number; hourCost: Prisma.Decimal;
+}) {
+  const used = new Map<string, Prisma.Decimal>();
+  for (const row of rows) used.set(row.inputId, (used.get(row.inputId) ?? new Prisma.Decimal(0)).plus(row.planned));
+  const machineCost = hourCost.times(minutes).div(60).toDecimalPlaces(12);
+  const costing = productionCosting({
+    items: items.map(item => ({ ...item, lost: new Prisma.Decimal(0) })), rows, used, machineCost, absorbLoss: false,
+  });
+  return {
+    machineCost, materialCost: costing.totalCost.minus(machineCost), totalCost: costing.totalCost, partialCost: costing.partialCost,
+    items: costing.items.map(item => ({ productId: item.productId, totalCost: item.totalCost, unitCost: item.fullUnitCost })),
+  };
+}
+
 type CostedComponent = {
   quantity: Prisma.Decimal; product: { quantity: Prisma.Decimal; currentCost: Prisma.Decimal | null; reserved?: Prisma.Decimal };
 };

@@ -18,6 +18,11 @@ type Order = {
   id: string; number: number; status: Status; notes: string | null; printer: { id: string; name: string }; user: { name: string };
   plannedStart: string; estimatedMinutes: number; expectedEnd: string; startedAt: string | null; finishedAt: string | null; printMinutes: number | null;
   machineCost: string | null; totalCost: string | null; lossCost: string | null; absorbLoss: boolean; items: OrderItem[]; inputs: OrderInput[];
+  budget: Budget | null;
+};
+type Budget = {
+  machineCost: string; materialCost: string; totalCost: string; partialCost: boolean; missingCost: string[];
+  items: { productId: string; totalCost: string; unitCost: string }[];
 };
 type OrdersView = { orders: Order[]; printers: { id: string; name: string }[]; products: { id: string; sku: string; name: string; symbol: string }[] };
 type PreviewItem = { productId: string; sku: string; name: string; symbol: string; good: string; lost: string; unitCost: string | null; fullUnitCost: string; lossCost: string };
@@ -48,7 +53,9 @@ export function ProductionOrders({ edit }: { edit: boolean }) {
         <span className="cell-title">#{order.number}</span>,
         <span>{order.items.map(item => quantity(item.planned) + ' ' + item.symbol + ' ' + item.sku).join(' · ')}</span>,
         order.printer.name, <Badge tone={statuses[order.status].tone}>{statuses[order.status].name}</Badge>,
-        <span className="muted">{dateTime(order.finishedAt ?? order.expectedEnd)}</span>, brl(order.totalCost),
+        <span className="muted">{dateTime(order.finishedAt ?? order.expectedEnd)}</span>,
+        order.budget ? <span title="Estimativa com os custos atuais. Nada é congelado até concluir.">≈ {brl(order.budget.totalCost)}
+          <span className="hint" style={{ display: 'block' }}>{order.budget.partialCost ? 'Orçamento parcial' : 'Orçamento'}</span></span> : brl(order.totalCost),
         <div className="actions">
           <button type="button" className="btn ghost small" aria-label={'Ver ordem ' + order.number} onClick={() => open('details', order)}><Eye size={14} aria-hidden="true" />Ver</button>
           {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" onClick={() => open('start', order)}><Play size={14} aria-hidden="true" />Iniciar</button>}
@@ -244,11 +251,30 @@ function OrderDetails({ order }: { order: Order }) {
       {order.lossCost !== null && <div><dt>Valor da perda</dt><dd>{brl(order.lossCost)}{order.absorbLoss ? ' (embutida nas peças boas)' : ''}</dd></div>}
       {order.notes && <div><dt>Observação</dt><dd>{order.notes}</dd></div>}
     </dl>
-    <Table responsive={false} columns={['Produto', { label: 'Ordem', end: true }, ...(finished ? [{ label: 'Boas', end: true }, { label: 'Perdidas', end: true }, { label: 'Custo por peça', end: true }] : [])]}
-      rows={order.items.map(item => [
-        <Title name={item.name} code={item.sku} />, quantity(item.planned) + ' ' + item.symbol,
-        ...(finished ? [quantity(item.good ?? '0'), quantity(item.lost ?? '0'), brl(item.unitCost)] : []),
-      ])} />
+    {order.budget && <BudgetSummary budget={order.budget} minutes={order.estimatedMinutes} />}
+    <Table responsive={false} columns={['Produto', { label: 'Ordem', end: true },
+      ...(finished ? [{ label: 'Boas', end: true }, { label: 'Perdidas', end: true }, { label: 'Custo por peça', end: true }] : []),
+      ...(order.budget ? [{ label: 'Total estimado', end: true }, { label: 'Estimado por peça', end: true }] : [])]}
+      rows={order.items.map(item => {
+        const estimate = order.budget?.items.find(row => row.productId === item.productId);
+        return [
+          <Title name={item.name} code={item.sku} />, quantity(item.planned) + ' ' + item.symbol,
+          ...(finished ? [quantity(item.good ?? '0'), quantity(item.lost ?? '0'), brl(item.unitCost)] : []),
+          ...(order.budget ? ['≈ ' + brl(estimate?.totalCost), '≈ ' + brl(estimate?.unitCost)] : []),
+        ];
+      })} />
     <InputsTable inputs={order.inputs} />
   </div>;
+}
+
+function BudgetSummary({ budget, minutes }: { budget: Budget; minutes: number }) {
+  return <>
+    <div className="info"><strong>Orçamento estimado.</strong> Usa o custo médio, a impressora e a tarifa de agora. Nada é congelado até a ordem ser concluída.</div>
+    {budget.partialCost && <div className="info" role="alert"><strong>Orçamento parcial.</strong> Sem custo registrado: {budget.missingCost.join(', ')}. O total considera apenas os demais insumos.</div>}
+    <dl className="dl">
+      <div><dt>Insumos previstos</dt><dd>≈ {brl(budget.materialCost)}</dd></div>
+      <div><dt>Máquina e energia ({duration(minutes)})</dt><dd>≈ {brl(budget.machineCost)}</dd></div>
+      <div><dt>Total estimado</dt><dd><strong>≈ {brl(budget.totalCost)}</strong></dd></div>
+    </dl>
+  </>;
 }
