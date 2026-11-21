@@ -542,6 +542,38 @@ test('API REST com PostgreSQL', {
     assert.equal(expectStatus(await admin('/stock'), 200).products.find(row => row.id === filament.id).reserved, '0');
   });
 
+  await t.test('famílias e unidades só mudam o que não afeta o histórico', async () => {
+    const id = 'M' + Date.now();
+    const patch = (path, body) => admin(path, { method: 'PATCH', body });
+    const remove = path => admin(path, { method: 'DELETE' });
+    const family = expectStatus(await post('/catalog/families', { name: 'Família ' + id, baseSymbol: id + 'b' }), 201);
+    const base = family.units[0];
+    const box = expectStatus(await post('/catalog/units', { familyId: family.id, symbol: id + 'c', factor: '12' }), 201);
+    const spare = expectStatus(await post('/catalog/units', { familyId: family.id, symbol: id + 'd', factor: '6' }), 201);
+
+    expectStatus(await patch('/catalog/families/' + family.id, { name: 'Renomeada ' + id }), 200);
+    expectStatus(await patch('/catalog/units/' + base.id, { symbol: base.symbol, factor: '2' }), 409);
+    assert.equal(expectStatus(await patch('/catalog/units/' + spare.id, { symbol: spare.symbol, factor: '24' }), 200).factor, '24');
+    expectStatus(await remove('/catalog/units/' + base.id), 409);
+    expectStatus(await remove('/catalog/units/' + spare.id), 200);
+
+    const product = await createProduct('MEDIDA', base.id);
+    expectStatus(await remove('/catalog/families/' + family.id), 409);
+    expectStatus(await movement(product.id, box.id, 'PURCHASE', '1', '24'), 201);
+    assert.equal((await productRow(product.id)).quantity.toString(), '12');
+    expectStatus(await patch('/catalog/units/' + box.id, { symbol: box.symbol, factor: '10' }), 409);
+    expectStatus(await remove('/catalog/units/' + box.id), 409);
+    expectStatus(await patch('/catalog/units/' + box.id, { symbol: id + 'x', factor: '12' }), 200);
+    const listed = expectStatus(await admin('/catalog/registrations'), 200).units.find(row => row.id === box.id);
+    assert.ok(listed.factorBlock);
+    assert.ok(listed.deleteBlock);
+
+    const empty = expectStatus(await post('/catalog/families', { name: 'Vazia ' + id, baseSymbol: id + 'v' }), 201);
+    expectStatus(await post('/catalog/units', { familyId: empty.id, symbol: id + 'w', factor: '5' }), 201);
+    expectStatus(await remove('/catalog/families/' + empty.id), 200);
+    assert.equal(await db.unit.count({ where: { familyId: empty.id } }), 0);
+  });
+
   await t.test('inativação exige saldo zerado, bloqueia movimentações e preserva o histórico', async () => {
     const product = await createProduct('INATIVO', unit.id);
     expectStatus(await movement(product.id, unit.id, 'PURCHASE', '2', '3'), 201);

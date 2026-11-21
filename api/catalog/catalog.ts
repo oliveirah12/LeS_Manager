@@ -15,6 +15,7 @@ const unitField = z.object({
   familyId: idField, symbol: symbolField,
   factor: positive.refine(value => value.lt('1000000000000'), 'Fator fora da precisão permitida'),
 });
+const unitUpdate = unitField.omit({ familyId: true });
 export const productFields = z.object({
   sku: skuField, name: nameField, unitId: idField, typeId: idField.optional(),
   groupId: idField.nullish(), brandId: idField.nullish(), colorId: idField.nullish(), departmentId: idField.nullish(),
@@ -77,6 +78,30 @@ function productTypeBlock(id: string, products: number) {
   if (id === defaultProductType) return 'Este é o tipo padrão dos produtos.';
   return products ? 'O tipo está em uso por ' + products + (products === 1 ? ' produto.' : ' produtos.') : null;
 }
+/**
+ * Stored quantities do not record the unit that was typed, so any balance or history
+ * in a family means its conversion factors may already be part of the data.
+ */
+const usedProduct: Prisma.ProductWhereInput = {
+  OR: [
+    { quantity: { not: 0 } }, { movements: { some: {} } }, { kitComponents: { some: {} } }, { inventoryRows: { some: {} } },
+    { recipe: { some: {} } }, { usedInRecipes: { some: {} } }, { productionItems: { some: {} } }, { productionInputs: { some: {} } },
+  ],
+};
+const familyInUseMessage = 'A família já tem saldo ou histórico.';
+const familyBlock = (products: number) => products ? 'A família tem produtos cadastrados.' : null;
+function unitFactorBlock(unit: { isBase: boolean }, familyInUse: boolean) {
+  if (unit.isBase) return 'A unidade base sempre tem fator 1.';
+  return familyInUse ? familyInUseMessage : null;
+}
+function unitDeleteBlock(unit: { isBase: boolean }, products: number, familyInUse: boolean) {
+  if (unit.isBase) return 'A unidade base só sai junto com a família.';
+  if (products) return 'Há produtos cadastrados nesta unidade.';
+  return familyInUse ? familyInUseMessage : null;
+}
+const unitValues = (unit: { symbol: string; factor: Prisma.Decimal; family: { name: string } }) => ({
+  'Símbolo': unit.symbol, Fator: unit.factor.toFixed(), 'Família': unit.family.name,
+});
 const yesNo = (value: boolean) => value ? 'Sim' : 'Não';
 const productTypeValues = (type: z.infer<typeof productTypeFields>) => ({
   Nome: type.name, 'Usado como insumo': yesNo(type.isInput), 'É fabricado': yesNo(type.isManufactured),
@@ -92,16 +117,85 @@ export class CatalogService {
   constructor(@Inject(Database) private db: Database) {}
 
   async registrations() {
-    const [families, units, references, types] = await Promise.all([
+    const [families, units, references, types, usedUnits] = await Promise.all([
       this.db.unitFamily.findMany({ orderBy: { name: 'asc' } }),
-      this.db.unit.findMany({ orderBy: { symbol: 'asc' } }),
+      this.db.unit.findMany({ include: { _count: { select: { products: true } } }, orderBy: { symbol: 'asc' } }),
       this.db.reference.findMany({ orderBy: [{ kind: 'asc' }, { name: 'asc' }] }),
       this.db.productType.findMany({ include: { _count: { select: { products: true } } }, orderBy: { name: 'asc' } }),
+      this.db.unit.findMany({ where: { products: { some: usedProduct } }, select: { familyId: true }, distinct: ['familyId'] }),
     ]);
     const productTypes = types.map(({ _count, ...type }) => ({
       ...type, products: _count.products, isDefault: type.id === defaultProductType, deleteBlock: productTypeBlock(type.id, _count.products),
     }));
-    return { families, units, references, productTypes };
+    const inUse = new Set(usedUnits.map(unit => unit.familyId));
+    return {
+      references, productTypes,
+      families: families.map(family => ({
+        ...family,
+        deleteBlock: familyBlock(units.filter(unit => unit.familyId === family.id).reduce((total, unit) => total + unit._count.products, 0)),
+      })),
+      units: units.map(({ _count, ...unit }) => ({
+        ...unit,
+        factorBlock: unitFactorBlock(unit, inUse.has(unit.familyId)),
+        deleteBlock: unitDeleteBlock(unit, _count.products, inUse.has(unit.familyId)),
+      })),
+    };
+  }
+
+  private async familyInUse(tx: Prisma.TransactionClient, familyId: string) {
+    return await tx.product.count({ where: { unit: { familyId }, ...usedProduct } }) > 0;
+  }
+
+  updateFamily(id: string, name: string) {
+    return serial(this.db, async tx => {
+      const before = await tx.unitFamily.findUnique({ where: { id } });
+      if (!before) throw new NotFoundException('Família não encontrada.');
+      auditChange({ Nome: before.name }, { Nome: name });
+      return tx.unitFamily.update({ where: { id }, data: { name } });
+    });
+  }
+
+  /** A family without products goes away with all of its units. */
+  deleteFamily(id: string) {
+    return serial(this.db, async tx => {
+      const family = await tx.unitFamily.findUnique({ where: { id }, include: { units: { orderBy: { symbol: 'asc' } } } });
+      if (!family) throw new NotFoundException('Família não encontrada.');
+      const block = familyBlock(await tx.product.count({ where: { unit: { familyId: id } } }));
+      if (block) throw new ConflictException(block);
+      await tx.unit.deleteMany({ where: { familyId: id } });
+      await tx.unitFamily.delete({ where: { id } });
+      auditChange({ Nome: family.name, Unidades: family.units.map(unit => unit.symbol) }, null);
+      return { id };
+    });
+  }
+
+  updateUnit(id: string, data: z.infer<typeof unitUpdate>) {
+    return serial(this.db, async tx => {
+      const before = await tx.unit.findUnique({ where: { id }, include: { family: { select: { name: true } } } });
+      if (!before) throw new NotFoundException('Unidade não encontrada.');
+      if (!data.factor.eq(before.factor)) {
+        const block = unitFactorBlock(before, await this.familyInUse(tx, before.familyId));
+        if (block) throw new ConflictException(block + ' O fator não pode mudar.');
+      }
+      const unit = await tx.unit.update({ where: { id }, data, include: { family: { select: { name: true } } } });
+      auditChange(unitValues(before), unitValues(unit));
+      const { family: _family, ...saved } = unit;
+      return saved;
+    });
+  }
+
+  deleteUnit(id: string) {
+    return serial(this.db, async tx => {
+      const unit = await tx.unit.findUnique({
+        where: { id }, include: { family: { select: { name: true } }, _count: { select: { products: true } } },
+      });
+      if (!unit) throw new NotFoundException('Unidade não encontrada.');
+      const block = unitDeleteBlock(unit, unit._count.products, await this.familyInUse(tx, unit.familyId));
+      if (block) throw new ConflictException(block);
+      await tx.unit.delete({ where: { id } });
+      auditChange(unitValues(unit), null);
+      return { id };
+    });
   }
 
   saveProductType(data: z.infer<typeof productTypeFields>, id?: string) {
@@ -365,7 +459,7 @@ export class CatalogController {
   removeProductType(@Param('id') id: string) { return this.catalog.deleteProductType(parse(idField, id)); }
 
   // Units define how every quantity is stored, so only administrators create families and units.
-  // Units cannot be edited, since the movement history already holds quantities converted with them.
+  // The movement history holds quantities converted with these factors, so a factor only changes while the family is unused.
   @Require('admin')
   @Audit('Criar família de medida')
   @Post('families')
@@ -388,6 +482,30 @@ export class CatalogController {
     const { family: _family, ...saved } = unit;
     return saved;
   }
+
+  @Require('admin')
+  @Audit('Alterar família de medida')
+  @Patch('families/:id')
+  updateFamily(@Param('id') id: string, @Body() body: unknown) {
+    return this.catalog.updateFamily(parse(idField, id), parse(familyField.pick({ name: true }), body).name);
+  }
+
+  @Require('admin')
+  @Audit('Excluir família de medida')
+  @Delete('families/:id')
+  removeFamily(@Param('id') id: string) { return this.catalog.deleteFamily(parse(idField, id)); }
+
+  @Require('admin')
+  @Audit('Alterar unidade')
+  @Patch('units/:id')
+  updateUnit(@Param('id') id: string, @Body() body: unknown) {
+    return this.catalog.updateUnit(parse(idField, id), parse(unitUpdate, body));
+  }
+
+  @Require('admin')
+  @Audit('Excluir unidade')
+  @Delete('units/:id')
+  removeUnit(@Param('id') id: string) { return this.catalog.deleteUnit(parse(idField, id)); }
 
   @Require('catalog:operate')
   @Audit('Criar produto')
