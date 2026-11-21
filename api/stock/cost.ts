@@ -32,6 +32,18 @@ export function printerHourCost(powerWatts: Prisma.Decimal, energyRate: Prisma.D
   return powerWatts.div(1000).times(energyRate).plus(hourlyCost).toDecimalPlaces(12);
 }
 
+/** Compares the free balance with the minimum, because reserved inputs are already spoken for. */
+export function belowMinimum(quantity: Prisma.Decimal, reserved: Prisma.Decimal, minStock: Prisma.Decimal | null) {
+  return minStock !== null && minStock.gt(0) && quantity.minus(reserved).lt(minStock);
+}
+
+/** Profit per unit and margin over the sale price. Without a price or a known cost there is no margin to show. */
+export function saleMargin(salePrice: Prisma.Decimal | null, cost: Prisma.Decimal | null) {
+  if (salePrice === null || cost === null || salePrice.lte(0)) return null;
+  const profit = salePrice.minus(cost).toDecimalPlaces(12);
+  return { profit, percent: profit.div(salePrice).times(100).toDecimalPlaces(2) };
+}
+
 type CostingItem = { productId: string; planned: Prisma.Decimal; lost: Prisma.Decimal };
 type CostingRow = { productId: string; inputId: string; planned: Prisma.Decimal; familyId: string; unitCost: Prisma.Decimal | null };
 
@@ -73,6 +85,45 @@ export function productionCosting({ items, rows, used, machineCost, absorbLoss }
     items: costed, rows: allocated,
     totalCost: sumValues(costed.map(item => item.totalCost)), lossCost: sumValues(costed.map(item => item.lossCost)),
     partialCost: allocated.some(row => row.unitCost === null && row.used.gt(0)),
+  };
+}
+
+/**
+ * Estimate of an order that has not run: planned inputs at their current cost and the estimated machine time.
+ * It is never stored, so it follows every change in cost, printer or energy rate until the order finishes.
+ */
+export function productionBudget({ items, rows, minutes, hourCost }: {
+  items: Omit<CostingItem, 'lost'>[]; rows: CostingRow[]; minutes: number; hourCost: Prisma.Decimal;
+}) {
+  const used = new Map<string, Prisma.Decimal>();
+  for (const row of rows) used.set(row.inputId, (used.get(row.inputId) ?? new Prisma.Decimal(0)).plus(row.planned));
+  const machineCost = hourCost.times(minutes).div(60).toDecimalPlaces(12);
+  const costing = productionCosting({
+    items: items.map(item => ({ ...item, lost: new Prisma.Decimal(0) })), rows, used, machineCost, absorbLoss: false,
+  });
+  return {
+    machineCost, materialCost: costing.totalCost.minus(machineCost), totalCost: costing.totalCost, partialCost: costing.partialCost,
+    items: costing.items.map(item => ({ productId: item.productId, totalCost: item.totalCost, unitCost: item.fullUnitCost })),
+  };
+}
+
+/**
+ * What one piece of a recipe costs in inputs, waste included, and how many pieces the free balance yields.
+ * Reserved balance and inactive inputs cannot be used by a new order.
+ */
+export function recipeEstimate(wastePercent: Prisma.Decimal, rows: {
+  sku: string; quantity: Prisma.Decimal; active: boolean; balance: Prisma.Decimal; reserved: Prisma.Decimal; unitCost: Prisma.Decimal | null;
+}[]) {
+  const factor = wastePercent.div(100).plus(1);
+  const lines = rows.map(row => {
+    const needed = row.quantity.times(factor).toDecimalPlaces(12);
+    const free = row.active ? Prisma.Decimal.max(0, row.balance.minus(row.reserved)) : new Prisma.Decimal(0);
+    return { sku: row.sku, needed, yields: free.div(needed).floor(), cost: row.unitCost?.times(needed).toDecimalPlaces(12) ?? null };
+  });
+  const limiting = lines.reduce((lowest, line) => line.yields.lt(lowest.yields) ? line : lowest, lines[0]);
+  return {
+    unitCost: sumValues(lines.flatMap(line => line.cost ?? [])), partialCost: lines.some(line => line.cost === null),
+    producible: limiting.yields, limiting: limiting.sku,
   };
 }
 

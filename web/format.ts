@@ -27,6 +27,44 @@ export const displayDate = (value: string) => value.split('-').reverse().join('/
 export const accessible = (permissions: string[], permission: string) => permissions.includes('admin') || permissions.includes(permission) ||
   (permission.endsWith(':view') && permissions.includes(permission.replace(':view', ':operate')));
 
+/**
+ * Suggests the real consumption of an input from the lost pieces and how much of them was printed.
+ * Only a starting value for an editable field: the API stores what the person confirms.
+ */
+export function suggestedConsumption(
+  planned: string, parts: { productId: string; planned: string }[],
+  items: { productId: string; planned: string; lost: string; printedPercent: string }[],
+) {
+  const number = (value: string) => Number(value.trim().replace(',', '.'));
+  const saved = parts.reduce((total, part) => {
+    const item = items.find(row => row.productId === part.productId);
+    if (!item) return total;
+    const lost = number(item.lost);
+    const printed = item.printedPercent.trim() ? number(item.printedPercent) : 100;
+    if (!(lost > 0) || !(lost <= number(item.planned)) || !(printed >= 0 && printed <= 100)) return total;
+    return total + number(part.planned) * (lost / number(item.planned)) * (1 - printed / 100);
+  }, 0);
+  if (saved <= 0) return planned;
+  return String(Math.round(Math.max(0, number(planned) - saved) * 1000) / 1000);
+}
+
+export type TableFilter<T> = {
+  id: string; label: string; options: { id: string; name: string }[];
+  /** The row's value for this filter. A list matches when any of its values was selected. */
+  value: (row: T) => string | string[] | null | undefined;
+};
+export const yesNoOptions = [{ id: 'yes', name: 'Sim' }, { id: 'no', name: 'Não' }];
+export const yesNo = (value: boolean) => value ? 'yes' : 'no';
+
+/** Keeps the rows that match every selected filter. An empty selection does not filter. */
+export function applyFilters<T>(rows: T[], filters: TableFilter<T>[], selected: Record<string, string>) {
+  const active = filters.filter(filter => selected[filter.id]);
+  return rows.filter(row => active.every(filter => {
+    const value = filter.value(row);
+    return Array.isArray(value) ? value.includes(selected[filter.id]) : value === selected[filter.id];
+  }));
+}
+
 /** Finds the screen whose path matches the address hash, ignoring case, slashes at the ends and URL encoding. */
 export function pageFromHash<P extends string>(hash: string, paths: Record<P, string>): P | undefined {
   let path = hash.replace(/^#\/?/, '').replace(/\/+$/, '');

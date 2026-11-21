@@ -47,6 +47,7 @@ function StockSummary({ navigate }: { navigate: (page: Page) => void }) {
   const history = useData<{ movements: Movement[] }>('stock/movements');
   const products = view.data?.products ?? [];
   const empty = products.filter(product => Number(product.quantity) === 0);
+  const below = products.filter(product => product.belowMinimum);
   const kits = view.data?.kits ?? [];
   return <section className="stack" aria-labelledby="home-stock">
     <div className="section-head">
@@ -78,7 +79,7 @@ function StockSummary({ navigate }: { navigate: (page: Page) => void }) {
       </section>
       <section className="card">
         <div className="section-head" style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)' }}><h3>Sem saldo</h3>
-          {empty.length > 0 && <span className="badge warn">{empty.length}</span>}</div>
+          {empty.length > 0 && <span className="badge tone-warn">{empty.length}</span>}</div>
         {view.data && (empty.length ? <div className="list">{empty.slice(0, 5).map(product =>
           <button type="button" className="list-row" key={product.id} onClick={() => navigate('stock')}>
             <span className="icon-tile warn"><PackageX size={16} aria-hidden="true" /></span>
@@ -86,6 +87,17 @@ function StockSummary({ navigate }: { navigate: (page: Page) => void }) {
             <ChevronRight size={16} aria-hidden="true" className="muted" />
           </button>)}</div> : <Empty>Todos os produtos ativos têm saldo.</Empty>)}
       </section>
+      {below.length > 0 && <section className="card">
+        <div className="section-head" style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)' }}><h3>Abaixo do mínimo</h3>
+          <span className="badge tone-warn">{below.length}</span></div>
+        <div className="list">{below.slice(0, 5).map(product =>
+          <button type="button" className="list-row" key={product.id} onClick={() => navigate('stock')}>
+            <span className="icon-tile warn"><PackageX size={16} aria-hidden="true" /></span>
+            <span className="grow"><span className="title">{product.name}</span>
+              <span className="sub">Livre {quantity(product.available)} · mínimo {quantity(product.minStock)} {baseUnit(product).symbol}</span></span>
+            <ChevronRight size={16} aria-hidden="true" className="muted" />
+          </button>)}</div>
+      </section>}
     </div>
   </section>;
 }

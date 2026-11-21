@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { CheckCircle2, Eye, Play, Plus, Trash2, X } from 'lucide-react';
+import { suggestedConsumption } from './format';
 import {
   api, Badge, brl, dateTime, Field, Form, Loading, message, Modal, ModalForm, notify, PageActions, quantity, Select, Table, Title, useClosePanel, useData,
 } from './ui';
@@ -9,11 +10,19 @@ type OrderItem = {
   productId: string; sku: string; name: string; symbol: string; planned: string;
   good: string | null; lost: string | null; unitCost: string | null; totalCost: string | null; lossCost: string | null;
 };
-type OrderInput = { inputId: string; sku: string; name: string; symbol: string; planned: string; used: string | null };
+type OrderInput = {
+  inputId: string; sku: string; name: string; symbol: string; planned: string; used: string | null;
+  parts: { productId: string; planned: string }[];
+};
 type Order = {
   id: string; number: number; status: Status; notes: string | null; printer: { id: string; name: string }; user: { name: string };
   plannedStart: string; estimatedMinutes: number; expectedEnd: string; startedAt: string | null; finishedAt: string | null; printMinutes: number | null;
   machineCost: string | null; totalCost: string | null; lossCost: string | null; absorbLoss: boolean; items: OrderItem[]; inputs: OrderInput[];
+  budget: Budget | null;
+};
+type Budget = {
+  machineCost: string; materialCost: string; totalCost: string; partialCost: boolean; missingCost: string[];
+  items: { productId: string; totalCost: string; unitCost: string }[];
 };
 type OrdersView = { orders: Order[]; printers: { id: string; name: string }[]; products: { id: string; sku: string; name: string; symbol: string }[] };
 type PreviewItem = { productId: string; sku: string; name: string; symbol: string; good: string; lost: string; unitCost: string | null; fullUnitCost: string; lossCost: string };
@@ -44,7 +53,9 @@ export function ProductionOrders({ edit }: { edit: boolean }) {
         <span className="cell-title">#{order.number}</span>,
         <span>{order.items.map(item => quantity(item.planned) + ' ' + item.symbol + ' ' + item.sku).join(' · ')}</span>,
         order.printer.name, <Badge tone={statuses[order.status].tone}>{statuses[order.status].name}</Badge>,
-        <span className="muted">{dateTime(order.finishedAt ?? order.expectedEnd)}</span>, brl(order.totalCost),
+        <span className="muted">{dateTime(order.finishedAt ?? order.expectedEnd)}</span>,
+        order.budget ? <span title="Estimativa com os custos atuais. Nada é congelado até concluir.">≈ {brl(order.budget.totalCost)}
+          <span className="hint" style={{ display: 'block' }}>{order.budget.partialCost ? 'Orçamento parcial' : 'Orçamento'}</span></span> : brl(order.totalCost),
         <div className="actions">
           <button type="button" className="btn ghost small" aria-label={'Ver ordem ' + order.number} onClick={() => open('details', order)}><Eye size={14} aria-hidden="true" />Ver</button>
           {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" onClick={() => open('start', order)}><Play size={14} aria-hidden="true" />Iniciar</button>}
@@ -143,9 +154,17 @@ function NewOrder({ view, done }: { view: OrdersView; done: (text: string) => Pr
 
 function FinishOrder({ order, done }: { order: Order; done: (text: string) => Promise<void> }) {
   const [review, setReview] = useState<{ payload: Record<string, unknown>; preview: Preview; absorb: boolean; shipOut: boolean }>();
+  const [lostPieces, setLostPieces] = useState<Record<string, string>>({});
+  const [printed, setPrinted] = useState<Record<string, string>>({});
+  const [typedUse, setTypedUse] = useState<Record<string, string>>({});
   const closePanel = useClosePanel();
   const path = 'production/orders/' + order.id;
   const lost = review?.preview.items.filter(item => Number(item.lost) > 0) ?? [];
+  const hasLoss = (productId: string) => Number((lostPieces[productId] ?? '').replace(',', '.')) > 0;
+  const lossItems = order.items.map(item => ({
+    productId: item.productId, planned: item.planned, lost: lostPieces[item.productId] ?? '', printedPercent: printed[item.productId] ?? '',
+  }));
+  const clearTyped = (inputId: string) => setTypedUse(({ [inputId]: _removed, ...others }) => others);
   return <>
     <div hidden={!!review}>
       <Form label="Conferir custos" cancel="Cancelar" action={async values => {
@@ -164,11 +183,30 @@ function FinishOrder({ order, done }: { order: Order; done: (text: string) => Pr
           <Field name="printMinutes" label="Tempo cobrado (min)" inputMode="numeric" required={false} hint="Vazio: diferença entre início e término." />
         </div>
         <h3>Peças perdidas (opcional)</h3>
-        <div className="form-grid">{order.items.map(item => <Field key={item.productId} name={'lost' + item.productId} label={item.sku + ' (' + item.symbol + ')'}
-          inputMode="decimal" required={false} placeholder="0" hint={'De ' + quantity(item.planned) + ' ' + item.symbol} />)}</div>
+        {order.items.map(item => <div className="form-grid" key={item.productId}>
+          <label>{item.sku} ({item.symbol})
+            <input name={'lost' + item.productId} inputMode="decimal" placeholder="0" value={lostPieces[item.productId] ?? ''}
+              onChange={event => setLostPieces(values => ({ ...values, [item.productId]: event.target.value }))} />
+            <span className="hint">De {quantity(item.planned)} {item.symbol}</span></label>
+          {hasLoss(item.productId) && <label>Quanto da peça perdida foi impresso (%)
+            <input name={'printed' + item.productId} inputMode="decimal" placeholder="100" value={printed[item.productId] ?? ''}
+              onChange={event => setPrinted(values => ({ ...values, [item.productId]: event.target.value }))} />
+            <span className="hint">Vazio: gastou todo o material da peça.</span></label>}
+        </div>)}
         <h3>Consumo real</h3>
-        <div className="form-grid">{order.inputs.map(input => <Field key={input.inputId} name={'used' + input.inputId} label={input.sku + ' (' + input.symbol + ')'}
-          inputMode="decimal" defaultValue={input.planned} />)}</div>
+        <div className="form-grid">{order.inputs.map(input => {
+          const suggested = suggestedConsumption(input.planned, input.parts, lossItems);
+          const typed = typedUse[input.inputId];
+          return <div className="stack" style={{ gap: 6 }} key={input.inputId}>
+            <label>{input.sku} ({input.symbol})
+              <input name={'used' + input.inputId} inputMode="decimal" required value={typed ?? suggested}
+                onChange={event => setTypedUse(values => ({ ...values, [input.inputId]: event.target.value }))} /></label>
+            {typed !== undefined && typed !== suggested
+              ? <button type="button" className="btn ghost small" style={{ alignSelf: 'flex-start' }} onClick={() => clearTyped(input.inputId)}>
+                Usar sugestão: {quantity(suggested)} {input.symbol}</button>
+              : <span className="hint">{suggested === input.planned ? 'Previsto' : 'Sugerido pela perda. Previsto'}: {quantity(input.planned)} {input.symbol}</span>}
+          </div>;
+        })}</div>
         <label className="check"><input name="absorbLoss" type="checkbox" />Embutir a perda no custo das peças boas</label>
         <label className="check"><input name="shipOut" type="checkbox" />Produzir e já dar saída (encomenda)</label>
       </Form>
@@ -213,11 +251,30 @@ function OrderDetails({ order }: { order: Order }) {
       {order.lossCost !== null && <div><dt>Valor da perda</dt><dd>{brl(order.lossCost)}{order.absorbLoss ? ' (embutida nas peças boas)' : ''}</dd></div>}
       {order.notes && <div><dt>Observação</dt><dd>{order.notes}</dd></div>}
     </dl>
-    <Table responsive={false} columns={['Produto', { label: 'Ordem', end: true }, ...(finished ? [{ label: 'Boas', end: true }, { label: 'Perdidas', end: true }, { label: 'Custo por peça', end: true }] : [])]}
-      rows={order.items.map(item => [
-        <Title name={item.name} code={item.sku} />, quantity(item.planned) + ' ' + item.symbol,
-        ...(finished ? [quantity(item.good ?? '0'), quantity(item.lost ?? '0'), brl(item.unitCost)] : []),
-      ])} />
+    {order.budget && <BudgetSummary budget={order.budget} minutes={order.estimatedMinutes} />}
+    <Table responsive={false} columns={['Produto', { label: 'Ordem', end: true },
+      ...(finished ? [{ label: 'Boas', end: true }, { label: 'Perdidas', end: true }, { label: 'Custo por peça', end: true }] : []),
+      ...(order.budget ? [{ label: 'Total estimado', end: true }, { label: 'Estimado por peça', end: true }] : [])]}
+      rows={order.items.map(item => {
+        const estimate = order.budget?.items.find(row => row.productId === item.productId);
+        return [
+          <Title name={item.name} code={item.sku} />, quantity(item.planned) + ' ' + item.symbol,
+          ...(finished ? [quantity(item.good ?? '0'), quantity(item.lost ?? '0'), brl(item.unitCost)] : []),
+          ...(order.budget ? ['≈ ' + brl(estimate?.totalCost), '≈ ' + brl(estimate?.unitCost)] : []),
+        ];
+      })} />
     <InputsTable inputs={order.inputs} />
   </div>;
+}
+
+function BudgetSummary({ budget, minutes }: { budget: Budget; minutes: number }) {
+  return <>
+    <div className="info"><strong>Orçamento estimado.</strong> Usa o custo médio, a impressora e a tarifa de agora. Nada é congelado até a ordem ser concluída.</div>
+    {budget.partialCost && <div className="info" role="alert"><strong>Orçamento parcial.</strong> Sem custo registrado: {budget.missingCost.join(', ')}. O total considera apenas os demais insumos.</div>}
+    <dl className="dl">
+      <div><dt>Insumos previstos</dt><dd>≈ {brl(budget.materialCost)}</dd></div>
+      <div><dt>Máquina e energia ({duration(minutes)})</dt><dd>≈ {brl(budget.machineCost)}</dd></div>
+      <div><dt>Total estimado</dt><dd><strong>≈ {brl(budget.totalCost)}</strong></dd></div>
+    </dl>
+  </>;
 }

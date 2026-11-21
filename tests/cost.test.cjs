@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost, costPerBaseUnit, kitCosting, printerHourCost, productionCosting } = require('../dist/api/stock/cost.js');
+const { averageCost, belowMinimum, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, recipeEstimate, saleMargin } = require('../dist/api/stock/cost.js');
 
 const d = value => new Prisma.Decimal(value);
 const average = (balance, current, quantity, cost) =>
@@ -112,6 +112,67 @@ test('real consumption is shared by the planned share of each item', () => {
     used: new Map([['pla', d('200')]]), machineCost: d('0'), absorbLoss: false,
   });
   assert.deepEqual(job.rows.map(row => row.used.toString()), ['150', '50']);
+});
+
+test('the budget of a planned order keeps a shared input at its planned amount', () => {
+  const budget = productionBudget({
+    items: [{ productId: 'a', planned: d('3') }, { productId: 'b', planned: d('1') }],
+    rows: [
+      { productId: 'a', inputId: 'pla', planned: d('75'), familyId: 'mass', unitCost: d('0.1') },
+      { productId: 'b', inputId: 'pla', planned: d('25'), familyId: 'mass', unitCost: d('0.1') },
+    ],
+    minutes: 90, hourCost: d('2'),
+  });
+  assert.equal(budget.machineCost.toString(), '3');
+  assert.equal(budget.materialCost.toString(), '10');
+  assert.equal(budget.totalCost.toString(), '13');
+  assert.deepEqual(budget.items.map(item => item.unitCost.toString()), ['3.25', '3.25']);
+  assert.equal(budget.partialCost, false);
+});
+
+test('the budget is partial when an input has no known cost', () => {
+  const budget = productionBudget({
+    items: [{ productId: 'a', planned: d('2') }],
+    rows: [
+      { productId: 'a', inputId: 'pla', planned: d('10'), familyId: 'mass', unitCost: d('1') },
+      { productId: 'a', inputId: 'paint', planned: d('5'), familyId: 'mass', unitCost: null },
+    ],
+    minutes: 60, hourCost: d('1'),
+  });
+  assert.equal(budget.totalCost.toString(), '11');
+  assert.equal(budget.partialCost, true);
+});
+
+test('a recipe estimate adds the waste and finds the limiting input', () => {
+  const estimate = recipeEstimate(d('10'), [
+    { sku: 'PLA', quantity: d('100'), active: true, balance: d('1000'), reserved: d('450'), unitCost: d('0.1') },
+    { sku: 'PARAFUSO', quantity: d('2'), active: true, balance: d('100'), reserved: d('0'), unitCost: null },
+  ]);
+  assert.equal(estimate.unitCost.toString(), '11');
+  assert.equal(estimate.partialCost, true);
+  assert.equal(estimate.producible.toString(), '5');
+  assert.equal(estimate.limiting, 'PLA');
+});
+
+test('an inactive input yields no piece', () => {
+  const estimate = recipeEstimate(d('0'), [{ sku: 'PLA', quantity: d('1'), active: false, balance: d('10'), reserved: d('0'), unitCost: d('1') }]);
+  assert.equal(estimate.producible.toString(), '0');
+});
+
+test('the minimum is compared with the free balance', () => {
+  assert.equal(belowMinimum(d('100'), d('60'), d('50')), true);
+  assert.equal(belowMinimum(d('100'), d('50'), d('50')), false);
+  assert.equal(belowMinimum(d('0'), d('0'), d('0')), false);
+  assert.equal(belowMinimum(d('0'), d('0'), null), false);
+});
+
+test('the margin is measured over the sale price', () => {
+  const margin = saleMargin(d('50'), d('30'));
+  assert.equal(margin.profit.toString(), '20');
+  assert.equal(margin.percent.toString(), '40');
+  assert.equal(saleMargin(d('10'), d('15')).percent.toString(), '-50');
+  assert.equal(saleMargin(null, d('15')), null);
+  assert.equal(saleMargin(d('10'), null), null);
 });
 
 test('reserved balance does not count toward the kits available', () => {

@@ -13,7 +13,7 @@ const previewAge = 7 * 24 * 60 * 60 * 1000;
 
 export const movementFields = z.object({
   productId: idField, unitId: idField, kind: z.enum(['PURCHASE', 'OUT', 'ADJUSTMENT']),
-  quantity: decimalField, totalCost: nonnegative.optional(), reason: nameField,
+  quantity: decimalField, totalCost: nonnegative.optional(), reason: nameField, acknowledgeNoInputs: z.boolean().optional(),
 });
 export const kitOutFields = z.object({ quantity: positive.refine(value => value.isInteger(), 'Informe a quantidade inteira de kits'), reason: nameField });
 const countRow = z.object({ sku: skuField, quantity: nonnegative, unit: nameField });
@@ -88,10 +88,17 @@ export class StockService {
       ...(data.totalCost === undefined ? {} : { 'Custo total': data.totalCost }),
     });
     return serial(this.db, async tx => {
-      const product = await tx.product.findUnique({ where: { id: data.productId }, include: { unit: true } });
+      const product = await tx.product.findUnique({ where: { id: data.productId }, include: { unit: true, type: true } });
       const unit = await tx.unit.findUnique({ where: { id: data.unitId } });
       if (!product || !unit) throw new NotFoundException('Produto ou unidade não encontrado.');
       const amount = inBase(unit, product.unit.familyId, data.quantity);
+      // A manual entry of a manufactured product adds pieces without taking their inputs from stock.
+      if (product.type.isManufactured && data.kind !== 'OUT' && data.quantity.gt(0)) {
+        if (!data.acknowledgeNoInputs) {
+          throw new ConflictException('Esta entrada não baixa insumos. Confirme que está ciente ou use uma ordem de produção.');
+        }
+        auditContext({ 'Entrada sem baixa de insumos': 'Confirmada' });
+      }
       const cost = data.totalCost === undefined ? product.currentCost : storedDecimal(costPerBaseUnit(data.totalCost, amount));
       return this.record(tx, product, data.kind === 'OUT' ? amount.neg() : amount, data.kind, userId, data.reason, cost);
     });

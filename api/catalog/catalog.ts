@@ -1,12 +1,13 @@
 import {
-  BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post,
+  BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post, Req,
 } from '@nestjs/common';
 import { Prisma, ProductionStatus, ReferenceKind } from '@prisma/client';
 import { z } from 'zod';
-import { Require } from '../access/access';
-import { Audit, auditChange } from '../audit/recorder';
-import { Database, idField, nameField, parse, positive, serial, skuField, storedDecimal } from '../shared';
-import { kitCosting, stockValue, sumValues } from '../stock/cost';
+import { Authenticated, Require } from '../access/access';
+import { canAccess } from '../access/security';
+import { Audit, auditChange, auditContext } from '../audit/recorder';
+import { Database, idField, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal } from '../shared';
+import { belowMinimum, kitCosting, recipeEstimate, saleMargin, stockValue, sumValues } from '../stock/cost';
 
 const referenceField = z.object({ kind: z.enum(ReferenceKind), name: nameField });
 const symbolField = z.string().trim().min(1).max(24);
@@ -25,6 +26,7 @@ const productTypeFields = z.object({ name: nameField, isInput: z.boolean(), isMa
 /** Default type of every product, created by the migration. */
 export const defaultProductType = '00000000-0000-4000-8000-000000000001';
 const statusFields = z.strictObject({ active: z.boolean() });
+export const stockSettingsFields = z.strictObject({ minStock: nonnegative.nullable(), salePrice: positive.nullable() });
 const situation = (active: boolean) => active ? 'Ativo' : 'Inativo';
 const kitFields = z.object({
   sku: skuField, name: nameField,
@@ -117,10 +119,13 @@ export class CatalogService {
   constructor(@Inject(Database) private db: Database) {}
 
   async registrations() {
-    const [families, units, references, types, usedUnits] = await Promise.all([
+    const [families, units, storedReferences, types, usedUnits] = await Promise.all([
       this.db.unitFamily.findMany({ orderBy: { name: 'asc' } }),
       this.db.unit.findMany({ include: { _count: { select: { products: true } } }, orderBy: { symbol: 'asc' } }),
-      this.db.reference.findMany({ orderBy: [{ kind: 'asc' }, { name: 'asc' }] }),
+      this.db.reference.findMany({
+        include: { _count: { select: { groups: true, brands: true, colors: true, departments: true } } },
+        orderBy: [{ kind: 'asc' }, { name: 'asc' }],
+      }),
       this.db.productType.findMany({ include: { _count: { select: { products: true } } }, orderBy: { name: 'asc' } }),
       this.db.unit.findMany({ where: { products: { some: usedProduct } }, select: { familyId: true }, distinct: ['familyId'] }),
     ]);
@@ -128,14 +133,17 @@ export class CatalogService {
       ...type, products: _count.products, isDefault: type.id === defaultProductType, deleteBlock: productTypeBlock(type.id, _count.products),
     }));
     const inUse = new Set(usedUnits.map(unit => unit.familyId));
+    const references = storedReferences.map(({ _count, ...reference }) => ({
+      ...reference, products: _count.groups + _count.brands + _count.colors + _count.departments,
+    }));
     return {
       references, productTypes,
-      families: families.map(family => ({
-        ...family,
-        deleteBlock: familyBlock(units.filter(unit => unit.familyId === family.id).reduce((total, unit) => total + unit._count.products, 0)),
-      })),
+      families: families.map(family => {
+        const products = units.filter(unit => unit.familyId === family.id).reduce((total, unit) => total + unit._count.products, 0);
+        return { ...family, products, deleteBlock: familyBlock(products) };
+      }),
       units: units.map(({ _count, ...unit }) => ({
-        ...unit,
+        ...unit, products: _count.products,
         factorBlock: unitFactorBlock(unit, inUse.has(unit.familyId)),
         deleteBlock: unitDeleteBlock(unit, _count.products, inUse.has(unit.familyId)),
       })),
@@ -236,14 +244,129 @@ export class CatalogService {
     ]);
     return {
       ...registrations,
-      products: products.map(({ _count, ...product }) => ({ ...product, deleteBlock: productBlock(_count) })),
+      products: products.map(({ _count, ...product }) => ({ ...product, hasRecipe: _count.recipe > 0, deleteBlock: productBlock(_count) })),
       kits: kits.map(({ _count, ...kit }) => ({ ...kit, deleteBlock: kitBlock(_count) })),
+    };
+  }
+
+  /** Balance and cost of every product, kept apart from the catalog because they need stock:view. */
+  async balances() {
+    const [products, reservations] = await Promise.all([
+      this.db.product.findMany({ select: { id: true, quantity: true, currentCost: true } }),
+      this.db.productionConsumption.groupBy({ by: ['inputId'], where: { item: { order: { status: 'PRINTING' } } }, _sum: { planned: true } }),
+    ]);
+    const reservedById = new Map(reservations.map(row => [row.inputId, row._sum.planned ?? new Prisma.Decimal(0)]));
+    return products.map(product => {
+      const reserved = reservedById.get(product.id) ?? new Prisma.Decimal(0);
+      return {
+        ...product, reserved, available: Prisma.Decimal.max(0, product.quantity.minus(reserved)), value: stockValue(product.quantity, product.currentCost),
+      };
+    });
+  }
+
+  saveStockSettings(id: string, data: z.infer<typeof stockSettingsFields>) {
+    const minStock = data.minStock && storedDecimal(data.minStock);
+    const salePrice = data.salePrice && storedDecimal(data.salePrice);
+    const values = (row: { minStock: Prisma.Decimal | null; salePrice: Prisma.Decimal | null }) => ({
+      'Estoque mínimo': row.minStock?.toFixed() ?? null, 'Preço de venda': row.salePrice?.toFixed() ?? null,
+    });
+    return serial(this.db, async tx => {
+      const before = await tx.product.findUnique({ where: { id }, select: { sku: true, minStock: true, salePrice: true } });
+      if (!before) throw new NotFoundException('Produto não encontrado.');
+      auditContext({ Produto: before.sku });
+      auditChange(values(before), values({ minStock, salePrice }));
+      return tx.product.update({ where: { id }, data: { minStock, salePrice }, select: { id: true, minStock: true, salePrice: true } });
+    });
+  }
+
+  private async reservedById() {
+    const rows = await this.db.productionConsumption.groupBy({ by: ['inputId'], where: { item: { order: { status: 'PRINTING' } } }, _sum: { planned: true } });
+    const reserved = new Map(rows.map(row => [row.inputId, row._sum.planned ?? new Prisma.Decimal(0)]));
+    return (id: string) => reserved.get(id) ?? new Prisma.Decimal(0);
+  }
+
+  /** Each block only leaves the API for a profile that may see it: stock for costs, operate for recipes, production for orders. */
+  async productDetails(id: string, permissions: string[]) {
+    const seeStock = canAccess(permissions, 'stock:view');
+    const seeRecipe = canAccess(permissions, 'catalog:operate');
+    const seeOrders = canAccess(permissions, 'production:view');
+    const product = await this.db.product.findUnique({
+      where: { id },
+      select: {
+        id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true, wastePercent: true, ...productInclude,
+        type: { select: { name: true, isInput: true, isManufactured: true } },
+        kitComponents: { select: { quantity: true, kit: { select: { sku: true, name: true, active: true } } }, orderBy: { kitId: 'asc' } },
+        usedInRecipes: { select: { quantity: true, product: { select: { sku: true, name: true, active: true } } }, orderBy: { productId: 'asc' } },
+        recipe: { orderBy: { inputId: 'asc' }, select: {
+          quantity: true, inputId: true, input: { select: { sku: true, name: true, active: true, quantity: true, currentCost: true, ...productInclude } },
+        } },
+      },
+    });
+    if (!product) throw new NotFoundException('Produto não encontrado.');
+    const symbol = (row: { unit: { symbol: string; family: { units: { symbol: string }[] } } }) => row.unit.family.units[0]?.symbol ?? row.unit.symbol;
+    const reserved = seeStock ? await this.reservedById() : null;
+    const [lastMovement, purchases, consumption] = await Promise.all([
+      seeStock ? this.db.movement.findFirst({ where: { productId: id }, orderBy: { createdAt: 'desc' }, select: { kind: true, quantity: true, createdAt: true } }) : null,
+      seeStock ? this.db.movement.findMany({
+        where: { productId: id, kind: 'PURCHASE' }, orderBy: { createdAt: 'desc' }, take: 5, select: { quantity: true, unitCost: true, createdAt: true },
+      }) : [],
+      seeOrders && product.type.isInput ? this.db.productionConsumption.findMany({
+        where: { inputId: id, item: { order: { status: { in: ['PLANNED', 'PRINTING'] } } } },
+        select: { planned: true, item: { select: { order: { select: { number: true, status: true } } } } },
+      }) : [],
+    ]);
+    const orders = new Map<number, { number: number; status: ProductionStatus; planned: Prisma.Decimal }>();
+    for (const row of consumption) {
+      const { number, status } = row.item.order;
+      orders.set(number, { number, status, planned: (orders.get(number)?.planned ?? new Prisma.Decimal(0)).plus(row.planned) });
+    }
+    const held = reserved?.(id) ?? new Prisma.Decimal(0);
+    return {
+      id: product.id, sku: product.sku, name: product.name, active: product.active, symbol: symbol(product), type: product.type,
+      kits: product.kitComponents.map(row => ({ ...row.kit, quantity: row.quantity })),
+      recipe: seeRecipe ? {
+        wastePercent: product.wastePercent,
+        inputs: product.recipe.map(row => ({ sku: row.input.sku, name: row.input.name, symbol: symbol(row.input), quantity: row.quantity })),
+        usedIn: product.usedInRecipes.map(row => ({ ...row.product, quantity: row.quantity })),
+      } : null,
+      orders: seeOrders ? [...orders.values()].sort((a, b) => b.number - a.number) : null,
+      stock: seeStock ? {
+        quantity: product.quantity, reserved: held, available: Prisma.Decimal.max(0, product.quantity.minus(held)),
+        currentCost: product.currentCost, value: stockValue(product.quantity, product.currentCost), lastPurchaseCost: product.lastPurchaseCost,
+        lastMovement, purchases, minStock: product.minStock, belowMinimum: belowMinimum(product.quantity, held, product.minStock),
+        salePrice: product.salePrice, margin: saleMargin(product.salePrice, product.currentCost),
+        estimate: product.type.isManufactured && product.recipe.length ? recipeEstimate(product.wastePercent, product.recipe.map(row => ({
+          sku: row.input.sku, quantity: row.quantity, active: row.input.active, balance: row.input.quantity,
+          reserved: reserved!(row.inputId), unitCost: row.input.currentCost,
+        }))) : null,
+      } : null,
+    };
+  }
+
+  async kitDetails(id: string, permissions: string[]) {
+    const kit = await this.db.kit.findUnique({ where: { id }, include: { components: { orderBy: { productId: 'asc' }, include: { product: { include: productInclude } } } } });
+    if (!kit) throw new NotFoundException('Kit não encontrado.');
+    const base = kit.components.map(item => ({
+      productId: item.productId, sku: item.product.sku, name: item.product.name, quantity: item.quantity,
+      symbol: item.product.unit.family.units[0]?.symbol ?? item.product.unit.symbol,
+    }));
+    const summary = { id: kit.id, sku: kit.sku, name: kit.name, active: kit.active };
+    if (!canAccess(permissions, 'stock:view')) return { ...summary, components: base, stock: null };
+    const reserved = await this.reservedById();
+    const costing = kitCosting(kit.components.map(item => ({ ...item, product: { ...item.product, reserved: reserved(item.productId) } })));
+    const limiting = costing.components.reduce((lowest, item) => item.yields.lt(lowest.yields) ? item : lowest, costing.components[0]);
+    return {
+      ...summary,
+      components: base.map((item, index) => ({ ...item, cost: costing.components[index].cost, yields: costing.components[index].yields })),
+      stock: { totalCost: costing.totalCost, partialCost: costing.partialCost, available: costing.available, limiting: limiting?.product.sku ?? null },
     };
   }
 
   async stockView() {
     const [products, kits, reservations] = await Promise.all([
-      this.db.product.findMany({ where: { active: true }, include: productInclude, orderBy: { sku: 'asc' } }),
+      this.db.product.findMany({
+        where: { active: true }, include: { ...productInclude, type: { select: { isManufactured: true } } }, orderBy: { sku: 'asc' },
+      }),
       this.db.kit.findMany({
         where: { active: true }, include: { components: { include: { product: { include: productInclude } } } }, orderBy: { sku: 'asc' },
       }),
@@ -251,7 +374,12 @@ export class CatalogService {
     ]);
     const reserved = (id: string) => reservations.find(row => row.inputId === id)?._sum.planned ?? new Prisma.Decimal(0);
     // Values are computed here with exact decimals, so the panel only formats them.
-    const valued = products.map(product => ({ ...product, reserved: reserved(product.id), value: stockValue(product.quantity, product.currentCost) }));
+    const valued = products.map(product => ({
+      ...product, reserved: reserved(product.id), value: stockValue(product.quantity, product.currentCost),
+      available: Prisma.Decimal.max(0, product.quantity.minus(reserved(product.id))),
+      belowMinimum: belowMinimum(product.quantity, reserved(product.id), product.minStock),
+      margin: saleMargin(product.salePrice, product.currentCost),
+    }));
     return {
       products: valued,
       kits: kits.map(kit => ({
@@ -413,6 +541,22 @@ export class CatalogController {
   @Require('catalog:view')
   @Get()
   overview() { return this.catalog.overview(); }
+
+  @Require('stock:view')
+  @Get('balances')
+  balances() { return this.catalog.balances(); }
+
+  @Require('catalog:view')
+  @Get('products/:id/details')
+  productDetails(@Req() request: Authenticated, @Param('id') id: string) {
+    return this.catalog.productDetails(parse(idField, id), request.identity.permissions);
+  }
+
+  @Require('catalog:view')
+  @Get('kits/:id/details')
+  kitDetails(@Req() request: Authenticated, @Param('id') id: string) {
+    return this.catalog.kitDetails(parse(idField, id), request.identity.permissions);
+  }
 
   @Require('registrations:view')
   @Get('registrations')
