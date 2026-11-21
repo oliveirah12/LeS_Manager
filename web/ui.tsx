@@ -136,7 +136,7 @@ export function Section({ title, subtitle, actions, children }: { title?: string
 }
 
 export function Badge({ tone, children }: { tone?: 'ok' | 'warn' | 'brand' | 'danger'; children: ReactNode }) {
-  return <span className={'badge' + (tone ? ' ' + tone : '')}>{children}</span>;
+  return <span className={'badge' + (tone ? ' tone-' + tone : '')}>{children}</span>;
 }
 
 /* ---------- Dialogs ---------- */
@@ -302,7 +302,7 @@ export function Filters({ children, active, apply, clear }: {
   const id = useId();
   return <div className="filters">
     <button type="button" className="btn secondary filters-toggle" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
-      <SlidersHorizontal size={16} aria-hidden="true" />Filtros{active > 0 && <span className="badge brand">{active}</span>}
+      <SlidersHorizontal size={16} aria-hidden="true" />Filtros{active > 0 && <span className="badge tone-brand">{active}</span>}
     </button>
     <div id={id} className="filters-panel" data-open={open}><div>
       <form className="filters-form" onSubmit={event => { event.preventDefault(); apply(fields(new FormData(event.currentTarget))); setOpen(false); }}

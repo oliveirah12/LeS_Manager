@@ -24,7 +24,7 @@ function ProductTypes({ types, edit, reload }: { types: ProductType[]; edit: boo
     {edit && <PageActions><button type="button" className="btn" onClick={() => setType(null)}><Plus size={16} aria-hidden="true" />Novo tipo</button></PageActions>}
     <Table columns={['Tipo', 'Usado como insumo', 'É fabricado', { label: 'Produtos', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
       rows={types.map(item => [
-        <span className="cell-title">{item.name}{item.isDefault && <> <Badge tone="brand">Padrão</Badge></>}</span>,
+        <span className="cell-title with-badge">{item.name}{item.isDefault && <Badge tone="brand">Padrão</Badge>}</span>,
         flag(item.isInput), flag(item.isManufactured), <span className="num">{item.products}</span>,
         ...(edit ? [<div className="actions">
           <button type="button" className="btn secondary small" onClick={() => setType(item)}><Pencil size={14} aria-hidden="true" />Editar</button>

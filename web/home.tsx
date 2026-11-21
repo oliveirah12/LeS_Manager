@@ -78,7 +78,7 @@ function StockSummary({ navigate }: { navigate: (page: Page) => void }) {
       </section>
       <section className="card">
         <div className="section-head" style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)' }}><h3>Sem saldo</h3>
-          {empty.length > 0 && <span className="badge warn">{empty.length}</span>}</div>
+          {empty.length > 0 && <span className="badge tone-warn">{empty.length}</span>}</div>
         {view.data && (empty.length ? <div className="list">{empty.slice(0, 5).map(product =>
           <button type="button" className="list-row" key={product.id} onClick={() => navigate('stock')}>
             <span className="icon-tile warn"><PackageX size={16} aria-hidden="true" /></span>
