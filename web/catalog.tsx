@@ -9,12 +9,14 @@ import {
 type CatalogView = StockView & RegistrationData;
 type Situation = 'active' | 'inactive' | 'all';
 type Status = { kind: 'products' | 'kits'; id: string; sku: string; active: boolean };
+type Removal = { kind: Status['kind']; id: string; sku: string; block?: string | null };
 
 export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boolean }) {
   const { data, error, loading, reload } = useData<CatalogView>('catalog');
   const [product, setProduct] = useState<Product | null>();
   const [kit, setKit] = useState<Kit | null>();
   const [status, setStatus] = useState<Status>();
+  const [removal, setRemoval] = useState<Removal>();
   const [query, setQuery] = useState('');
   const [situation, setSituation] = useState<Situation>('active');
   async function save(path: string, payload: unknown, id?: string) {
@@ -26,10 +28,12 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
     matches(query, row.sku, row.name) && (situation === 'all' || row.active === (situation === 'active')));
   const situationBadge = (row: { active: boolean }) => row.active
     ? <Badge tone="ok"><span className="dot" />Ativo</Badge> : <Badge>Inativo</Badge>;
-  const rowActions = (kind: Status['kind'], row: { id: string; sku: string; active: boolean }, open: () => void) => <div className="actions">
+  const rowActions = (kind: Status['kind'], row: { id: string; sku: string; active: boolean; deleteBlock?: string | null }, open: () => void) => <div className="actions">
     <button type="button" className="btn secondary small" onClick={open}><Pencil size={14} aria-hidden="true" />Editar</button>
     <button type="button" className="btn ghost small" onClick={() => setStatus({ kind, id: row.id, sku: row.sku, active: !row.active })}>
       {row.active ? <PowerOff size={14} aria-hidden="true" /> : <Power size={14} aria-hidden="true" />}{row.active ? 'Inativar' : 'Reativar'}</button>
+    <button type="button" className={'btn ghost small' + (row.deleteBlock ? ' unavailable' : '')} title={row.deleteBlock ?? undefined}
+      onClick={() => setRemoval({ kind, id: row.id, sku: row.sku, block: row.deleteBlock })}><Trash2 size={14} aria-hidden="true" />Excluir</button>
   </div>;
 
   return <>
@@ -45,9 +49,9 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
     {message(error)}
     {!data ? loading && <Loading label="Carregando catálogo…" /> : <>
       {page === 'products' && <Table empty="Nenhum produto encontrado."
-        columns={['Produto', 'Unidade', 'Classificação', 'Situação', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
+        columns={['Produto', 'Tipo', 'Unidade', 'Classificação', 'Situação', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
         rows={visible(data.products).map(row => [
-          <Title name={row.name} code={row.sku} />, row.unit.symbol,
+          <Title name={row.name} code={row.sku} />, data.productTypes.find(type => type.id === row.typeId)?.name ?? '—', row.unit.symbol,
           <div className="actions">{referenceKinds.map(kind => data.references.find(item => item.id === row[kind.field])?.name)
             .filter(Boolean).map(name => <Badge key={name}>{name}</Badge>)}</div>,
           situationBadge(row),
@@ -68,11 +72,13 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
         const input = fields(values);
         await save('products', { ...input, ...Object.fromEntries(referenceKinds.map(kind => [kind.field, input[kind.field] || null])) }, product?.id);
       }}>
-      {!product && <Field name="sku" label="SKU" placeholder="Ex.: CX-KRAFT-2020" />}
+      <Field name="sku" label="SKU" placeholder="Ex.: CX-KRAFT-2020" defaultValue={product?.sku} />
       <Field name="name" label="Nome do produto" defaultValue={product?.name} />
-      {product ? <label>Unidade<input value={product.unit.symbol} disabled />
-        <span className="hint">A unidade não muda depois do cadastro, para manter o histórico coerente.</span></label>
-        : <Select name="unitId" label="Unidade" options={unitOptions(data.units)} />}
+      <Select name="typeId" label="Tipo" options={data.productTypes}
+        defaultValue={product?.typeId ?? data.productTypes.find(type => type.isDefault)?.id} />
+      <Select name="unitId" label="Unidade" defaultValue={product?.unit.id}
+        options={unitOptions(product?.deleteBlock ? data.units.filter(unit => unit.familyId === product.unit.familyId) : data.units)} />
+      {product?.deleteBlock && <p className="hint">Como este produto já tem histórico, só aceita unidades da mesma família.</p>}
       <div className="form-grid">
         {referenceKinds.map(kind => <Select key={kind.id} name={kind.field} label={kind.name} required={false}
           defaultValue={product?.[kind.field] ?? undefined} options={data.references.filter(item => item.kind === kind.id)} />)}
@@ -91,6 +97,17 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
         ? 'O item volta a aparecer no estoque e pode receber movimentações.'
         : 'O item sai do estoque e das listas de seleção, e o histórico é preservado. ' +
           (status.kind === 'products' ? 'O saldo precisa estar zerado e o produto não pode compor kits ativos.' : 'Não será possível dar saída neste kit.')}</p>
+    </ModalForm>}
+    {edit && removal?.block && <Modal title={'Não é possível excluir ' + removal.sku} close={() => setRemoval(undefined)}>
+      <p className="muted">{removal.block} Se o item saiu de linha, use Inativar para preservar o histórico.</p>
+    </Modal>}
+    {edit && removal && !removal.block && <ModalForm title={'Excluir ' + removal.sku} label="Excluir definitivamente" danger
+      close={() => setRemoval(undefined)} action={async () => {
+        await api('catalog/' + removal.kind + '/' + removal.id, undefined, 'DELETE');
+        notify(removal.sku + ' excluído.');
+        await reload();
+      }}>
+      <p className="muted">Esta ação não pode ser desfeita. O cadastro será removido, e a exclusão fica registrada na auditoria.</p>
     </ModalForm>}
   </>;
 }

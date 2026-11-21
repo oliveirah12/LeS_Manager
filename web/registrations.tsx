@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Pencil, Plus } from 'lucide-react';
-import { api, Badge, decimal, Field, fields, Loading, matches, message, ModalForm, notify, PageActions, SearchInput, Select, Table, Unit, useData } from './ui';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { api, Badge, decimal, Field, fields, Loading, matches, message, Modal, ModalForm, notify, PageActions, SearchInput, Select, Table, Unit, useData } from './ui';
 
 export const referenceKinds = [
   { id: 'GRUPO', name: 'Grupo', label: 'Grupos', field: 'groupId' },
@@ -9,8 +9,51 @@ export const referenceKinds = [
   { id: 'DEPARTAMENTO', name: 'Departamento', label: 'Departamentos', field: 'departmentId' },
 ] as const;
 type Reference = { id: string; name: string; kind: string };
-export type RegistrationData = { families: { id: string; name: string }[]; references: Reference[]; units: Unit[] };
-export type RegistrationPage = typeof referenceKinds[number]['id'] | 'families' | 'units';
+export type ProductType = { id: string; name: string; isInput: boolean; isManufactured: boolean; products: number; isDefault: boolean; deleteBlock: string | null };
+export type RegistrationData = { families: { id: string; name: string }[]; references: Reference[]; units: Unit[]; productTypes: ProductType[] };
+export type RegistrationPage = typeof referenceKinds[number]['id'] | 'families' | 'units' | 'product-types';
+
+function ProductTypes({ types, edit, reload }: { types: ProductType[]; edit: boolean; reload: () => Promise<unknown> }) {
+  const [type, setType] = useState<ProductType | null>();
+  const [removal, setRemoval] = useState<ProductType>();
+  const flag = (active: boolean) => active ? <Badge tone="ok">Sim</Badge> : <span className="muted">Não</span>;
+  return <>
+    {edit && <PageActions><button type="button" className="btn" onClick={() => setType(null)}><Plus size={16} aria-hidden="true" />Novo tipo</button></PageActions>}
+    <Table columns={['Tipo', 'Usado como insumo', 'É fabricado', { label: 'Produtos', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
+      rows={types.map(item => [
+        <span className="cell-title">{item.name}{item.isDefault && <> <Badge tone="brand">Padrão</Badge></>}</span>,
+        flag(item.isInput), flag(item.isManufactured), <span className="num">{item.products}</span>,
+        ...(edit ? [<div className="actions">
+          <button type="button" className="btn secondary small" onClick={() => setType(item)}><Pencil size={14} aria-hidden="true" />Editar</button>
+          <button type="button" className={'btn ghost small' + (item.deleteBlock ? ' unavailable' : '')} title={item.deleteBlock ?? undefined}
+            onClick={() => setRemoval(item)}><Trash2 size={14} aria-hidden="true" />Excluir</button>
+        </div>] : []),
+      ])} />
+    {edit && type !== undefined && <ModalForm title={type ? 'Editar tipo de produto' : 'Novo tipo de produto'} close={() => setType(undefined)} label="Salvar"
+      action={async values => {
+        await api('catalog/product-types' + (type ? '/' + type.id : ''), {
+          name: values.get('name'), isInput: values.has('isInput'), isManufactured: values.has('isManufactured'),
+        }, type ? 'PATCH' : 'POST');
+        notify(type ? 'Alterações salvas.' : 'Cadastro criado.');
+        await reload();
+      }}>
+      <Field name="name" label="Nome" placeholder="Ex.: Resina" defaultValue={type?.name} />
+      <label className="check"><input name="isInput" type="checkbox" defaultChecked={type?.isInput} />Usado como insumo na produção</label>
+      <label className="check"><input name="isManufactured" type="checkbox" defaultChecked={type?.isManufactured} />É fabricado por ordem de produção</label>
+    </ModalForm>}
+    {edit && removal?.deleteBlock && <Modal title={'Não é possível excluir ' + removal.name} close={() => setRemoval(undefined)}>
+      <p className="muted">{removal.deleteBlock}</p>
+    </Modal>}
+    {edit && removal && !removal.deleteBlock && <ModalForm title={'Excluir ' + removal.name} label="Excluir definitivamente" danger
+      close={() => setRemoval(undefined)} action={async () => {
+        await api('catalog/product-types/' + removal.id, undefined, 'DELETE');
+        notify(removal.name + ' excluído.');
+        await reload();
+      }}>
+      <p className="muted">Esta ação não pode ser desfeita, e a exclusão fica registrada na auditoria.</p>
+    </ModalForm>}
+  </>;
+}
 
 export function Registrations({ page, edit, admin }: { page: RegistrationPage; edit: boolean; admin: boolean }) {
   const { data, error, loading, reload } = useData<RegistrationData>('catalog/registrations');
@@ -31,6 +74,7 @@ export function Registrations({ page, edit, admin }: { page: RegistrationPage; e
     {page === 'units' && admin && <PageActions><button type="button" className="btn" onClick={() => setCreating(true)}><Plus size={16} aria-hidden="true" />Nova unidade</button></PageActions>}
     {message(error)}
     {!data ? loading && <Loading label="Carregando cadastros…" /> : <>
+      {page === 'product-types' && <ProductTypes types={data.productTypes} edit={edit} reload={reload} />}
       {kind && <>
         <div className="toolbar"><SearchInput value={query} onChange={setQuery} placeholder={'Buscar ' + kind.name.toLowerCase()} /></div>
         <Table empty={query ? 'Nada encontrado.' : 'Nenhum registro.'} columns={['Nome', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}

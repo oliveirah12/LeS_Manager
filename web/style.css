@@ -85,6 +85,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 button[aria-busy='true'] { cursor: progress; }
+button.unavailable { opacity: .55; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
   height: 40px; padding: 0 16px; border-radius: var(--radius-sm); border: 1px solid transparent;
@@ -135,6 +136,10 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .file-field input::file-selector-button {
   margin-right: 10px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font-weight: 600; cursor: pointer;
 }
+.password-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.password-input { position: relative; }
+.password-input input:not([type=checkbox]):not([type=radio]):not([type=file]) { padding-right: 44px; }
+.password-toggle { position: absolute; top: 2px; right: 2px; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; }
 .search { position: relative; display: flex; flex-direction: row; align-items: center; flex: 1 1 260px; max-width: 420px; }
 .search svg { position: absolute; left: 12px; color: var(--muted); pointer-events: none; }
 .search input[type=search]:not([type=checkbox]) { padding-left: 38px; }

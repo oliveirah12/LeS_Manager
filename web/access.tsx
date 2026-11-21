@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Copy, KeyRound, Pencil, Plus, UserRound } from 'lucide-react';
 import {
-  api, Badge, dateTime, Field, fields, Form, Identity, Loading, message, Modal, ModalForm, notify, PageActions, Section, Segmented, Select, Table,
+  api, Badge, dateTime, Field, fields, Form, Identity, Loading, message, Modal, ModalForm, notify, PageActions, PasswordField, Section, Segmented, Select, Table,
   Tabs, Title, useData,
 } from './ui';
 
@@ -28,9 +28,9 @@ export function SignIn({ signedIn, notice }: { signedIn: () => Promise<void>; no
       }}>
         <label>E-mail<input name="email" type="email" required autoComplete="username" /></label>
         {activate && <label>Código de primeiro acesso<input name="code" autoComplete="one-time-code" required /></label>}
-        <label>{activate ? 'Nova senha' : 'Senha'}<input name="password" type="password" autoComplete={activate ? 'new-password' : 'current-password'} minLength={activate ? 8 : undefined} required /></label>
-        {activate && <label>Confirme a senha<input name="confirmation" type="password" autoComplete="new-password" minLength={8} required />
-          <span className="hint">Pelo menos 8 caracteres, com uma letra e um número.</span></label>}
+        <PasswordField name="password" label={activate ? 'Nova senha' : 'Senha'} autoComplete={activate ? 'new-password' : 'current-password'} minLength={activate ? 8 : undefined} />
+        {activate && <PasswordField name="confirmation" label="Confirme a senha" autoComplete="new-password" minLength={8}
+          hint="Pelo menos 8 caracteres, com uma letra e um número." />}
       </Form>
     </div>
   </main>;
@@ -62,10 +62,10 @@ export function AccountSettings({ identity, changed, passwordChanged }: {
         await api('access/me/password', fields(data));
         passwordChanged();
       }}>
-      <label>Senha atual<input name="currentPassword" type="password" autoComplete="current-password" maxLength={128} required /></label>
-      <label>Nova senha<input name="password" type="password" autoComplete="new-password" minLength={8} maxLength={128} required /></label>
-      <label>Confirme a nova senha<input name="confirmation" type="password" autoComplete="new-password" minLength={8} maxLength={128} required />
-        <span className="hint">Pelo menos 8 caracteres, com uma letra e um número.</span></label>
+      <PasswordField name="currentPassword" label="Senha atual" autoComplete="current-password" maxLength={128} />
+      <PasswordField name="password" label="Nova senha" autoComplete="new-password" minLength={8} maxLength={128} />
+      <PasswordField name="confirmation" label="Confirme a nova senha" autoComplete="new-password" minLength={8} maxLength={128}
+        hint="Pelo menos 8 caracteres, com uma letra e um número." />
     </ModalForm>}
   </>;
 }

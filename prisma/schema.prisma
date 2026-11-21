@@ -83,10 +83,21 @@ model Unit {
   products     Product[]
 }
 
+/// What a product is. Behavior comes from the flags, never from the name, so types can be renamed freely.
+model ProductType {
+  id             String    @id @default(uuid())
+  name           String    @unique
+  isInput        Boolean   @default(false)
+  isManufactured Boolean   @default(false)
+  products       Product[]
+}
+
 model Product {
   id            String          @id @default(uuid())
   sku           String          @unique
   name          String
+  typeId        String          @default("00000000-0000-4000-8000-000000000001")
+  type          ProductType     @relation(fields: [typeId], references: [id])
   unitId        String
   unit          Unit            @relation(fields: [unitId], references: [id])
   groupId       String?

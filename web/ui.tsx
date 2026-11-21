@@ -1,6 +1,6 @@
 import { createContext, FormEvent, ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CheckCircle2, Inbox, Search, SlidersHorizontal, X } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, Inbox, Search, SlidersHorizontal, X } from 'lucide-react';
 
 /* ---------- Data ---------- */
 
@@ -240,6 +240,25 @@ export function Field({ name, label, type = 'text', defaultValue, required = tru
     {hint && <span className="hint">{hint}</span>}</label>;
 }
 
+/** Password input with a reveal button. The button stays outside the label so it does not become part of the field's name. */
+export function PasswordField({ name, label, autoComplete, minLength, maxLength, hint }: {
+  name: string; label: string; autoComplete: 'current-password' | 'new-password'; minLength?: number; maxLength?: number; hint?: string;
+}) {
+  const id = useId();
+  const [visible, setVisible] = useState(false);
+  const Icon = visible ? EyeOff : Eye;
+  return <div className="password-field">
+    <label htmlFor={id}>{label}</label>
+    <div className="password-input">
+      <input id={id} name={name} type={visible ? 'text' : 'password'} autoComplete={autoComplete} minLength={minLength} maxLength={maxLength}
+        autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
+      <button type="button" className="icon-button password-toggle" aria-label={(visible ? 'Ocultar ' : 'Mostrar ') + label.toLowerCase()}
+        aria-pressed={visible} onClick={() => setVisible(value => !value)}><Icon size={16} aria-hidden="true" /></button>
+    </div>
+    {hint && <span className="hint">{hint}</span>}
+  </div>;
+}
+
 export function Select({ name, label, options, defaultValue, onChange, required = true, placeholder }: {
   name: string; label: string; options: { id: string; name: string }[]; defaultValue?: string;
   onChange?: (id: string) => void; required?: boolean; placeholder?: string;
@@ -338,15 +357,20 @@ export type Identity = { id: string; name: string; email: string; profileName: s
 export type Unit = { id: string; symbol: string; factor: string; familyId: string; isBase: boolean };
 export type Product = {
   id: string; sku: string; name: string; active: boolean; unit: Unit & { family: { units: Unit[] } }; quantity: string; currentCost: string | null; lastPurchaseCost: string | null;
-  groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null;
+  typeId: string; groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null; deleteBlock?: string | null;
 };
 export type Kit = {
-  id: string; sku: string; name: string; active: boolean; available: string;
+  id: string; sku: string; name: string; active: boolean; available: string; deleteBlock?: string | null;
   components: { productId: string; quantity: string; product: Product }[];
 };
 /** Product in the stock view, with its value at average cost computed by the API with exact decimals. */
 export type StockProduct = Product & { value: string };
-export type StockView = { products: StockProduct[]; kits: Kit[]; units: Unit[]; totalValue: string };
+/** Costs computed by the API from the components' current average. */
+export type StockKit = Omit<Kit, 'components'> & {
+  components: (Kit['components'][number] & { cost: string | null; share: string | null; yields: string })[];
+  totalCost: string; partialCost: boolean;
+};
+export type StockView = { products: StockProduct[]; kits: StockKit[]; units: Unit[]; totalValue: string };
 export const baseUnit = (product: Pick<Product, 'unit'>) => product.unit.family.units[0] ?? product.unit;
 export const productOptions = (products: Product[]) => products.map(product => ({ id: product.id, name: product.sku + ' · ' + product.name }));
 export const unitOptions = (units: Unit[], bySymbol = false) => units.map(unit => ({ id: bySymbol ? unit.symbol : unit.id, name: unit.symbol }));

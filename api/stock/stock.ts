@@ -3,7 +3,7 @@ import { MovementKind, Prisma, Product } from '@prisma/client';
 import { z } from 'zod';
 import { CatalogService, inBase, productInclude } from '../catalog/catalog';
 import { auditChange, auditContext } from '../audit/recorder';
-import { averageCost } from './cost';
+import { averageCost, costPerBaseUnit } from './cost';
 import {
   DailyTask, Database, decimalField, idField, money, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal,
 } from '../shared';
@@ -12,7 +12,7 @@ const previewAge = 7 * 24 * 60 * 60 * 1000;
 
 export const movementFields = z.object({
   productId: idField, unitId: idField, kind: z.enum(['PURCHASE', 'OUT', 'ADJUSTMENT']),
-  quantity: decimalField, unitCost: nonnegative.optional(), reason: nameField,
+  quantity: decimalField, totalCost: nonnegative.optional(), reason: nameField,
 });
 export const kitOutFields = z.object({ quantity: positive.refine(value => value.isInteger(), 'Informe a quantidade inteira de kits'), reason: nameField });
 const countRow = z.object({ sku: skuField, quantity: nonnegative, unit: nameField });
@@ -61,16 +61,19 @@ export class StockService {
     if (data.quantity.eq(0) || (data.kind !== 'ADJUSTMENT' && data.quantity.lt(0))) {
       throw new BadRequestException('Informe uma quantidade válida para a operação.');
     }
-    if ((data.kind === 'PURCHASE') !== (data.unitCost !== undefined)) {
-      throw new BadRequestException('Informe o custo por unidade somente em entradas de compra.');
+    if ((data.kind === 'PURCHASE') !== (data.totalCost !== undefined)) {
+      throw new BadRequestException('Informe o custo total somente em entradas de compra.');
     }
-    auditContext({ Tipo: ({ PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste' } as const)[data.kind], Motivo: data.reason });
+    auditContext({
+      Tipo: ({ PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste' } as const)[data.kind], Motivo: data.reason,
+      ...(data.totalCost === undefined ? {} : { 'Custo total': data.totalCost }),
+    });
     return serial(this.db, async tx => {
       const product = await tx.product.findUnique({ where: { id: data.productId }, include: { unit: true } });
       const unit = await tx.unit.findUnique({ where: { id: data.unitId } });
       if (!product || !unit) throw new NotFoundException('Produto ou unidade não encontrado.');
       const amount = inBase(unit, product.unit.familyId, data.quantity);
-      const cost = data.unitCost === undefined ? product.currentCost : storedDecimal(money(data.unitCost.div(unit.factor)));
+      const cost = data.totalCost === undefined ? product.currentCost : storedDecimal(costPerBaseUnit(data.totalCost, amount));
       return this.record(tx, product, data.kind === 'OUT' ? amount.neg() : amount, data.kind, userId, data.reason, cost);
     });
   }

@@ -1,12 +1,12 @@
 import {
-  BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post,
+  BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post,
 } from '@nestjs/common';
 import { Prisma, ReferenceKind } from '@prisma/client';
 import { z } from 'zod';
 import { Require } from '../access/access';
 import { Audit, auditChange } from '../audit/recorder';
 import { Database, idField, nameField, parse, positive, serial, skuField, storedDecimal } from '../shared';
-import { stockValue, sumValues } from '../stock/cost';
+import { kitCosting, stockValue, sumValues } from '../stock/cost';
 
 const referenceField = z.object({ kind: z.enum(ReferenceKind), name: nameField });
 const symbolField = z.string().trim().min(1).max(24);
@@ -16,10 +16,13 @@ const unitField = z.object({
   factor: positive.refine(value => value.lt('1000000000000'), 'Fator fora da precisão permitida'),
 });
 export const productFields = z.object({
-  sku: skuField, name: nameField, unitId: idField,
+  sku: skuField, name: nameField, unitId: idField, typeId: idField.optional(),
   groupId: idField.nullish(), brandId: idField.nullish(), colorId: idField.nullish(), departmentId: idField.nullish(),
 });
-const productUpdate = productFields.omit({ sku: true, unitId: true });
+const productUpdate = productFields.partial({ sku: true, unitId: true });
+const productTypeFields = z.object({ name: nameField, isInput: z.boolean(), isManufactured: z.boolean() });
+/** Default type of every product, created by the migration. */
+const defaultProductType = '00000000-0000-4000-8000-000000000001';
 const statusFields = z.strictObject({ active: z.boolean() });
 const situation = (active: boolean) => active ? 'Ativo' : 'Inativo';
 const kitFields = z.object({
@@ -28,7 +31,7 @@ const kitFields = z.object({
 });
 export const productInclude = { unit: { include: { family: { include: { units: { where: { isBase: true } } } } } } } as const;
 const catalogProduct = {
-  id: true, sku: true, name: true, active: true, unitId: true, groupId: true, brandId: true, colorId: true, departmentId: true,
+  id: true, sku: true, name: true, active: true, typeId: true, unitId: true, groupId: true, brandId: true, colorId: true, departmentId: true,
   ...productInclude,
 } as const;
 const references = [
@@ -37,12 +40,12 @@ const references = [
 ] as const;
 
 const productAudit = {
-  sku: true, name: true, unit: { select: { symbol: true } }, group: { select: { name: true } }, brand: { select: { name: true } },
+  sku: true, name: true, type: { select: { name: true } }, unit: { select: { symbol: true } }, group: { select: { name: true } }, brand: { select: { name: true } },
   color: { select: { name: true } }, department: { select: { name: true } },
 } as const;
 type AuditedProduct = Prisma.ProductGetPayload<{ select: typeof productAudit }>;
 const productValues = (product: AuditedProduct) => ({
-  SKU: product.sku, Nome: product.name, Unidade: product.unit.symbol, Grupo: product.group?.name ?? null,
+  SKU: product.sku, Nome: product.name, Tipo: product.type.name, Unidade: product.unit.symbol, Grupo: product.group?.name ?? null,
   Marca: product.brand?.name ?? null, Cor: product.color?.name ?? null, Departamento: product.department?.name ?? null,
 });
 type AuditedKit = { sku: string; name: string; components: { quantity: Prisma.Decimal; product: { sku: string } }[] };
@@ -51,6 +54,26 @@ const kitValues = (kit: AuditedKit) => ({
   Componentes: kit.components.map(item => item.product.sku + ' × ' + item.quantity.toFixed()).sort(),
 });
 const kitAudit = { components: { include: { product: { select: { sku: true } } } } } as const;
+const productUsage = {
+  _count: { select: { movements: true, kitComponents: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } } } },
+} as const;
+const kitUsage = { _count: { select: { movements: true } } } as const;
+
+/** Why a product is part of the history. Such a product cannot be deleted or moved to another unit family. */
+function productBlock(usage: { movements: number; kitComponents: number; inventoryRows: number }) {
+  if (usage.movements) return 'O produto tem movimentações no histórico.';
+  if (usage.kitComponents) return 'O produto compõe um kit.';
+  return usage.inventoryRows ? 'O produto consta em inventário confirmado.' : null;
+}
+const kitBlock = (usage: { movements: number }) => usage.movements ? 'O kit tem saídas no histórico.' : null;
+function productTypeBlock(id: string, products: number) {
+  if (id === defaultProductType) return 'Este é o tipo padrão dos produtos.';
+  return products ? 'O tipo está em uso por ' + products + (products === 1 ? ' produto.' : ' produtos.') : null;
+}
+const yesNo = (value: boolean) => value ? 'Sim' : 'Não';
+const productTypeValues = (type: z.infer<typeof productTypeFields>) => ({
+  Nome: type.name, 'Usado como insumo': yesNo(type.isInput), 'É fabricado': yesNo(type.isManufactured),
+});
 
 export function inBase(unit: { familyId: string; factor: Prisma.Decimal }, familyId: string, quantity: Prisma.Decimal) {
   if (unit.familyId !== familyId) throw new BadRequestException('A unidade não pertence à família de medida do produto.');
@@ -62,24 +85,53 @@ export class CatalogService {
   constructor(@Inject(Database) private db: Database) {}
 
   async registrations() {
-    const [families, units, references] = await Promise.all([
+    const [families, units, references, types] = await Promise.all([
       this.db.unitFamily.findMany({ orderBy: { name: 'asc' } }),
       this.db.unit.findMany({ orderBy: { symbol: 'asc' } }),
       this.db.reference.findMany({ orderBy: [{ kind: 'asc' }, { name: 'asc' }] }),
+      this.db.productType.findMany({ include: { _count: { select: { products: true } } }, orderBy: { name: 'asc' } }),
     ]);
-    return { families, units, references };
+    const productTypes = types.map(({ _count, ...type }) => ({
+      ...type, products: _count.products, isDefault: type.id === defaultProductType, deleteBlock: productTypeBlock(type.id, _count.products),
+    }));
+    return { families, units, references, productTypes };
+  }
+
+  saveProductType(data: z.infer<typeof productTypeFields>, id?: string) {
+    return serial(this.db, async tx => {
+      const before = id ? await tx.productType.findUnique({ where: { id } }) : null;
+      if (id && !before) throw new NotFoundException('Tipo de produto não encontrado.');
+      auditChange(before && productTypeValues(before), productTypeValues(data));
+      return id ? tx.productType.update({ where: { id }, data }) : tx.productType.create({ data });
+    });
+  }
+
+  deleteProductType(id: string) {
+    return serial(this.db, async tx => {
+      const type = await tx.productType.findUnique({ where: { id }, include: { _count: { select: { products: true } } } });
+      if (!type) throw new NotFoundException('Tipo de produto não encontrado.');
+      const block = productTypeBlock(id, type._count.products);
+      if (block) throw new ConflictException(block);
+      await tx.productType.delete({ where: { id } });
+      auditChange(productTypeValues(type), null);
+      return { id };
+    });
   }
 
   async overview() {
     const [registrations, products, kits] = await Promise.all([
       this.registrations(),
-      this.db.product.findMany({ select: catalogProduct, orderBy: { sku: 'asc' } }),
+      this.db.product.findMany({ select: { ...catalogProduct, ...productUsage }, orderBy: { sku: 'asc' } }),
       this.db.kit.findMany({
-        include: { components: { include: { product: { select: catalogProduct } } } },
+        include: { components: { include: { product: { select: catalogProduct } } }, ...kitUsage },
         orderBy: { sku: 'asc' },
       }),
     ]);
-    return { ...registrations, products, kits };
+    return {
+      ...registrations,
+      products: products.map(({ _count, ...product }) => ({ ...product, deleteBlock: productBlock(_count) })),
+      kits: kits.map(({ _count, ...kit }) => ({ ...kit, deleteBlock: kitBlock(_count) })),
+    };
   }
 
   async stockView() {
@@ -89,13 +141,12 @@ export class CatalogService {
         where: { active: true }, include: { components: { include: { product: { include: productInclude } } } }, orderBy: { sku: 'asc' },
       }),
     ]);
-    const kitsWithAvailability = kits.map(kit => ({
-      ...kit,
-      available: Prisma.Decimal.min(...kit.components.map(component => component.product.quantity.div(component.quantity).floor())),
-    }));
     // Values are computed here with exact decimals, so the panel only formats them.
     const valued = products.map(product => ({ ...product, value: stockValue(product.quantity, product.currentCost) }));
-    return { products: valued, kits: kitsWithAvailability, totalValue: sumValues(valued.map(product => product.value)) };
+    return {
+      products: valued, kits: kits.map(kit => ({ ...kit, ...kitCosting(kit.components) })),
+      totalValue: sumValues(valued.map(product => product.value)),
+    };
   }
 
   async assertReferences(tx: Prisma.TransactionClient, data: z.infer<typeof productUpdate>) {
@@ -118,11 +169,49 @@ export class CatalogService {
   async updateProduct(id: string, data: z.infer<typeof productUpdate>) {
     return serial(this.db, async tx => {
       await this.assertReferences(tx, data);
-      const before = await tx.product.findUnique({ where: { id }, select: productAudit });
+      const before = await tx.product.findUnique({
+        where: { id }, select: { ...productAudit, unitId: true, unit: { select: { symbol: true, familyId: true } }, ...productUsage },
+      });
       if (!before) throw new NotFoundException('Produto não encontrado.');
-      await tx.product.update({ where: { id }, data });
+      const newUnitId = data.unitId && data.unitId !== before.unitId ? data.unitId : undefined;
+      if (newUnitId) {
+        const unit = await tx.unit.findUnique({ where: { id: newUnitId } });
+        if (!unit) throw new NotFoundException('Unidade não encontrada.');
+        // Balances are stored in the family's base unit, so a new family would reinterpret them.
+        const block = productBlock(before._count);
+        if (unit.familyId !== before.unit.familyId && block) throw new ConflictException(block + ' Escolha uma unidade da mesma família.');
+      }
+      // The revision change invalidates inventory previews counted with the previous unit.
+      await tx.product.update({ where: { id }, data: { ...data, ...(newUnitId ? { revision: { increment: 1 } } : {}) } });
       auditChange(productValues(before), productValues(await tx.product.findUniqueOrThrow({ where: { id }, select: productAudit })));
       return tx.product.findUniqueOrThrow({ where: { id }, select: catalogProduct });
+    });
+  }
+
+  /** Deletes a product that never entered the history. Unconfirmed count previews do not hold it back. */
+  deleteProduct(id: string) {
+    return serial(this.db, async tx => {
+      const product = await tx.product.findUnique({ where: { id }, select: { ...productAudit, ...productUsage } });
+      if (!product) throw new NotFoundException('Produto não encontrado.');
+      const block = productBlock(product._count);
+      if (block) throw new ConflictException(block + ' Inative o produto em vez de excluir.');
+      await tx.inventoryRow.deleteMany({ where: { productId: id } });
+      await tx.product.delete({ where: { id } });
+      auditChange(productValues(product), null);
+      return { id };
+    });
+  }
+
+  deleteKit(id: string) {
+    return serial(this.db, async tx => {
+      const kit = await tx.kit.findUnique({ where: { id }, include: { ...kitAudit, ...kitUsage } });
+      if (!kit) throw new NotFoundException('Kit não encontrado.');
+      const block = kitBlock(kit._count);
+      if (block) throw new ConflictException(block + ' Inative o kit em vez de excluir.');
+      await tx.kitComponent.deleteMany({ where: { kitId: id } });
+      await tx.kit.delete({ where: { id } });
+      auditChange(kitValues(kit), null);
+      return { id };
     });
   }
 
@@ -224,6 +313,23 @@ export class CatalogController {
     });
   }
 
+  @Require('registrations:operate')
+  @Audit('Criar tipo de produto')
+  @Post('product-types')
+  addProductType(@Body() body: unknown) { return this.catalog.saveProductType(parse(productTypeFields, body)); }
+
+  @Require('registrations:operate')
+  @Audit('Alterar tipo de produto')
+  @Patch('product-types/:id')
+  updateProductType(@Param('id') id: string, @Body() body: unknown) {
+    return this.catalog.saveProductType(parse(productTypeFields, body), parse(idField, id));
+  }
+
+  @Require('registrations:operate')
+  @Audit('Excluir tipo de produto')
+  @Delete('product-types/:id')
+  removeProductType(@Param('id') id: string) { return this.catalog.deleteProductType(parse(idField, id)); }
+
   // Units define how every quantity is stored, so only administrators create families and units.
   // Units cannot be edited, since the movement history already holds quantities converted with them.
   @Require('admin')
@@ -274,6 +380,11 @@ export class CatalogController {
   }
 
   @Require('catalog:operate')
+  @Audit('Excluir produto')
+  @Delete('products/:id')
+  removeProduct(@Param('id') id: string) { return this.catalog.deleteProduct(parse(idField, id)); }
+
+  @Require('catalog:operate')
   @Audit('Criar kit')
   @Post('kits')
   addKit(@Body() body: unknown) { return this.catalog.saveKit(parse(kitFields, body)); }
@@ -292,4 +403,9 @@ export class CatalogController {
   kitStatus(@Param('id') id: string, @Body() body: unknown) {
     return this.catalog.setKitActive(parse(idField, id), parse(statusFields, body).active);
   }
+
+  @Require('catalog:operate')
+  @Audit('Excluir kit')
+  @Delete('kits/:id')
+  removeKit(@Param('id') id: string) { return this.catalog.deleteKit(parse(idField, id)); }
 }
