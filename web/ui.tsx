@@ -1,6 +1,6 @@
 import { createContext, FormEvent, ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CheckCircle2, Inbox, Search, SlidersHorizontal, X } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, Inbox, Search, SlidersHorizontal, X } from 'lucide-react';
 
 /* ---------- Data ---------- */
 
@@ -238,6 +238,25 @@ export function Field({ name, label, type = 'text', defaultValue, required = tru
   return <label>{label}<input name={name} type={type} defaultValue={defaultValue} required={required} placeholder={placeholder}
     inputMode={inputMode} autoComplete={autoComplete} />
     {hint && <span className="hint">{hint}</span>}</label>;
+}
+
+/** Password input with a reveal button. The button stays outside the label so it does not become part of the field's name. */
+export function PasswordField({ name, label, autoComplete, minLength, maxLength, hint }: {
+  name: string; label: string; autoComplete: 'current-password' | 'new-password'; minLength?: number; maxLength?: number; hint?: string;
+}) {
+  const id = useId();
+  const [visible, setVisible] = useState(false);
+  const Icon = visible ? EyeOff : Eye;
+  return <div className="password-field">
+    <label htmlFor={id}>{label}</label>
+    <div className="password-input">
+      <input id={id} name={name} type={visible ? 'text' : 'password'} autoComplete={autoComplete} minLength={minLength} maxLength={maxLength}
+        autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
+      <button type="button" className="icon-button password-toggle" aria-label={(visible ? 'Ocultar ' : 'Mostrar ') + label.toLowerCase()}
+        aria-pressed={visible} onClick={() => setVisible(value => !value)}><Icon size={16} aria-hidden="true" /></button>
+    </div>
+    {hint && <span className="hint">{hint}</span>}
+  </div>;
 }
 
 export function Select({ name, label, options, defaultValue, onChange, required = true, placeholder }: {
