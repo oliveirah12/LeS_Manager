@@ -23,7 +23,7 @@ const groups = [
   { id: 'home', label: 'Início', icon: HomeIcon, section: 'ops', permission: null, pages: [{ id: 'home', label: 'Início' }] },
   { id: 'stock', label: 'Estoque', icon: Package, section: 'ops', permission: 'stock:view', pages: [{ id: 'stock', label: 'Estoque' }] },
   { id: 'catalog', label: 'Catálogo', icon: Tag, section: 'ops', permission: 'catalog:view', pages: [
-    { id: 'products', label: 'Produtos' }, { id: 'kits', label: 'Kits' },
+    { id: 'products', label: 'Produtos' }, { id: 'inputs', label: 'Insumos' }, { id: 'kits', label: 'Kits' },
   ] },
   { id: 'finance', label: 'Financeiro', icon: Wallet, section: 'ops', permission: 'finance:view', pages: [
     { id: 'balance', label: 'Saldo' }, { id: 'statement', label: 'Extrato' }, { id: 'reconciliation', label: 'Conciliação' }, { id: 'integration', label: 'Integração' },
@@ -45,7 +45,7 @@ type Group = typeof groups[number];
 export type Page = Group['pages'][number]['id'] | 'account';
 
 const pageDescriptions: Record<Page, string> = {
-  home: '', products: 'Consulte os produtos do catálogo.', kits: 'Consulte os kits e suas composições.',
+  home: '', products: 'Consulte os produtos do catálogo.', inputs: 'Materiais usados nas fichas técnicas e na produção.', kits: 'Consulte os kits e suas composições.',
   'register-products': 'Cadastre, edite e inative produtos.', 'register-kits': 'Monte e edite a composição dos kits.',
   'product-types': 'Defina o que cada produto é e como ele se comporta na produção.',
   GRUPO: 'Organize os produtos por grupos.', MARCA: 'Gerencie as marcas do catálogo.',
@@ -63,7 +63,7 @@ const pageDescriptions: Record<Page, string> = {
 
 // Each screen has its own address so reload, back/forward and shared links keep the page.
 const paths: Record<Page, string> = {
-  home: '', products: 'catalogo/produtos', kits: 'catalogo/kits',
+  home: '', products: 'catalogo/produtos', inputs: 'catalogo/insumos', kits: 'catalogo/kits',
   'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits', 'product-types': 'cadastros/tipos-de-produto',
   GRUPO: 'cadastros/grupos', MARCA: 'cadastros/marcas', COR: 'cadastros/cores', DEPARTAMENTO: 'cadastros/departamentos',
   families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque',
@@ -259,7 +259,7 @@ function App() {
   const page = screen?.id;
   const content: ReactNode = <>
     {page === 'home' && <Home identity={identity} can={can} navigate={navigate} />}
-    {(page === 'products' || page === 'kits') && <Catalog key={page} page={page} edit={false} />}
+    {(page === 'products' || page === 'inputs' || page === 'kits') && <Catalog key={page} page={page} edit={false} seeStock={can('stock:view')} />}
     {(page === 'register-products' || page === 'register-kits') &&
       <Catalog key={page} page={page === 'register-products' ? 'products' : 'kits'} edit={can('catalog:operate')} />}
     {(page === 'product-types' || page === 'GRUPO' || page === 'MARCA' || page === 'COR' || page === 'DEPARTAMENTO' || page === 'families' || page === 'units') &&
@@ -282,7 +282,7 @@ function App() {
     <aside className="sidebar" id="app-sidebar" aria-label="Menu principal" inert={mobile && !menuOpen}>
       <a href={hashOf('home')} className="brand" onClick={event => { event.preventDefault(); navigate('home'); }}>
         <img src="/brand.png" alt="" width="34" height="34" /><span>LeS Manager</span></a>
-      <nav aria-label="Módulos" className="stack" style={{ gap: 18 }}>
+      <nav aria-label="Módulos" className="stack sidebar-nav" style={{ gap: 18 }}>
         {navSection('ops')}
         {navSection('admin', 'Administração')}
       </nav>

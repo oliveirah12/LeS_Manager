@@ -7,7 +7,7 @@ import { Authenticated, Require } from '../access/access';
 import { Audit, auditChange, auditContext } from '../audit/recorder';
 import { productInclude } from '../catalog/catalog';
 import { Database, idField, nonnegative, parse, positive, serial, storedDecimal } from '../shared';
-import { printerHourCost, productionCosting, sumValues } from '../stock/cost';
+import { printerHourCost, productionBudget, productionCosting, sumValues } from '../stock/cost';
 import { StockService } from '../stock/stock';
 
 const dateField = z.iso.datetime().transform(value => new Date(value));
@@ -42,12 +42,16 @@ const symbolOf = (product: { unit: { symbol: string; family: { units: { symbol: 
 
 /** One line per input, with the exact sums the panel shows. */
 function orderInputs(order: LoadedOrder) {
-  const inputs = new Map<string, { inputId: string; sku: string; name: string; symbol: string; planned: Prisma.Decimal; used: Prisma.Decimal | null }>();
+  const inputs = new Map<string, {
+    inputId: string; sku: string; name: string; symbol: string; planned: Prisma.Decimal; used: Prisma.Decimal | null;
+    parts: { productId: string; planned: Prisma.Decimal }[];
+  }>();
   for (const row of order.items.flatMap(item => item.consumption)) {
     const line = inputs.get(row.inputId) ?? {
-      inputId: row.inputId, sku: row.input.sku, name: row.input.name, symbol: symbolOf(row.input), planned: new Prisma.Decimal(0), used: null,
+      inputId: row.inputId, sku: row.input.sku, name: row.input.name, symbol: symbolOf(row.input), planned: new Prisma.Decimal(0), used: null, parts: [],
     };
     line.planned = line.planned.plus(row.planned);
+    line.parts.push({ productId: row.productId, planned: row.planned });
     if (row.used !== null) line.used = (line.used ?? new Prisma.Decimal(0)).plus(row.used);
     inputs.set(row.inputId, line);
   }
@@ -60,6 +64,21 @@ function present(order: LoadedOrder) {
     ...fields, printer: { id: printer.id, name: printer.name }, inputs: orderInputs(order),
     items: items.map(({ consumption: _consumption, product, ...item }) => ({ ...item, sku: product.sku, name: product.name, symbol: symbolOf(product) })),
   };
+}
+
+const costingRows = (order: LoadedOrder) => order.items.flatMap(item => item.consumption.map(row => ({
+  productId: row.productId, inputId: row.inputId, planned: row.planned, familyId: row.input.unit.familyId, unitCost: row.input.currentCost,
+})));
+
+/** Live estimate of a planned order. Only totals leave the API, never the average cost of each input. */
+function orderBudget(order: LoadedOrder, energyRate: Prisma.Decimal) {
+  if (order.status !== 'PLANNED') return null;
+  const budget = productionBudget({
+    items: order.items.map(item => ({ productId: item.productId, planned: item.planned })), rows: costingRows(order),
+    minutes: order.estimatedMinutes, hourCost: printerHourCost(order.printer.powerWatts, energyRate, order.printer.hourlyCost),
+  });
+  const missing = order.items.flatMap(item => item.consumption).filter(row => row.input.currentCost === null).map(row => row.input.sku);
+  return { ...budget, missingCost: [...new Set(missing)].sort() };
 }
 
 /** Everything a conclusion decides, shared by the preview and the real finish so both show the same numbers. */
@@ -80,10 +99,7 @@ function closing(order: LoadedOrder, energyRate: Prisma.Decimal, data: Finish) {
   const printMinutes = data.printMinutes ?? Math.max(1, Math.round((data.finishedAt.getTime() - order.startedAt.getTime()) / 60000));
   const hourCost = printerHourCost(order.printer.powerWatts, energyRate, order.printer.hourlyCost);
   const machineCost = hourCost.times(printMinutes).div(60).toDecimalPlaces(12);
-  const rows = order.items.flatMap(item => item.consumption.map(row => ({
-    productId: row.productId, inputId: row.inputId, planned: row.planned, familyId: row.input.unit.familyId, unitCost: row.input.currentCost,
-  })));
-  return { printMinutes, machineCost, used, costing: productionCosting({ items, rows, used, machineCost, absorbLoss: data.absorbLoss }) };
+  return { printMinutes, machineCost, used, costing: productionCosting({ items, rows: costingRows(order), used, machineCost, absorbLoss: data.absorbLoss }) };
 }
 
 @Injectable()
@@ -102,7 +118,8 @@ export class ProductionOrderService {
   }
 
   async overview() {
-    const [orders, printers, products] = await Promise.all([
+    const [energyRate, orders, printers, products] = await Promise.all([
+      this.energyRate(this.db),
       this.db.productionOrder.findMany({ include: orderInclude, orderBy: { number: 'desc' }, take: 200 }),
       this.db.printer.findMany({ where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
       this.db.product.findMany({
@@ -111,7 +128,7 @@ export class ProductionOrderService {
       }),
     ]);
     return {
-      orders: orders.map(present), printers,
+      orders: orders.map(order => ({ ...present(order), budget: orderBudget(order, energyRate) })), printers,
       products: products.map(product => ({ id: product.id, sku: product.sku, name: product.name, symbol: symbolOf(product) })),
     };
   }

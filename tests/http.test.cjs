@@ -456,6 +456,9 @@ test('API REST com PostgreSQL', {
     const recipe = expectStatus(await admin(`/catalog/products/${printed.id}/recipe`), 200);
     assert.equal(recipe.wastePercent, '5');
     assert.deepEqual(recipe.inputs, [{ inputId: filament.id, quantity: '120' }]);
+    const listed = expectStatus(await admin('/catalog'), 200).products;
+    assert.equal(listed.find(row => row.id === printed.id).hasRecipe, true);
+    assert.equal(listed.find(row => row.id === filament.id).hasRecipe, false);
 
     expectStatus(await admin('/catalog/products/' + filament.id, { method: 'DELETE' }), 409);
     expectStatus(await post(`/catalog/products/${filament.id}/status`, { active: false }), 409);
@@ -573,6 +576,19 @@ test('API REST com PostgreSQL', {
     expectStatus(await post('/catalog/units', { familyId: empty.id, symbol: id + 'w', factor: '5' }), 201);
     expectStatus(await remove('/catalog/families/' + empty.id), 200);
     assert.equal(await db.unit.count({ where: { familyId: empty.id } }), 0);
+  });
+
+  await t.test('entrada manual de produto fabricado exige ciência de que não baixa insumos', async () => {
+    const product = await createProduct('ENTRADA-FABRICADO', unit.id);
+    expectStatus(await admin('/catalog/products/' + product.id, {
+      method: 'PATCH', body: { name: 'Fabricado', typeId: '00000000-0000-4000-8000-000000000003' },
+    }), 200);
+    const entry = extra => post('/stock/movements', { productId: product.id, unitId: unit.id, kind: 'PURCHASE', quantity: '2', totalCost: '10', reason: 'Peças antigas', ...extra });
+    expectStatus(await entry(), 409);
+    assert.equal((await productRow(product.id)).quantity.toString(), '0');
+    expectStatus(await entry({ acknowledgeNoInputs: true }), 201);
+    assert.equal((await productRow(product.id)).quantity.toString(), '2');
+    expectStatus(await movement(product.id, unit.id, 'OUT', '1'), 201);
   });
 
   await t.test('inativação exige saldo zerado, bloqueia movimentações e preserva o histórico', async () => {

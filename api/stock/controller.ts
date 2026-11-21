@@ -1,10 +1,10 @@
-import { Body, Controller, Get, Inject, Param, Post, Query, Req, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Req, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { MovementKind } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
 import { Audit } from '../audit/recorder';
-import { CatalogService } from '../catalog/catalog';
+import { CatalogService, stockSettingsFields } from '../catalog/catalog';
 import { Database, dayRange, idField, parse } from '../shared';
 import { countFields, initialFields, kitOutFields, movementFields, StockService } from './stock';
 import { WorkbookKind, WorkbookLists, workbookRows, workbookTemplate } from './workbooks';
@@ -62,6 +62,13 @@ export class StockController {
   @Post('movements')
   movement(@Req() request: Authenticated, @Body() body: unknown) {
     return this.stock.movement(parse(movementFields, body), request.identity.id);
+  }
+
+  @Require('stock:operate')
+  @Audit('Alterar parâmetros de estoque')
+  @Patch('products/:id/settings')
+  settings(@Param('id') id: string, @Body() body: unknown) {
+    return this.catalog.saveStockSettings(parse(idField, id), parse(stockSettingsFields, body));
   }
 
   @Require('stock:operate')
