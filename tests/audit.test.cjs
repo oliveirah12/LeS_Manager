@@ -9,6 +9,7 @@ const controllers = [
   require('../dist/api/access/access.js').AccessController,
   require('../dist/api/audit/audit.js').AuditController,
   require('../dist/api/catalog/catalog.js').CatalogController,
+  require('../dist/api/catalog/recipe.js').RecipeController,
   require('../dist/api/finance/finance.js').FinanceController,
   require('../dist/api/stock/controller.js').StockController,
 ];

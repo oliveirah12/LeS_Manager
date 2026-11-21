@@ -55,15 +55,19 @@ const kitValues = (kit: AuditedKit) => ({
 });
 const kitAudit = { components: { include: { product: { select: { sku: true } } } } } as const;
 const productUsage = {
-  _count: { select: { movements: true, kitComponents: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } } } },
+  _count: { select: {
+    movements: true, kitComponents: true, recipe: true, usedInRecipes: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } },
+  } },
 } as const;
 const kitUsage = { _count: { select: { movements: true } } } as const;
 
-/** Why a product is part of the history. Such a product cannot be deleted or moved to another unit family. */
-function productBlock(usage: { movements: number; kitComponents: number; inventoryRows: number }) {
+/** Why a product is in use. Such a product cannot be deleted or moved to another unit family. */
+function productBlock(usage: { movements: number; kitComponents: number; inventoryRows: number; recipe: number; usedInRecipes: number }) {
   if (usage.movements) return 'O produto tem movimentações no histórico.';
   if (usage.kitComponents) return 'O produto compõe um kit.';
-  return usage.inventoryRows ? 'O produto consta em inventário confirmado.' : null;
+  if (usage.inventoryRows) return 'O produto consta em inventário confirmado.';
+  if (usage.recipe) return 'O produto tem ficha técnica.';
+  return usage.usedInRecipes ? 'O produto é insumo de uma ficha técnica.' : null;
 }
 const kitBlock = (usage: { movements: number }) => usage.movements ? 'O kit tem saídas no histórico.' : null;
 function productTypeBlock(id: string, products: number) {
@@ -101,6 +105,12 @@ export class CatalogService {
     return serial(this.db, async tx => {
       const before = id ? await tx.productType.findUnique({ where: { id } }) : null;
       if (id && !before) throw new NotFoundException('Tipo de produto não encontrado.');
+      if (before?.isManufactured && !data.isManufactured && await tx.productInput.count({ where: { product: { typeId: id } } })) {
+        throw new ConflictException('Há produtos deste tipo com ficha técnica, então ele precisa continuar fabricado.');
+      }
+      if (before?.isInput && !data.isInput && await tx.productInput.count({ where: { input: { typeId: id } } })) {
+        throw new ConflictException('Há produtos deste tipo em fichas técnicas, então ele precisa continuar como insumo.');
+      }
       auditChange(before && productTypeValues(before), productTypeValues(data));
       return id ? tx.productType.update({ where: { id }, data }) : tx.productType.create({ data });
     });
@@ -170,9 +180,15 @@ export class CatalogService {
     return serial(this.db, async tx => {
       await this.assertReferences(tx, data);
       const before = await tx.product.findUnique({
-        where: { id }, select: { ...productAudit, unitId: true, unit: { select: { symbol: true, familyId: true } }, ...productUsage },
+        where: { id }, select: { ...productAudit, typeId: true, unitId: true, unit: { select: { symbol: true, familyId: true } }, ...productUsage },
       });
       if (!before) throw new NotFoundException('Produto não encontrado.');
+      if (data.typeId && data.typeId !== before.typeId) {
+        const type = await tx.productType.findUnique({ where: { id: data.typeId } });
+        if (!type) throw new NotFoundException('Tipo de produto não encontrado.');
+        if (before._count.recipe && !type.isManufactured) throw new ConflictException('O produto tem ficha técnica, então o tipo precisa ser fabricado.');
+        if (before._count.usedInRecipes && !type.isInput) throw new ConflictException('O produto está em fichas técnicas, então o tipo precisa ser usado como insumo.');
+      }
       const newUnitId = data.unitId && data.unitId !== before.unitId ? data.unitId : undefined;
       if (newUnitId) {
         const unit = await tx.unit.findUnique({ where: { id: newUnitId } });
@@ -227,6 +243,12 @@ export class CatalogService {
       }
       if (!active && product.kitComponents.length) {
         throw new ConflictException('Inative antes os kits que usam ' + product.sku + ': ' + product.kitComponents.map(item => item.kit.sku).join(', ') + '.');
+      }
+      if (!active) {
+        const recipes = await tx.productInput.findMany({ where: { inputId: id, product: { active: true } }, select: { product: { select: { sku: true } } } });
+        if (recipes.length) {
+          throw new ConflictException('Retire ' + product.sku + ' das fichas técnicas de: ' + recipes.map(item => item.product.sku).join(', ') + '.');
+        }
       }
       auditChange({ 'Situação': situation(product.active) }, { 'Situação': situation(active) });
       // The revision change invalidates inventory previews that counted this product.

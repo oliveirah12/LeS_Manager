@@ -437,6 +437,37 @@ test('API REST com PostgreSQL', {
     expectStatus(await remove('/catalog/product-types/' + type.id), 200);
   });
 
+  await t.test('ficha técnica valida insumos e protege o que está em uso', async () => {
+    const [standard, filamentType, printedType] = [1, 2, 3].map(n => '00000000-0000-4000-8000-00000000000' + n);
+    const patch = (id, name, typeId) => admin('/catalog/products/' + id, { method: 'PATCH', body: { name, typeId } });
+    const saveRecipe = (id, wastePercent, inputs) => admin(`/catalog/products/${id}/recipe`, { method: 'PUT', body: { wastePercent, inputs } });
+    const line = inputId => [{ inputId, unitId: unit.id, quantity: '120' }];
+    const filament = await createProduct('FILAMENTO', unit.id);
+    const printed = await createProduct('IMPRESSO', unit.id);
+    const common = await createProduct('COMUM', unit.id);
+    expectStatus(await patch(filament.id, 'Filamento', filamentType), 200);
+
+    expectStatus(await saveRecipe(printed.id, '5', line(filament.id)), 409);
+    expectStatus(await patch(printed.id, 'Impresso', printedType), 200);
+    expectStatus(await saveRecipe(printed.id, '5', line(common.id)), 400);
+    expectStatus(await saveRecipe(printed.id, '5', line(printed.id)), 400);
+    expectStatus(await saveRecipe(printed.id, '101', line(filament.id)), 400);
+    expectStatus(await saveRecipe(printed.id, '5', line(filament.id)), 200);
+    const recipe = expectStatus(await admin(`/catalog/products/${printed.id}/recipe`), 200);
+    assert.equal(recipe.wastePercent, '5');
+    assert.deepEqual(recipe.inputs, [{ inputId: filament.id, quantity: '120' }]);
+
+    expectStatus(await admin('/catalog/products/' + filament.id, { method: 'DELETE' }), 409);
+    expectStatus(await post(`/catalog/products/${filament.id}/status`, { active: false }), 409);
+    expectStatus(await patch(filament.id, 'Filamento', standard), 409);
+    expectStatus(await patch(printed.id, 'Impresso', standard), 409);
+    expectStatus(await admin('/catalog/product-types/' + filamentType, {
+      method: 'PATCH', body: { name: 'Filamento', isInput: false, isManufactured: false },
+    }), 409);
+    expectStatus(await saveRecipe(printed.id, '0', []), 200);
+    expectStatus(await admin('/catalog/products/' + filament.id, { method: 'DELETE' }), 200);
+  });
+
   await t.test('inativação exige saldo zerado, bloqueia movimentações e preserva o histórico', async () => {
     const product = await createProduct('INATIVO', unit.id);
     expectStatus(await movement(product.id, unit.id, 'PURCHASE', '2', '3'), 201);

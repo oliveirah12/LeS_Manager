@@ -113,9 +113,23 @@ model Product {
   lastPurchaseCost Decimal?     @db.Decimal(30, 12)
   active        Boolean         @default(true)
   revision      Int             @default(0)
+  wastePercent  Decimal         @default(0) @db.Decimal(5, 2)
   movements     Movement[]
   kitComponents KitComponent[]
   inventoryRows InventoryRow[]
+  recipe        ProductInput[]  @relation("Recipe")
+  usedInRecipes ProductInput[]  @relation("RecipeInput")
+}
+
+/// Technical sheet: what one base unit of a manufactured product consumes, in the input's base unit.
+model ProductInput {
+  productId String
+  product   Product @relation("Recipe", fields: [productId], references: [id])
+  inputId   String
+  input     Product @relation("RecipeInput", fields: [inputId], references: [id])
+  quantity  Decimal @db.Decimal(30, 12)
+  @@id([productId, inputId])
+  @@index([inputId])
 }
 
 model Movement {

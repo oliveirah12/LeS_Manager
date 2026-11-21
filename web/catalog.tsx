@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { Pencil, Plus, Power, PowerOff, Trash2 } from 'lucide-react';
+import { ReactNode, useState } from 'react';
+import { ClipboardList, Pencil, Plus, Power, PowerOff, Trash2 } from 'lucide-react';
+import { RecipeEditor } from './recipe';
 import { RegistrationData, referenceKinds } from './registrations';
 import {
   api, Badge, baseUnit, Field, fields, Form, Kit, Loading, matches, message, Modal, ModalForm, notify, PageActions, Product, productOptions,
@@ -17,6 +18,7 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
   const [kit, setKit] = useState<Kit | null>();
   const [status, setStatus] = useState<Status>();
   const [removal, setRemoval] = useState<Removal>();
+  const [recipe, setRecipe] = useState<Product>();
   const [query, setQuery] = useState('');
   const [situation, setSituation] = useState<Situation>('active');
   async function save(path: string, payload: unknown, id?: string) {
@@ -28,8 +30,9 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
     matches(query, row.sku, row.name) && (situation === 'all' || row.active === (situation === 'active')));
   const situationBadge = (row: { active: boolean }) => row.active
     ? <Badge tone="ok"><span className="dot" />Ativo</Badge> : <Badge>Inativo</Badge>;
-  const rowActions = (kind: Status['kind'], row: { id: string; sku: string; active: boolean; deleteBlock?: string | null }, open: () => void) => <div className="actions">
+  const rowActions = (kind: Status['kind'], row: { id: string; sku: string; active: boolean; deleteBlock?: string | null }, open: () => void, extra?: ReactNode) => <div className="actions">
     <button type="button" className="btn secondary small" onClick={open}><Pencil size={14} aria-hidden="true" />Editar</button>
+    {extra}
     <button type="button" className="btn ghost small" onClick={() => setStatus({ kind, id: row.id, sku: row.sku, active: !row.active })}>
       {row.active ? <PowerOff size={14} aria-hidden="true" /> : <Power size={14} aria-hidden="true" />}{row.active ? 'Inativar' : 'Reativar'}</button>
     <button type="button" className={'btn ghost small' + (row.deleteBlock ? ' unavailable' : '')} title={row.deleteBlock ?? undefined}
@@ -55,7 +58,9 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
           <div className="actions">{referenceKinds.map(kind => data.references.find(item => item.id === row[kind.field])?.name)
             .filter(Boolean).map(name => <Badge key={name}>{name}</Badge>)}</div>,
           situationBadge(row),
-          ...(edit ? [rowActions('products', row, () => setProduct(row))] : []),
+          ...(edit ? [rowActions('products', row, () => setProduct(row),
+            data.productTypes.find(type => type.id === row.typeId)?.isManufactured &&
+              <button type="button" className="btn secondary small" onClick={() => setRecipe(row)}><ClipboardList size={14} aria-hidden="true" />Ficha técnica</button>)] : []),
         ])} />}
       {page === 'kits' && <Table empty="Nenhum kit encontrado."
         columns={['Kit', 'Componentes', 'Situação', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
@@ -98,6 +103,9 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
         : 'O item sai do estoque e das listas de seleção, e o histórico é preservado. ' +
           (status.kind === 'products' ? 'O saldo precisa estar zerado e o produto não pode compor kits ativos.' : 'Não será possível dar saída neste kit.')}</p>
     </ModalForm>}
+    {data && edit && recipe && <Modal wide title={'Ficha técnica de ' + recipe.sku} subtitle={recipe.name} close={() => setRecipe(undefined)}>
+      <RecipeEditor product={recipe} units={data.units} saved={async () => { notify('Ficha técnica salva.'); await reload(); }} />
+    </Modal>}
     {edit && removal?.block && <Modal title={'Não é possível excluir ' + removal.sku} close={() => setRemoval(undefined)}>
       <p className="muted">{removal.block} Se o item saiu de linha, use Inativar para preservar o histórico.</p>
     </Modal>}
