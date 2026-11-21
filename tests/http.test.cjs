@@ -418,6 +418,25 @@ test('API REST com PostgreSQL', {
     expectStatus(await remove('/catalog/kits/' + soldKit.id), 409);
   });
 
+  await t.test('tipos de produto definem comportamento e ficam protegidos em uso', async () => {
+    const standard = '00000000-0000-4000-8000-000000000001';
+    const remove = path => admin(path, { method: 'DELETE' });
+    const product = await createProduct('TIPADO', unit.id);
+    assert.equal((await productRow(product.id)).typeId, standard);
+
+    const type = expectStatus(await post('/catalog/product-types', { name: 'Tipo ' + sku('T'), isInput: true, isManufactured: false }), 201);
+    expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name: 'Tipado', typeId: type.id } }), 200);
+    assert.equal((await productRow(product.id)).typeId, type.id);
+    const listed = expectStatus(await admin('/catalog/registrations'), 200).productTypes.find(row => row.id === type.id);
+    assert.equal(listed.products, 1);
+    assert.ok(listed.deleteBlock);
+
+    expectStatus(await remove('/catalog/product-types/' + type.id), 409);
+    expectStatus(await remove('/catalog/product-types/' + standard), 409);
+    expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name: 'Tipado', typeId: standard } }), 200);
+    expectStatus(await remove('/catalog/product-types/' + type.id), 200);
+  });
+
   await t.test('inativação exige saldo zerado, bloqueia movimentações e preserva o histórico', async () => {
     const product = await createProduct('INATIVO', unit.id);
     expectStatus(await movement(product.id, unit.id, 'PURCHASE', '2', '3'), 201);

@@ -27,7 +27,7 @@ const groups = [
     { id: 'balance', label: 'Saldo' }, { id: 'statement', label: 'Extrato' }, { id: 'reconciliation', label: 'Conciliação' }, { id: 'integration', label: 'Integração' },
   ] },
   { id: 'registrations', label: 'Cadastros', icon: Layers, section: 'admin', permission: 'registrations:view', pages: [
-    { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' },
+    { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' }, { id: 'product-types', label: 'Tipos de produto' },
     ...referenceKinds.map(({ id, label }) => ({ id, label })),
     { id: 'families', label: 'Famílias de medida' }, { id: 'units', label: 'Unidades de medida' },
   ] },
@@ -42,6 +42,7 @@ export type Page = Group['pages'][number]['id'] | 'account';
 const pageDescriptions: Record<Page, string> = {
   home: '', products: 'Consulte os produtos do catálogo.', kits: 'Consulte os kits e suas composições.',
   'register-products': 'Cadastre, edite e inative produtos.', 'register-kits': 'Monte e edite a composição dos kits.',
+  'product-types': 'Defina o que cada produto é e como ele se comporta na produção.',
   GRUPO: 'Organize os produtos por grupos.', MARCA: 'Gerencie as marcas do catálogo.',
   COR: 'Mantenha a lista de cores disponíveis.', DEPARTAMENTO: 'Organize os departamentos do catálogo.',
   families: 'Cada família tem uma unidade base, como g para peso.', units: 'Unidades e fatores de conversão para a unidade base.',
@@ -56,7 +57,7 @@ const pageDescriptions: Record<Page, string> = {
 // Each screen has its own address so reload, back/forward and shared links keep the page.
 const paths: Record<Page, string> = {
   home: '', products: 'catalogo/produtos', kits: 'catalogo/kits',
-  'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits',
+  'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits', 'product-types': 'cadastros/tipos-de-produto',
   GRUPO: 'cadastros/grupos', MARCA: 'cadastros/marcas', COR: 'cadastros/cores', DEPARTAMENTO: 'cadastros/departamentos',
   families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque',
   balance: 'financeiro/saldo', statement: 'financeiro/extrato', reconciliation: 'financeiro/conciliacao', integration: 'financeiro/integracao',
@@ -253,7 +254,7 @@ function App() {
     {(page === 'products' || page === 'kits') && <Catalog key={page} page={page} edit={false} />}
     {(page === 'register-products' || page === 'register-kits') &&
       <Catalog key={page} page={page === 'register-products' ? 'products' : 'kits'} edit={can('catalog:operate')} />}
-    {(page === 'GRUPO' || page === 'MARCA' || page === 'COR' || page === 'DEPARTAMENTO' || page === 'families' || page === 'units') &&
+    {(page === 'product-types' || page === 'GRUPO' || page === 'MARCA' || page === 'COR' || page === 'DEPARTAMENTO' || page === 'families' || page === 'units') &&
       <Registrations key={page} page={page} edit={can('registrations:operate')} admin={admin} />}
     {page === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}
     {(page === 'balance' || page === 'statement' || page === 'reconciliation' || page === 'integration') &&

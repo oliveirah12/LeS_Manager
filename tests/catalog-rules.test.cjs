@@ -9,7 +9,7 @@ function service(usage, unitFamily = 'mass') {
   const calls = [];
   const record = name => async args => { calls.push(name); return args; };
   const stored = {
-    sku: 'P-1', name: 'Produto', unitId: 'g', unit: { symbol: 'g', familyId: 'mass' }, group: null, brand: null, color: null, department: null, _count: usage,
+    sku: 'P-1', name: 'Produto', type: { name: 'Produto normal' }, unitId: 'g', unit: { symbol: 'g', familyId: 'mass' }, group: null, brand: null, color: null, department: null, _count: usage,
   };
   const tx = {
     reference: { findMany: async () => [] },
@@ -47,6 +47,33 @@ for (const field of Object.keys(unused)) {
     assert.deepEqual(calls, []);
   });
 }
+
+function typeService(products) {
+  const deleted = [];
+  const tx = { productType: {
+    findUnique: async () => ({ name: 'Resina', isInput: true, isManufactured: false, _count: { products } }),
+    delete: async ({ where }) => { deleted.push(where.id); },
+  } };
+  return { catalog: new CatalogService({ $transaction: work => work(tx) }), deleted };
+}
+
+test('the default product type is never deleted', async () => {
+  const { catalog, deleted } = typeService(0);
+  await assert.rejects(catalog.deleteProductType('00000000-0000-4000-8000-000000000001'), { status: 409 });
+  assert.deepEqual(deleted, []);
+});
+
+test('a product type in use is not deleted', async () => {
+  const { catalog, deleted } = typeService(2);
+  await assert.rejects(catalog.deleteProductType('type'), { status: 409 });
+  assert.deepEqual(deleted, []);
+});
+
+test('an unused product type is deleted', async () => {
+  const { catalog, deleted } = typeService(0);
+  assert.deepEqual(await catalog.deleteProductType('type'), { id: 'type' });
+  assert.deepEqual(deleted, ['type']);
+});
 
 test('an unused product is deleted with its pending count rows', async () => {
   const { catalog, calls } = service(unused);

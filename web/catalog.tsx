@@ -49,9 +49,9 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
     {message(error)}
     {!data ? loading && <Loading label="Carregando catálogo…" /> : <>
       {page === 'products' && <Table empty="Nenhum produto encontrado."
-        columns={['Produto', 'Unidade', 'Classificação', 'Situação', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
+        columns={['Produto', 'Tipo', 'Unidade', 'Classificação', 'Situação', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
         rows={visible(data.products).map(row => [
-          <Title name={row.name} code={row.sku} />, row.unit.symbol,
+          <Title name={row.name} code={row.sku} />, data.productTypes.find(type => type.id === row.typeId)?.name ?? '—', row.unit.symbol,
           <div className="actions">{referenceKinds.map(kind => data.references.find(item => item.id === row[kind.field])?.name)
             .filter(Boolean).map(name => <Badge key={name}>{name}</Badge>)}</div>,
           situationBadge(row),
@@ -74,6 +74,8 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
       }}>
       <Field name="sku" label="SKU" placeholder="Ex.: CX-KRAFT-2020" defaultValue={product?.sku} />
       <Field name="name" label="Nome do produto" defaultValue={product?.name} />
+      <Select name="typeId" label="Tipo" options={data.productTypes}
+        defaultValue={product?.typeId ?? data.productTypes.find(type => type.isDefault)?.id} />
       <Select name="unitId" label="Unidade" defaultValue={product?.unit.id}
         options={unitOptions(product?.deleteBlock ? data.units.filter(unit => unit.familyId === product.unit.familyId) : data.units)} />
       {product?.deleteBlock && <p className="hint">Como este produto já tem histórico, só aceita unidades da mesma família.</p>}
