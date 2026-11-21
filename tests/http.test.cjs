@@ -508,6 +508,7 @@ test('API REST com PostgreSQL', {
 
     const order = expectStatus(await newOrder('20'), 201);
     assert.equal(order.inputs[0].planned, '2520');
+    assert.equal(order.expectedEnd, '2026-11-21T20:00:00.000Z');
     expectStatus(await action(order.id, 'finish', closing), 409);
     expectStatus(await action(order.id, 'start', { startedAt: started }), 200);
     assert.equal((await productRow(filament.id)).quantity.toString(), '3000');

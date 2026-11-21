@@ -93,17 +93,21 @@ function InputsTable({ inputs }: { inputs: OrderInput[] }) {
 
 function NewOrder({ view, done }: { view: OrdersView; done: (text: string) => Promise<void> }) {
   const [rows, setRows] = useState([{ key: 0, productId: '' }]);
+  const [plannedStart, setPlannedStart] = useState(() => localValue());
+  const [hours, setHours] = useState('');
+  const [minutes, setMinutes] = useState('');
   const closePanel = useClosePanel();
+  const estimatedMinutes = Number(hours || 0) * 60 + Number(minutes || 0);
+  const validTime = Number.isInteger(estimatedMinutes) && estimatedMinutes > 0;
+  const startTime = new Date(plannedStart).getTime();
+  const expectedEnd = validTime && Number.isFinite(startTime) ? new Date(startTime + estimatedMinutes * 60000).toISOString() : null;
   if (!view.printers.length || !view.products.length) return <div className="info">
     {!view.printers.length ? 'Cadastre uma impressora ativa em Produção → Impressoras.' : 'Monte a ficha técnica de um produto fabricado em Cadastros → Produtos.'}
   </div>;
   return <Form label="Criar ordem" cancel="Cancelar" action={async values => {
-    const estimatedMinutes = Number(values.get('hours') || 0) * 60 + Number(values.get('minutes') || 0);
-    if (!Number.isInteger(estimatedMinutes) || estimatedMinutes <= 0) throw new Error('Informe o tempo de impressão em horas e minutos inteiros.');
-    const expectedEnd = values.get('expectedEnd');
+    if (!validTime) throw new Error('Informe o tempo de impressão em horas e minutos inteiros.');
     await api('production/orders', {
-      printerId: values.get('printerId'), plannedStart: iso(values.get('plannedStart')), estimatedMinutes,
-      ...(expectedEnd ? { expectedEnd: iso(expectedEnd) } : {}), notes: String(values.get('notes') ?? ''),
+      printerId: values.get('printerId'), plannedStart: iso(plannedStart), estimatedMinutes, notes: String(values.get('notes') ?? ''),
       items: rows.map(({ key }) => ({ productId: values.get('product' + key), quantity: values.get('quantity' + key) })),
     });
     await done('Ordem criada.');
@@ -111,13 +115,13 @@ function NewOrder({ view, done }: { view: OrdersView; done: (text: string) => Pr
   }}>
     <div className="form-grid">
       <Select name="printerId" label="Impressora" options={view.printers} />
-      <Field name="plannedStart" label="Início previsto" type="datetime-local" defaultValue={localValue()} />
+      <label>Início previsto<input name="plannedStart" type="datetime-local" required value={plannedStart} onChange={event => setPlannedStart(event.target.value)} /></label>
     </div>
     <div className="form-grid">
-      <Field name="hours" label="Tempo de impressão (horas)" inputMode="numeric" required={false} placeholder="10" />
-      <Field name="minutes" label="Minutos" inputMode="numeric" required={false} placeholder="0" />
-      <Field name="expectedEnd" label="Término previsto" type="datetime-local" required={false} hint="Vazio: início + tempo de impressão." />
+      <label>Tempo de impressão (horas)<input name="hours" inputMode="numeric" placeholder="10" value={hours} onChange={event => setHours(event.target.value)} /></label>
+      <label>Minutos<input name="minutes" inputMode="numeric" placeholder="0" value={minutes} onChange={event => setMinutes(event.target.value)} /></label>
     </div>
+    <p className="hint" role="status">{expectedEnd ? <>Término previsto: <strong>{dateTime(expectedEnd)}</strong></> : 'Informe o início e o tempo para calcular o término.'}</p>
     <h3>Produtos da impressão</h3>
     {rows.map(({ key, productId }, index) => {
       const product = view.products.find(item => item.id === productId);

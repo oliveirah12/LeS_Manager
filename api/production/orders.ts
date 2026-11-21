@@ -13,7 +13,7 @@ import { StockService } from '../stock/stock';
 const dateField = z.iso.datetime().transform(value => new Date(value));
 const minutesField = z.number().int().positive().max(1000000);
 const createFields = z.object({
-  printerId: idField, plannedStart: dateField, estimatedMinutes: minutesField, expectedEnd: dateField.optional(),
+  printerId: idField, plannedStart: dateField, estimatedMinutes: minutesField,
   notes: z.string().trim().max(500).optional(),
   items: z.array(z.object({ productId: idField, quantity: positive })).min(1).max(50),
 });
@@ -138,8 +138,7 @@ export class ProductionOrderService {
           })) },
         };
       });
-      const expectedEnd = data.expectedEnd ?? new Date(data.plannedStart.getTime() + data.estimatedMinutes * 60000);
-      if (expectedEnd <= data.plannedStart) throw new BadRequestException('A previsão de término precisa ser depois do início.');
+      const expectedEnd = new Date(data.plannedStart.getTime() + data.estimatedMinutes * 60000);
       const order = await tx.productionOrder.create({
         data: {
           printerId: printer.id, userId, notes: data.notes || null, plannedStart: data.plannedStart,
