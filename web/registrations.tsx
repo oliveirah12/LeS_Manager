@@ -10,7 +10,10 @@ export const referenceKinds = [
 ] as const;
 type Reference = { id: string; name: string; kind: string };
 export type ProductType = { id: string; name: string; isInput: boolean; isManufactured: boolean; products: number; isDefault: boolean; deleteBlock: string | null };
-export type RegistrationData = { families: { id: string; name: string }[]; references: Reference[]; units: Unit[]; productTypes: ProductType[] };
+type Family = { id: string; name: string; deleteBlock?: string | null };
+type MeasureUnit = Unit & { factorBlock?: string | null; deleteBlock?: string | null };
+type Removal = { path: 'families' | 'units'; id: string; name: string; block?: string | null };
+export type RegistrationData = { families: Family[]; references: Reference[]; units: MeasureUnit[]; productTypes: ProductType[] };
 export type RegistrationPage = typeof referenceKinds[number]['id'] | 'families' | 'units' | 'product-types';
 
 function ProductTypes({ types, edit, reload }: { types: ProductType[]; edit: boolean; reload: () => Promise<unknown> }) {
@@ -59,7 +62,15 @@ export function Registrations({ page, edit, admin }: { page: RegistrationPage; e
   const { data, error, loading, reload } = useData<RegistrationData>('catalog/registrations');
   const [reference, setReference] = useState<Reference | null>();
   const [creating, setCreating] = useState(false);
+  const [family, setFamily] = useState<Family>();
+  const [unit, setUnit] = useState<MeasureUnit>();
+  const [removal, setRemoval] = useState<Removal>();
   const [query, setQuery] = useState('');
+  const measureActions = (open: () => void, target: Removal) => <div className="actions">
+    <button type="button" className="btn secondary small" onClick={open}><Pencil size={14} aria-hidden="true" />Editar</button>
+    <button type="button" className={'btn ghost small' + (target.block ? ' unavailable' : '')} title={target.block ?? undefined}
+      onClick={() => setRemoval(target)}><Trash2 size={14} aria-hidden="true" />Excluir</button>
+  </div>;
   async function save(path: string, payload: unknown, id?: string) {
     await api('catalog/' + path + (id ? '/' + id : ''), payload, id ? 'PATCH' : 'POST');
     notify(id ? 'Alterações salvas.' : 'Cadastro criado.');
@@ -83,12 +94,14 @@ export function Registrations({ page, edit, admin }: { page: RegistrationPage; e
             ...(edit ? [<button type="button" className="btn secondary small" onClick={() => setReference(item)}><Pencil size={14} aria-hidden="true" />Editar</button>] : []),
           ])} />
       </>}
-      {page === 'families' && <Table columns={['Família', 'Unidade base']} rows={data.families.map(family => [
-        <span className="cell-title">{family.name}</span>, data.units.find(unit => unit.familyId === family.id && unit.isBase)?.symbol ?? '—',
+      {page === 'families' && <Table columns={['Família', 'Unidade base', ...(admin ? [{ label: 'Ações', actions: true }] : [])]} rows={data.families.map(item => [
+        <span className="cell-title">{item.name}</span>, data.units.find(row => row.familyId === item.id && row.isBase)?.symbol ?? '—',
+        ...(admin ? [measureActions(() => setFamily(item), { path: 'families', id: item.id, name: item.name, block: item.deleteBlock })] : []),
       ])} />}
-      {page === 'units' && <Table columns={['Unidade', 'Família', { label: 'Fator', end: true }, 'Tipo']} rows={data.units.map(unit => [
-        <span className="cell-title">{unit.symbol}</span>, data.families.find(family => family.id === unit.familyId)?.name,
-        <span className="num">{decimal(unit.factor)}</span>, unit.isBase ? <Badge tone="brand">Base</Badge> : <span className="muted">Conversão</span>,
+      {page === 'units' && <Table columns={['Unidade', 'Família', { label: 'Fator', end: true }, 'Tipo', ...(admin ? [{ label: 'Ações', actions: true }] : [])]} rows={data.units.map(item => [
+        <span className="cell-title">{item.symbol}</span>, data.families.find(row => row.id === item.familyId)?.name,
+        <span className="num">{decimal(item.factor)}</span>, item.isBase ? <Badge tone="brand">Base</Badge> : <span className="muted">Conversão</span>,
+        ...(admin ? [measureActions(() => setUnit(item), { path: 'units', id: item.id, name: item.symbol, block: item.deleteBlock })] : []),
       ])} />}
     </>}
 
@@ -106,6 +119,28 @@ export function Registrations({ page, edit, admin }: { page: RegistrationPage; e
       <Select name="familyId" label="Família" options={data.families} />
       <Field name="symbol" label="Símbolo" placeholder="kg" />
       <Field name="factor" label="Fator de conversão" placeholder="1000" inputMode="decimal" hint="Quantas unidades base cabem em uma desta. Exemplo: 1 kg = 1000 g." />
+    </ModalForm>}
+    {page === 'families' && admin && family && <ModalForm title="Editar família" close={() => setFamily(undefined)} label="Salvar"
+      action={values => save('families', { name: values.get('name') }, family.id)}>
+      <Field name="name" label="Família" defaultValue={family.name} />
+    </ModalForm>}
+    {page === 'units' && admin && unit && <ModalForm title={'Editar unidade ' + unit.symbol} close={() => setUnit(undefined)} label="Salvar"
+      action={values => save('units', { symbol: values.get('symbol'), factor: unit.factorBlock ? unit.factor : values.get('factor') }, unit.id)}>
+      <Field name="symbol" label="Símbolo" defaultValue={unit.symbol} />
+      {unit.factorBlock
+        ? <label>Fator de conversão<input value={decimal(unit.factor)} disabled /><span className="hint">{unit.factorBlock} O fator não pode mudar.</span></label>
+        : <Field name="factor" label="Fator de conversão" inputMode="decimal" defaultValue={unit.factor} hint="Quantas unidades base cabem em uma desta." />}
+    </ModalForm>}
+    {admin && removal?.block && <Modal title={'Não é possível excluir ' + removal.name} close={() => setRemoval(undefined)}>
+      <p className="muted">{removal.block}</p>
+    </Modal>}
+    {admin && removal && !removal.block && <ModalForm title={'Excluir ' + removal.name} label="Excluir definitivamente" danger close={() => setRemoval(undefined)}
+      action={async () => {
+        await api('catalog/' + removal.path + '/' + removal.id, undefined, 'DELETE');
+        notify(removal.name + ' excluído.');
+        await reload();
+      }}>
+      <p className="muted">{removal.path === 'families' ? 'A família e todas as suas unidades serão removidas. ' : ''}Esta ação não pode ser desfeita, e a exclusão fica registrada na auditoria.</p>
     </ModalForm>}
   </>;
 }
