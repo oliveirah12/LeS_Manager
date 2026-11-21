@@ -282,7 +282,7 @@ function App() {
     <aside className="sidebar" id="app-sidebar" aria-label="Menu principal" inert={mobile && !menuOpen}>
       <a href={hashOf('home')} className="brand" onClick={event => { event.preventDefault(); navigate('home'); }}>
         <img src="/brand.png" alt="" width="34" height="34" /><span>LeS Manager</span></a>
-      <nav aria-label="Módulos" className="stack" style={{ gap: 18 }}>
+      <nav aria-label="Módulos" className="stack sidebar-nav" style={{ gap: 18 }}>
         {navSection('ops')}
         {navSection('admin', 'Administração')}
       </nav>
