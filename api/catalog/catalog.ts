@@ -22,7 +22,7 @@ export const productFields = z.object({
 const productUpdate = productFields.partial({ sku: true, unitId: true });
 const productTypeFields = z.object({ name: nameField, isInput: z.boolean(), isManufactured: z.boolean() });
 /** Default type of every product, created by the migration. */
-const defaultProductType = '00000000-0000-4000-8000-000000000001';
+export const defaultProductType = '00000000-0000-4000-8000-000000000001';
 const statusFields = z.strictObject({ active: z.boolean() });
 const situation = (active: boolean) => active ? 'Ativo' : 'Inativo';
 const kitFields = z.object({
@@ -177,7 +177,7 @@ export class CatalogService {
     }
   }
 
-  async createProduct(tx: Prisma.TransactionClient, data: z.infer<typeof productFields>) {
+  async createProduct(tx: Prisma.TransactionClient, data: z.infer<typeof productFields> & { wastePercent?: Prisma.Decimal }) {
     await this.assertReferences(tx, data);
     const product = await tx.product.create({ data, include: productInclude });
     auditChange(null, productValues(await tx.product.findUniqueOrThrow({ where: { id: product.id }, select: productAudit })));

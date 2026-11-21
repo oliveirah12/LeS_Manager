@@ -7,7 +7,7 @@ import { Audit } from '../audit/recorder';
 import { CatalogService } from '../catalog/catalog';
 import { Database, dayRange, idField, parse } from '../shared';
 import { countFields, initialFields, kitOutFields, movementFields, StockService } from './stock';
-import { WorkbookKind, workbookRows, workbookTemplate } from './workbooks';
+import { WorkbookKind, WorkbookLists, workbookRows, workbookTemplate } from './workbooks';
 
 const pageSize = 100;
 const historyFields = z.object({
@@ -17,9 +17,9 @@ const historyFields = z.object({
 
 const Upload = () => UseInterceptors(FileInterceptor('file', { limits: { fileSize: 2 * 1024 * 1024, files: 1 } }));
 
-async function template(kind: WorkbookKind) {
+async function template(kind: WorkbookKind, lists?: WorkbookLists) {
   const filename = kind === 'initial' ? 'carga-inicial.xlsx' : 'inventario.xlsx';
-  return new StreamableFile(await workbookTemplate(kind), {
+  return new StreamableFile(await workbookTemplate(kind, lists), {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     disposition: 'attachment; filename="' + filename + '"',
   });
@@ -99,7 +99,14 @@ export class StockController {
 
   @Require('catalog:operate', 'stock:operate')
   @Get('initial/template')
-  initialTemplate() { return template('initial'); }
+  async initialTemplate() {
+    const { productTypes, units, references } = await this.catalog.registrations();
+    const names = (kind: string) => references.filter(item => item.kind === kind).map(item => item.name);
+    return template('initial', {
+      Tipo: productTypes.map(type => type.name), Unidade: units.map(unit => unit.symbol), Grupo: names('GRUPO'),
+      Marca: names('MARCA'), Cor: names('COR'), Departamento: names('DEPARTAMENTO'),
+    });
+  }
 
   @Require('catalog:operate', 'stock:operate')
   @Audit(false)

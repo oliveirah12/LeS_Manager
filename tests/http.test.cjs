@@ -644,15 +644,15 @@ test('API REST com PostgreSQL', {
     const first = sku('IMPORTADO-1');
     const second = sku('IMPORTADO-2');
     const sheet = workbook.worksheets[0];
-    assert.deepEqual(sheet.getRow(1).values.slice(1, 6), ['SKU', 'Nome', 'Unidade', 'Quantidade', 'Custo']);
-    sheet.getRow(2).values = [first, 'Produto por unidade', unit.symbol, '4', '15.00'];
-    sheet.getRow(3).values = [second, 'Produto por peso', sku('UNIDADE-INVALIDA'), '2.5', '12.00'];
+    assert.deepEqual(sheet.getRow(1).values.slice(1, 8), ['SKU', 'Nome', 'Tipo', 'Unidade', 'Quantidade', 'Custo total', 'Perda (%)']);
+    sheet.getRow(2).values = [first, 'Produto por unidade', '', unit.symbol, '4', '60.00'];
+    sheet.getRow(3).values = [second, 'Produto por peso', '', sku('UNIDADE-INVALIDA'), '2.5', '30.00'];
 
     const upload = () => uploadWorkbook('/stock/initial/preview', workbook);
     const products = () => db.product.findMany({ where: { sku: { in: [first, second] } }, orderBy: { sku: 'asc' } });
     expectStatus(await upload(), 400);
     assert.equal((await products()).length, 0);
-    sheet.getCell('C3').value = kilogram.symbol;
+    sheet.getCell('D3').value = kilogram.symbol;
     const batch = expectStatus(await upload(), 201);
     assert.equal((await products()).length, 0);
 
@@ -664,5 +664,37 @@ test('API REST com PostgreSQL', {
       [first, '4', '15'], [second, '2500', '0.012'],
     ]);
     assert.equal(await db.movement.count({ where: { kind: 'INITIAL', productId: { in: imported.map(product => product.id) } } }), 2);
+  });
+
+  await t.test('a carga inicial cadastra tipos, perda e ficha técnica de forma atômica', async () => {
+    const workbook = await loadTemplate('/stock/initial/template');
+    const [sheet, recipes] = [workbook.getWorksheet('Carga inicial'), workbook.getWorksheet('Ficha técnica')];
+    const filament = sku('CARGA-PLA');
+    const printed = sku('CARGA-PECA');
+    sheet.getRow(2).values = [filament, 'PLA da carga', 'Filamento', kilogram.symbol, '3', '300'];
+    sheet.getRow(3).values = [printed, 'Peça da carga', 'Produto normal', unit.symbol, '0', '', '5'];
+    recipes.getRow(2).values = [printed, filament, '120', gram.symbol];
+    const upload = () => uploadWorkbook('/stock/initial/preview', workbook);
+    const stored = () => db.product.count({ where: { sku: { in: [filament, printed] } } });
+
+    expectStatus(await upload(), 400);
+    sheet.getCell('C3').value = 'Impresso 3D';
+    recipes.getCell('B2').value = printed;
+    expectStatus(await upload(), 400);
+    recipes.getCell('B2').value = filament;
+    const batch = expectStatus(await upload(), 201);
+    assert.equal(batch.rows[0].declaredCost, '100');
+    assert.equal(batch.rows[1].typeName, 'Impresso 3D');
+    assert.equal(await stored(), 0);
+
+    expectStatus(await post(`/stock/initial/${batch.id}/confirm`), [200, 201]);
+    const [input, product] = await Promise.all([
+      db.product.findUniqueOrThrow({ where: { sku: filament } }),
+      db.product.findUniqueOrThrow({ where: { sku: printed }, include: { recipe: true } }),
+    ]);
+    assert.equal(input.quantity.toString(), '3000');
+    assert.equal(input.currentCost.toString(), '0.1');
+    assert.equal(product.wastePercent.toString(), '5');
+    assert.deepEqual(product.recipe.map(row => [row.inputId, row.quantity.toString()]), [[input.id, '120']]);
   });
 });
