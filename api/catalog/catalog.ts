@@ -5,9 +5,9 @@ import { Prisma, ProductionStatus, ReferenceKind } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
 import { canAccess } from '../access/security';
-import { Audit, auditChange } from '../audit/recorder';
-import { Database, idField, nameField, parse, positive, serial, skuField, storedDecimal } from '../shared';
-import { kitCosting, recipeEstimate, stockValue, sumValues } from '../stock/cost';
+import { Audit, auditChange, auditContext } from '../audit/recorder';
+import { Database, idField, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal } from '../shared';
+import { belowMinimum, kitCosting, recipeEstimate, stockValue, sumValues } from '../stock/cost';
 
 const referenceField = z.object({ kind: z.enum(ReferenceKind), name: nameField });
 const symbolField = z.string().trim().min(1).max(24);
@@ -26,6 +26,7 @@ const productTypeFields = z.object({ name: nameField, isInput: z.boolean(), isMa
 /** Default type of every product, created by the migration. */
 export const defaultProductType = '00000000-0000-4000-8000-000000000001';
 const statusFields = z.strictObject({ active: z.boolean() });
+export const stockSettingsFields = z.strictObject({ minStock: nonnegative.nullable() });
 const situation = (active: boolean) => active ? 'Ativo' : 'Inativo';
 const kitFields = z.object({
   sku: skuField, name: nameField,
@@ -263,6 +264,17 @@ export class CatalogService {
     });
   }
 
+  saveStockSettings(id: string, data: z.infer<typeof stockSettingsFields>) {
+    const minStock = data.minStock && storedDecimal(data.minStock);
+    return serial(this.db, async tx => {
+      const before = await tx.product.findUnique({ where: { id }, select: { sku: true, minStock: true } });
+      if (!before) throw new NotFoundException('Produto não encontrado.');
+      auditContext({ Produto: before.sku });
+      auditChange({ 'Estoque mínimo': before.minStock?.toFixed() ?? null }, { 'Estoque mínimo': minStock?.toFixed() ?? null });
+      return tx.product.update({ where: { id }, data: { minStock }, select: { id: true, minStock: true } });
+    });
+  }
+
   private async reservedById() {
     const rows = await this.db.productionConsumption.groupBy({ by: ['inputId'], where: { item: { order: { status: 'PRINTING' } } }, _sum: { planned: true } });
     const reserved = new Map(rows.map(row => [row.inputId, row._sum.planned ?? new Prisma.Decimal(0)]));
@@ -277,7 +289,7 @@ export class CatalogService {
     const product = await this.db.product.findUnique({
       where: { id },
       select: {
-        id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, wastePercent: true, ...productInclude,
+        id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, wastePercent: true, ...productInclude,
         type: { select: { name: true, isInput: true, isManufactured: true } },
         kitComponents: { select: { quantity: true, kit: { select: { sku: true, name: true, active: true } } }, orderBy: { kitId: 'asc' } },
         usedInRecipes: { select: { quantity: true, product: { select: { sku: true, name: true, active: true } } }, orderBy: { productId: 'asc' } },
@@ -317,7 +329,7 @@ export class CatalogService {
       stock: seeStock ? {
         quantity: product.quantity, reserved: held, available: Prisma.Decimal.max(0, product.quantity.minus(held)),
         currentCost: product.currentCost, value: stockValue(product.quantity, product.currentCost), lastPurchaseCost: product.lastPurchaseCost,
-        lastMovement, purchases,
+        lastMovement, purchases, minStock: product.minStock, belowMinimum: belowMinimum(product.quantity, held, product.minStock),
         estimate: product.type.isManufactured && product.recipe.length ? recipeEstimate(product.wastePercent, product.recipe.map(row => ({
           sku: row.input.sku, quantity: row.quantity, active: row.input.active, balance: row.input.quantity,
           reserved: reserved!(row.inputId), unitCost: row.input.currentCost,
@@ -357,7 +369,11 @@ export class CatalogService {
     ]);
     const reserved = (id: string) => reservations.find(row => row.inputId === id)?._sum.planned ?? new Prisma.Decimal(0);
     // Values are computed here with exact decimals, so the panel only formats them.
-    const valued = products.map(product => ({ ...product, reserved: reserved(product.id), value: stockValue(product.quantity, product.currentCost) }));
+    const valued = products.map(product => ({
+      ...product, reserved: reserved(product.id), value: stockValue(product.quantity, product.currentCost),
+      available: Prisma.Decimal.max(0, product.quantity.minus(reserved(product.id))),
+      belowMinimum: belowMinimum(product.quantity, reserved(product.id), product.minStock),
+    }));
     return {
       products: valued,
       kits: kits.map(kit => ({

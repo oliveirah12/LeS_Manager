@@ -376,7 +376,7 @@ export type Kit = {
   components: { productId: string; quantity: string; product: Product }[];
 };
 /** Product in the stock view, with its value at average cost computed by the API with exact decimals. */
-export type StockProduct = Product & { value: string };
+export type StockProduct = Product & { value: string; available: string; minStock: string | null; belowMinimum: boolean };
 /** Costs computed by the API from the components' current average. */
 export type StockKit = Omit<Kit, 'components'> & {
   components: (Kit['components'][number] & { cost: string | null; share: string | null; yields: string })[];

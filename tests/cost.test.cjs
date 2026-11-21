@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, recipeEstimate } = require('../dist/api/stock/cost.js');
+const { averageCost, belowMinimum, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, recipeEstimate } = require('../dist/api/stock/cost.js');
 
 const d = value => new Prisma.Decimal(value);
 const average = (balance, current, quantity, cost) =>
@@ -157,6 +157,13 @@ test('a recipe estimate adds the waste and finds the limiting input', () => {
 test('an inactive input yields no piece', () => {
   const estimate = recipeEstimate(d('0'), [{ sku: 'PLA', quantity: d('1'), active: false, balance: d('10'), reserved: d('0'), unitCost: d('1') }]);
   assert.equal(estimate.producible.toString(), '0');
+});
+
+test('the minimum is compared with the free balance', () => {
+  assert.equal(belowMinimum(d('100'), d('60'), d('50')), true);
+  assert.equal(belowMinimum(d('100'), d('50'), d('50')), false);
+  assert.equal(belowMinimum(d('0'), d('0'), d('0')), false);
+  assert.equal(belowMinimum(d('0'), d('0'), null), false);
 });
 
 test('reserved balance does not count toward the kits available', () => {

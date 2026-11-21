@@ -32,6 +32,11 @@ export function printerHourCost(powerWatts: Prisma.Decimal, energyRate: Prisma.D
   return powerWatts.div(1000).times(energyRate).plus(hourlyCost).toDecimalPlaces(12);
 }
 
+/** Compares the free balance with the minimum, because reserved inputs are already spoken for. */
+export function belowMinimum(quantity: Prisma.Decimal, reserved: Prisma.Decimal, minStock: Prisma.Decimal | null) {
+  return minStock !== null && minStock.gt(0) && quantity.minus(reserved).lt(minStock);
+}
+
 type CostingItem = { productId: string; planned: Prisma.Decimal; lost: Prisma.Decimal };
 type CostingRow = { productId: string; inputId: string; planned: Prisma.Decimal; familyId: string; unitCost: Prisma.Decimal | null };
 

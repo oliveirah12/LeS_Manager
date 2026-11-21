@@ -8,6 +8,7 @@ type ProductDetails = {
   orders: { number: number; status: 'PLANNED' | 'PRINTING'; planned: string }[] | null;
   stock: {
     quantity: string; reserved: string; available: string; currentCost: string | null; value: string; lastPurchaseCost: string | null;
+    minStock: string | null; belowMinimum: boolean;
     lastMovement: { kind: string; quantity: string; createdAt: string } | null;
     purchases: { quantity: string; unitCost: string | null; createdAt: string }[];
     estimate: { unitCost: string; partialCost: boolean; producible: string; limiting: string } | null;
@@ -46,6 +47,7 @@ function ProductPanel({ id }: { id: string }) {
         <div><dt>Saldo</dt><dd>{amount(stock.quantity)}</dd></div>
         <div><dt>Reservado</dt><dd>{amount(stock.reserved)}</dd></div>
         <div><dt>Disponível</dt><dd>{amount(stock.available)}</dd></div>
+        <div><dt>Estoque mínimo</dt><dd>{stock.minStock === null ? '—' : amount(stock.minStock)}{stock.belowMinimum && <> <Badge tone="warn">Abaixo</Badge></>}</dd></div>
         <div><dt>Custo médio</dt><dd>{brl(stock.currentCost)}</dd></div>
         <div><dt>Valor em estoque</dt><dd>{brl(stock.value)}</dd></div>
         <div><dt>Última compra</dt><dd>{brl(stock.lastPurchaseCost)}</dd></div>

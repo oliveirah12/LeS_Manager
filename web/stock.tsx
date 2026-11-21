@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { ArrowLeftRight, ClipboardList, Download, Eye, FileSpreadsheet, PackageMinus, Plus } from 'lucide-react';
+import { ArrowLeftRight, ClipboardList, Download, Eye, FileSpreadsheet, PackageMinus, Plus, SlidersHorizontal } from 'lucide-react';
 import {
   api, Badge, baseUnit, brl, dateTime, Field, fields, FileField, Filters, Form, Kit, Loading, matches, message, Modal, ModalForm, PageActions,
-  Product, productOptions, quantity, SearchInput, Segmented, Select, StockKit, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
+  Product, productOptions, quantity, SearchInput, Segmented, Select, StockKit, StockProduct, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
   useData, notify,
 } from './ui';
 
@@ -15,7 +15,7 @@ type InitialPreview = {
   rows: { sku: string; name: string; unit: string; quantity: string; typeName: string; totalCost?: string; declaredCost: string | null; wastePercent?: string }[];
   recipes: { product: string; input: string; quantity: string; unit: string }[];
 };
-type Dialog = { kind: 'movement'; product?: Product } | { kind: 'kit'; kit: Kit } | { kind: 'kitDetails'; kit: StockKit } | { kind: 'inventory' } | { kind: 'initial' };
+type Dialog = { kind: 'settings'; product: StockProduct } | { kind: 'movement'; product?: Product } | { kind: 'kit'; kit: Kit } | { kind: 'kitDetails'; kit: StockKit } | { kind: 'inventory' } | { kind: 'initial' };
 const kinds = [{ id: 'PURCHASE', name: 'Compra' }, { id: 'OUT', name: 'Saída' }, { id: 'ADJUSTMENT', name: 'Ajuste' }] as const;
 const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário', PRODUCTION_IN: 'Entrada de produção', PRODUCTION_OUT: 'Consumo de produção' };
 
@@ -41,11 +41,21 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
       tabs={[{ id: 'balances', name: 'Saldos' }, { id: 'kits', name: 'Kits' }, { id: 'history', name: 'Histórico' }]} />
     {message(stock.error)}
     {!data ? stock.loading && <Loading label="Carregando estoque…" /> : <>
-      {tab === 'balances' && <Balances data={data} edit={edit} move={product => setDialog({ kind: 'movement', product })} />}
+      {tab === 'balances' && <Balances data={data} edit={edit} move={product => setDialog({ kind: 'movement', product })}
+        configure={product => setDialog({ kind: 'settings', product })} />}
       {tab === 'kits' && <Kits data={data} edit={edit} out={kit => setDialog({ kind: 'kit', kit })} details={kit => setDialog({ kind: 'kitDetails', kit })} />}
       {tab === 'history' && <HistoryTab key={version} products={data.products} />}
     </>}
 
+    {dialog?.kind === 'settings' && <ModalForm title={'Parâmetros de ' + dialog.product.sku} subtitle={dialog.product.name} label="Salvar"
+      close={() => setDialog(undefined)} action={async values => {
+        const { minStock } = fields(values);
+        await api('stock/products/' + dialog.product.id + '/settings', { minStock: minStock || null }, 'PATCH');
+        await saved('Parâmetros salvos.');
+      }}>
+      <Field name="minStock" label={'Estoque mínimo (' + baseUnit(dialog.product).symbol + ')'} inputMode="decimal" required={false}
+        defaultValue={dialog.product.minStock ?? undefined} hint="Vazio: sem alerta. O aviso compara com o saldo livre, sem o que está reservado." />
+    </ModalForm>}
     {data && dialog?.kind === 'movement' && <Modal title="Registrar movimentação" close={() => setDialog(undefined)}>
       <MovementForm data={data} initial={dialog.product} saved={saved} /></Modal>}
     {data && dialog?.kind === 'kit' && <ModalForm title={'Saída do kit ' + dialog.kit.sku} subtitle={dialog.kit.name + ' · ' + quantity(dialog.kit.available) + ' disponíveis'}
@@ -66,27 +76,35 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
   </>;
 }
 
-function Balances({ data, edit, move }: { data: StockView; edit: boolean; move: (product: Product) => void }) {
+function Balances({ data, edit, move, configure }: {
+  data: StockView; edit: boolean; move: (product: Product) => void; configure: (product: StockProduct) => void;
+}) {
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<'all' | 'empty'>('all');
-  const rows = data.products.filter(product => matches(query, product.sku, product.name) && (filter === 'all' || Number(product.quantity) === 0));
+  const [filter, setFilter] = useState<'all' | 'empty' | 'below'>('all');
+  const rows = data.products.filter(product => matches(query, product.sku, product.name) &&
+    (filter === 'all' || (filter === 'below' ? product.belowMinimum : Number(product.quantity) === 0)));
   return <div className="tab-panel" role="tabpanel">
     <div className="toolbar">
       <SearchInput value={query} onChange={setQuery} />
-      <Segmented label="Saldo" value={filter} onChange={setFilter} options={[{ id: 'all', name: 'Todos' }, { id: 'empty', name: 'Sem saldo' }]} />
+      <Segmented label="Saldo" value={filter} onChange={setFilter} options={[{ id: 'all', name: 'Todos' }, { id: 'below', name: 'Abaixo do mínimo' }, { id: 'empty', name: 'Sem saldo' }]} />
       <span className="summary">{data.products.length} produtos · <strong className="num">{brl(data.totalValue)}</strong> em estoque</span>
     </div>
-    <Table empty={query || filter === 'empty' ? 'Nenhum produto encontrado.' : 'Nenhum produto ativo.'}
+    <Table empty={query || filter !== 'all' ? 'Nenhum produto encontrado.' : 'Nenhum produto ativo.'}
       columns={['Produto', { label: 'Saldo', end: true }, { label: 'Custo médio', end: true }, { label: 'Última compra', end: true },
         { label: 'Valor em estoque', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
       rows={rows.map(product => [
         <Title name={product.name} code={product.sku} />,
         Number(product.quantity) === 0 ? <Badge tone="warn">Sem saldo</Badge> :
           <span><strong>{quantity(product.quantity)}</strong> <span className="muted">{baseUnit(product).symbol}</span>
-            {Number(product.reserved) > 0 && <span className="hint" style={{ display: 'block' }}>{quantity(product.reserved!)} reservado</span>}</span>,
+            {Number(product.reserved) > 0 && <span className="hint" style={{ display: 'block' }}>{quantity(product.reserved!)} reservado</span>}
+            {product.belowMinimum && <span style={{ display: 'block', marginTop: 4 }}><Badge tone="warn">Abaixo do mínimo</Badge></span>}</span>,
         brl(product.currentCost), <span className="muted">{brl(product.lastPurchaseCost)}</span>,
         <strong>{brl(product.value)}</strong>,
-        ...(edit ? [<button type="button" className="btn secondary small" onClick={() => move(product)}><ArrowLeftRight size={14} aria-hidden="true" />Movimentar</button>] : []),
+        ...(edit ? [<div className="actions">
+          <button type="button" className="btn secondary small" onClick={() => move(product)}><ArrowLeftRight size={14} aria-hidden="true" />Movimentar</button>
+          <button type="button" className="btn ghost small" aria-label={'Parâmetros de ' + product.sku} onClick={() => configure(product)}>
+            <SlidersHorizontal size={14} aria-hidden="true" />Parâmetros</button>
+        </div>] : []),
       ])} />
   </div>;
 }
