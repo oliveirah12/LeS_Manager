@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 // tsx loads the panel's TypeScript directly, without a separate build.
 const { require: load } = require('tsx/cjs/api');
-const { accessible, brl, decimal, displayDate, pageFromHash } = load('../web/format.ts', __filename);
+const { accessible, brl, decimal, displayDate, pageFromHash, suggestedConsumption } = load('../web/format.ts', __filename);
 
 // Intl separates the currency symbol with a non-breaking space.
 const plain = text => text.replace(/\s/g, ' ');
@@ -23,6 +23,27 @@ test('formats money with two decimals, or four for small unit costs', () => {
   assert.equal(plain(brl('-12.5')), '-R$ 12,50');
   assert.equal(brl(null), '—');
   assert.equal(brl('abc'), '—');
+});
+
+test('suggests the consumption from the lost pieces and how much of them was printed', () => {
+  const parts = [{ productId: 'p', planned: '210' }];
+  const suggest = (lost, printedPercent) => suggestedConsumption('210', parts, [{ productId: 'p', planned: '20', lost, printedPercent }]);
+  assert.equal(suggest('', ''), '210');
+  assert.equal(suggest('1', ''), '210');
+  assert.equal(suggest('1', '100'), '210');
+  assert.equal(suggest('1', '50'), '204.75');
+  assert.equal(suggest('1,5', '0'), '194.25');
+  assert.equal(suggest('20', '0'), '0');
+  assert.equal(suggest('21', '0'), '210');
+  assert.equal(suggest('1', '101'), '210');
+  assert.equal(suggest('abc', '50'), '210');
+});
+
+test('only the item with lost pieces reduces a shared input', () => {
+  const parts = [{ productId: 'a', planned: '100' }, { productId: 'b', planned: '50' }];
+  assert.equal(suggestedConsumption('150', parts, [
+    { productId: 'a', planned: '10', lost: '1', printedPercent: '0' }, { productId: 'b', planned: '5', lost: '', printedPercent: '' },
+  ]), '140');
 });
 
 test('shows ISO dates in the Brazilian order', () => {

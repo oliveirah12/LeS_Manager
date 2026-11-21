@@ -42,12 +42,16 @@ const symbolOf = (product: { unit: { symbol: string; family: { units: { symbol: 
 
 /** One line per input, with the exact sums the panel shows. */
 function orderInputs(order: LoadedOrder) {
-  const inputs = new Map<string, { inputId: string; sku: string; name: string; symbol: string; planned: Prisma.Decimal; used: Prisma.Decimal | null }>();
+  const inputs = new Map<string, {
+    inputId: string; sku: string; name: string; symbol: string; planned: Prisma.Decimal; used: Prisma.Decimal | null;
+    parts: { productId: string; planned: Prisma.Decimal }[];
+  }>();
   for (const row of order.items.flatMap(item => item.consumption)) {
     const line = inputs.get(row.inputId) ?? {
-      inputId: row.inputId, sku: row.input.sku, name: row.input.name, symbol: symbolOf(row.input), planned: new Prisma.Decimal(0), used: null,
+      inputId: row.inputId, sku: row.input.sku, name: row.input.name, symbol: symbolOf(row.input), planned: new Prisma.Decimal(0), used: null, parts: [],
     };
     line.planned = line.planned.plus(row.planned);
+    line.parts.push({ productId: row.productId, planned: row.planned });
     if (row.used !== null) line.used = (line.used ?? new Prisma.Decimal(0)).plus(row.used);
     inputs.set(row.inputId, line);
   }
