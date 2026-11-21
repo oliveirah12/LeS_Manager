@@ -357,7 +357,7 @@ export type Identity = { id: string; name: string; email: string; profileName: s
 export type Unit = { id: string; symbol: string; factor: string; familyId: string; isBase: boolean };
 export type Product = {
   id: string; sku: string; name: string; active: boolean; unit: Unit & { family: { units: Unit[] } }; quantity: string; currentCost: string | null; lastPurchaseCost: string | null;
-  typeId: string; groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null; deleteBlock?: string | null; reserved?: string;
+  typeId: string; groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null; deleteBlock?: string | null; reserved?: string; type?: { isManufactured: boolean };
 };
 export type Kit = {
   id: string; sku: string; name: string; active: boolean; available: string; deleteBlock?: string | null;

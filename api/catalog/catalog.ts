@@ -243,7 +243,9 @@ export class CatalogService {
 
   async stockView() {
     const [products, kits, reservations] = await Promise.all([
-      this.db.product.findMany({ where: { active: true }, include: productInclude, orderBy: { sku: 'asc' } }),
+      this.db.product.findMany({
+        where: { active: true }, include: { ...productInclude, type: { select: { isManufactured: true } } }, orderBy: { sku: 'asc' },
+      }),
       this.db.kit.findMany({
         where: { active: true }, include: { components: { include: { product: { include: productInclude } } } }, orderBy: { sku: 'asc' },
       }),

@@ -575,6 +575,19 @@ test('API REST com PostgreSQL', {
     assert.equal(await db.unit.count({ where: { familyId: empty.id } }), 0);
   });
 
+  await t.test('entrada manual de produto fabricado exige ciência de que não baixa insumos', async () => {
+    const product = await createProduct('ENTRADA-FABRICADO', unit.id);
+    expectStatus(await admin('/catalog/products/' + product.id, {
+      method: 'PATCH', body: { name: 'Fabricado', typeId: '00000000-0000-4000-8000-000000000003' },
+    }), 200);
+    const entry = extra => post('/stock/movements', { productId: product.id, unitId: unit.id, kind: 'PURCHASE', quantity: '2', totalCost: '10', reason: 'Peças antigas', ...extra });
+    expectStatus(await entry(), 409);
+    assert.equal((await productRow(product.id)).quantity.toString(), '0');
+    expectStatus(await entry({ acknowledgeNoInputs: true }), 201);
+    assert.equal((await productRow(product.id)).quantity.toString(), '2');
+    expectStatus(await movement(product.id, unit.id, 'OUT', '1'), 201);
+  });
+
   await t.test('inativação exige saldo zerado, bloqueia movimentações e preserva o histórico', async () => {
     const product = await createProduct('INATIVO', unit.id);
     expectStatus(await movement(product.id, unit.id, 'PURCHASE', '2', '3'), 201);

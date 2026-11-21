@@ -196,8 +196,11 @@ function MovementForm({ data, initial, saved }: { data: StockView; initial?: Pro
   const average = kind === 'PURCHASE' && product && total.trim()
     ? previewAverage(product, informed * factor, paid / (informed * factor)) : null;
   const submitLabel = { PURCHASE: 'Registrar compra', OUT: 'Registrar saída', ADJUSTMENT: 'Registrar ajuste' }[kind];
+  const entersPieces = kind === 'PURCHASE' || (kind === 'ADJUSTMENT' && !amount.trim().startsWith('-') && Number(amount.replace(',', '.')) > 0);
+  const needsAcknowledge = !!product?.type?.isManufactured && entersPieces;
   return <Form label={submitLabel} cancel="Cancelar" action={async values => {
-    await api('stock/movements', { ...fields(values), kind });
+    const { acknowledgeNoInputs, ...input } = fields(values);
+    await api('stock/movements', { ...input, kind, ...(needsAcknowledge ? { acknowledgeNoInputs: !!acknowledgeNoInputs } : {}) });
     await saved('Movimentação registrada.');
     closePanel?.();
   }}>
@@ -224,6 +227,10 @@ function MovementForm({ data, initial, saved }: { data: StockView; initial?: Pro
         médio <strong className="num">{brl(average)}</strong> por {baseUnit(product).symbol}</span>}
     </label>}
     <Field name="reason" label="Motivo" placeholder="Nota fiscal, pedido ou observação" />
+    {needsAcknowledge && <div className="info stack" role="alert" key={productId + kind} style={{ gap: 8 }}>
+      <span><strong>Esta entrada não baixa filamento nem outros insumos.</strong> Para produzir consumindo o estoque, use Produção → Ordens.</span>
+      <label className="check"><input name="acknowledgeNoInputs" type="checkbox" required />Estou ciente e quero registrar mesmo assim</label>
+    </div>}
   </Form>;
 }
 
