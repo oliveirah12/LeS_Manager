@@ -86,7 +86,8 @@ test('API REST com PostgreSQL', {
     sku: sku(name), name, unitId,
   }).then(response => expectStatus(response, 201));
   const movement = (productId, unitId, kind, quantity, unitCost) => post('/stock/movements', {
-    productId, unitId, kind, quantity, unitCost, reason: 'Movimentação de teste',
+    productId, unitId, kind, quantity, reason: 'Movimentação de teste',
+    totalCost: unitCost === undefined ? undefined : new (require('@prisma/client').Prisma.Decimal)(quantity).times(unitCost).toFixed(),
   });
   const productRow = id => db.product.findUniqueOrThrow({ where: { id } });
   const productMovements = (productId, kind) => db.movement.findMany({

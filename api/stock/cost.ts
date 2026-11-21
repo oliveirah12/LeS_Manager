@@ -12,6 +12,11 @@ export function averageCost(
   return balance.times(currentCost).plus(quantity.times(unitCost)).div(total).toDecimalPlaces(12);
 }
 
+/** Cost per base unit of a purchase, from the total paid and the quantity already in base units. */
+export function costPerBaseUnit(total: Prisma.Decimal, baseQuantity: Prisma.Decimal) {
+  return total.div(baseQuantity).toDecimalPlaces(12);
+}
+
 /** Value of a balance at its average cost. A balance without a known cost counts as zero. */
 export function stockValue(quantity: Prisma.Decimal, currentCost: Prisma.Decimal | null) {
   return quantity.times(currentCost ?? 0).toDecimalPlaces(12);

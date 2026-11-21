@@ -150,14 +150,16 @@ function MovementForm({ data, initial, saved }: { data: StockView; initial?: Pro
   const [productId, setProduct] = useState(initial?.id ?? '');
   const [unitId, setUnit] = useState(initial?.unit.id ?? '');
   const [amount, setAmount] = useState('');
-  const [cost, setCost] = useState('');
+  const [total, setTotal] = useState('');
   const closePanel = useClosePanel();
   const product = data.products.find(item => item.id === productId);
   const units = data.units.filter(unit => unit.familyId === product?.unit.familyId);
   const unit = units.find(item => item.id === unitId) ?? product?.unit;
   const factor = Number(unit?.factor ?? 1);
-  const average = kind === 'PURCHASE' && product
-    ? previewAverage(product, Number(amount.replace(',', '.')) * factor, Number(cost.replace(',', '.')) / factor) : null;
+  const informed = Number(amount.replace(',', '.'));
+  const paid = Number(total.replace(',', '.'));
+  const average = kind === 'PURCHASE' && product && total.trim()
+    ? previewAverage(product, informed * factor, paid / (informed * factor)) : null;
   const submitLabel = { PURCHASE: 'Registrar compra', OUT: 'Registrar saída', ADJUSTMENT: 'Registrar ajuste' }[kind];
   return <Form label={submitLabel} cancel="Cancelar" action={async values => {
     await api('stock/movements', { ...fields(values), kind });
@@ -180,9 +182,10 @@ function MovementForm({ data, initial, saved }: { data: StockView; initial?: Pro
         {unitOptions(units).map(option => <option key={option.id} value={option.id}>{option.name}</option>)}
       </select></label>
     </div>
-    {kind === 'PURCHASE' && <label>Custo por unidade informada (R$)
-      <input name="unitCost" inputMode="decimal" required placeholder="0,00" value={cost} onChange={event => setCost(event.target.value)} />
-      {average !== null && product && <span className="hint">Novo custo médio: <strong className="num">{brl(average)}</strong> por {baseUnit(product).symbol}</span>}
+    {kind === 'PURCHASE' && <label>Custo total da compra (R$)
+      <input name="totalCost" inputMode="decimal" required placeholder="0,00" value={total} onChange={event => setTotal(event.target.value)} />
+      {average !== null && product && <span className="hint"><strong className="num">{brl(paid / informed)}</strong> por {unit?.symbol} · novo custo
+        médio <strong className="num">{brl(average)}</strong> por {baseUnit(product).symbol}</span>}
     </label>}
     <Field name="reason" label="Motivo" placeholder="Nota fiscal, pedido ou observação" />
   </Form>;

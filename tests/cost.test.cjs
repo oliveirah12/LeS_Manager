@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost } = require('../dist/api/stock/cost.js');
+const { averageCost, costPerBaseUnit } = require('../dist/api/stock/cost.js');
 
 const d = value => new Prisma.Decimal(value);
 const average = (balance, current, quantity, cost) =>
@@ -20,6 +20,12 @@ test('uses the entry cost without balance or known cost', () => {
 test('keeps the stored precision of 12 decimal places', () => {
   assert.equal(average('1750', '0.01425', '1000', '0.0195'), '0.016159090909');
   assert.equal(average('2', '1', '1', '0'), '0.666666666667');
+});
+
+test('splits the total paid over the quantity in base units', () => {
+  assert.equal(costPerBaseUnit(d('100'), d('4')).toString(), '25');
+  assert.equal(costPerBaseUnit(d('100'), d('36')).toString(), '2.777777777778');
+  assert.equal(costPerBaseUnit(d('0'), d('5')).toString(), '0');
 });
 
 test('values the balance exactly and sums without floating point', () => {
