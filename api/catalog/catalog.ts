@@ -117,10 +117,13 @@ export class CatalogService {
   constructor(@Inject(Database) private db: Database) {}
 
   async registrations() {
-    const [families, units, references, types, usedUnits] = await Promise.all([
+    const [families, units, storedReferences, types, usedUnits] = await Promise.all([
       this.db.unitFamily.findMany({ orderBy: { name: 'asc' } }),
       this.db.unit.findMany({ include: { _count: { select: { products: true } } }, orderBy: { symbol: 'asc' } }),
-      this.db.reference.findMany({ orderBy: [{ kind: 'asc' }, { name: 'asc' }] }),
+      this.db.reference.findMany({
+        include: { _count: { select: { groups: true, brands: true, colors: true, departments: true } } },
+        orderBy: [{ kind: 'asc' }, { name: 'asc' }],
+      }),
       this.db.productType.findMany({ include: { _count: { select: { products: true } } }, orderBy: { name: 'asc' } }),
       this.db.unit.findMany({ where: { products: { some: usedProduct } }, select: { familyId: true }, distinct: ['familyId'] }),
     ]);
@@ -128,14 +131,17 @@ export class CatalogService {
       ...type, products: _count.products, isDefault: type.id === defaultProductType, deleteBlock: productTypeBlock(type.id, _count.products),
     }));
     const inUse = new Set(usedUnits.map(unit => unit.familyId));
+    const references = storedReferences.map(({ _count, ...reference }) => ({
+      ...reference, products: _count.groups + _count.brands + _count.colors + _count.departments,
+    }));
     return {
       references, productTypes,
-      families: families.map(family => ({
-        ...family,
-        deleteBlock: familyBlock(units.filter(unit => unit.familyId === family.id).reduce((total, unit) => total + unit._count.products, 0)),
-      })),
+      families: families.map(family => {
+        const products = units.filter(unit => unit.familyId === family.id).reduce((total, unit) => total + unit._count.products, 0);
+        return { ...family, products, deleteBlock: familyBlock(products) };
+      }),
       units: units.map(({ _count, ...unit }) => ({
-        ...unit,
+        ...unit, products: _count.products,
         factorBlock: unitFactorBlock(unit, inUse.has(unit.familyId)),
         deleteBlock: unitDeleteBlock(unit, _count.products, inUse.has(unit.familyId)),
       })),
@@ -236,7 +242,7 @@ export class CatalogService {
     ]);
     return {
       ...registrations,
-      products: products.map(({ _count, ...product }) => ({ ...product, deleteBlock: productBlock(_count) })),
+      products: products.map(({ _count, ...product }) => ({ ...product, hasRecipe: _count.recipe > 0, deleteBlock: productBlock(_count) })),
       kits: kits.map(({ _count, ...kit }) => ({ ...kit, deleteBlock: kitBlock(_count) })),
     };
   }

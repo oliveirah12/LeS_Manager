@@ -62,7 +62,8 @@ export function useData<T>(path: string | null) {
 /* ---------- Formatting ---------- */
 
 // The screens keep importing these from ui; the pure logic lives in format so the tests can load it.
-export { accessible, brl, decimal, displayDate, quantity } from './format';
+export { accessible, applyFilters, brl, decimal, displayDate, quantity, yesNo, yesNoOptions } from './format';
+export type { TableFilter } from './format';
 export const dateTime = (value: string) => new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
 export const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 export function relativeTime(value: string) {
@@ -314,6 +315,17 @@ export function Filters({ children, active, apply, clear }: {
   </div>;
 }
 
+/** Filter form built from definitions. A filter with nothing to choose stays hidden. */
+export function TableFilters<T>({ filters, selected, onChange }: {
+  filters: import('./format').TableFilter<T>[]; selected: Record<string, string>; onChange: (selected: Record<string, string>) => void;
+}) {
+  const shown = filters.filter(filter => filter.options.length > 0);
+  return <Filters active={shown.filter(filter => selected[filter.id]).length} apply={onChange} clear={() => onChange({})}>
+    {shown.map(filter => <Select key={filter.id} name={filter.id} label={filter.label} required={false} placeholder="Todos"
+      defaultValue={selected[filter.id]} options={filter.options} />)}
+  </Filters>;
+}
+
 /** Case- and accent-insensitive search over the given texts. */
 export function matches(query: string, ...texts: (string | null | undefined)[]) {
   const normalize = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -357,7 +369,7 @@ export type Identity = { id: string; name: string; email: string; profileName: s
 export type Unit = { id: string; symbol: string; factor: string; familyId: string; isBase: boolean };
 export type Product = {
   id: string; sku: string; name: string; active: boolean; unit: Unit & { family: { units: Unit[] } }; quantity: string; currentCost: string | null; lastPurchaseCost: string | null;
-  typeId: string; groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null; deleteBlock?: string | null; reserved?: string; type?: { isManufactured: boolean };
+  typeId: string; groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null; deleteBlock?: string | null; reserved?: string; type?: { isManufactured: boolean }; hasRecipe?: boolean;
 };
 export type Kit = {
   id: string; sku: string; name: string; active: boolean; available: string; deleteBlock?: string | null;

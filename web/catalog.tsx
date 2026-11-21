@@ -3,8 +3,8 @@ import { ClipboardList, Pencil, Plus, Power, PowerOff, Trash2 } from 'lucide-rea
 import { RecipeEditor } from './recipe';
 import { RegistrationData, referenceKinds } from './registrations';
 import {
-  api, Badge, baseUnit, Field, fields, Form, Kit, Loading, matches, message, Modal, ModalForm, notify, PageActions, Product, productOptions,
-  quantity, SearchInput, Segmented, Select, StockView, Table, Title, unitOptions, useClosePanel, useData,
+  api, applyFilters, Badge, baseUnit, Field, fields, Form, Kit, Loading, matches, message, Modal, ModalForm, notify, PageActions, Product, productOptions,
+  quantity, SearchInput, Segmented, Select, StockKit, StockView, Table, TableFilter, TableFilters, Title, unitOptions, useClosePanel, useData, yesNo, yesNoOptions,
 } from './ui';
 
 type CatalogView = StockView & RegistrationData;
@@ -12,6 +12,18 @@ type Situation = 'active' | 'inactive' | 'all';
 type Status = { kind: 'products' | 'kits'; id: string; sku: string; active: boolean };
 type Removal = { kind: Status['kind']; id: string; sku: string; block?: string | null };
 
+const productFilters = (data: CatalogView): TableFilter<CatalogView['products'][number]>[] => [
+  { id: 'typeId', label: 'Tipo', options: data.productTypes, value: row => row.typeId },
+  { id: 'unitId', label: 'Unidade', options: unitOptions(data.units), value: row => row.unit.id },
+  ...referenceKinds.map(kind => ({
+    id: kind.field, label: kind.name, options: data.references.filter(item => item.kind === kind.id),
+    value: (row: Product) => row[kind.field],
+  })),
+  { id: 'hasRecipe', label: 'Ficha técnica', options: yesNoOptions, value: row => yesNo(!!row.hasRecipe) },
+];
+const kitFilters = (data: CatalogView): TableFilter<StockKit>[] => [
+  { id: 'component', label: 'Produto componente', options: productOptions(data.products), value: row => row.components.map(item => item.productId) },
+];
 export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boolean }) {
   const { data, error, loading, reload } = useData<CatalogView>('catalog');
   const [product, setProduct] = useState<Product | null>();
@@ -21,6 +33,7 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
   const [recipe, setRecipe] = useState<Product>();
   const [query, setQuery] = useState('');
   const [situation, setSituation] = useState<Situation>('active');
+  const [selected, setSelected] = useState<Record<string, string>>({});
   async function save(path: string, payload: unknown, id?: string) {
     await api('catalog/' + path + (id ? '/' + id : ''), payload, id ? 'PATCH' : 'POST');
     notify(id ? 'Alterações salvas.' : 'Cadastro criado.');
@@ -51,9 +64,12 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
     </div>
     {message(error)}
     {!data ? loading && <Loading label="Carregando catálogo…" /> : <>
+      {page === 'products'
+        ? <TableFilters filters={productFilters(data)} selected={selected} onChange={setSelected} />
+        : <TableFilters filters={kitFilters(data)} selected={selected} onChange={setSelected} />}
       {page === 'products' && <Table empty="Nenhum produto encontrado."
         columns={['Produto', 'Tipo', 'Unidade', 'Classificação', 'Situação', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
-        rows={visible(data.products).map(row => [
+        rows={applyFilters(visible(data.products), productFilters(data), selected).map(row => [
           <Title name={row.name} code={row.sku} />, data.productTypes.find(type => type.id === row.typeId)?.name ?? '—', row.unit.symbol,
           <div className="actions">{referenceKinds.map(kind => data.references.find(item => item.id === row[kind.field])?.name)
             .filter(Boolean).map(name => <Badge key={name}>{name}</Badge>)}</div>,
@@ -64,7 +80,7 @@ export function Catalog({ page, edit }: { page: 'products' | 'kits'; edit: boole
         ])} />}
       {page === 'kits' && <Table empty="Nenhum kit encontrado."
         columns={['Kit', 'Componentes', 'Situação', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
-        rows={visible(data.kits).map(row => [
+        rows={applyFilters(visible(data.kits), kitFilters(data), selected).map(row => [
           <Title name={row.name} code={row.sku} />,
           <span className="muted">{row.components.map(item => quantity(item.quantity) + ' ' + baseUnit(item.product).symbol + ' ' + item.product.sku).join(' · ')}</span>,
           situationBadge(row),

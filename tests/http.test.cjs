@@ -456,6 +456,9 @@ test('API REST com PostgreSQL', {
     const recipe = expectStatus(await admin(`/catalog/products/${printed.id}/recipe`), 200);
     assert.equal(recipe.wastePercent, '5');
     assert.deepEqual(recipe.inputs, [{ inputId: filament.id, quantity: '120' }]);
+    const listed = expectStatus(await admin('/catalog'), 200).products;
+    assert.equal(listed.find(row => row.id === printed.id).hasRecipe, true);
+    assert.equal(listed.find(row => row.id === filament.id).hasRecipe, false);
 
     expectStatus(await admin('/catalog/products/' + filament.id, { method: 'DELETE' }), 409);
     expectStatus(await post(`/catalog/products/${filament.id}/status`, { active: false }), 409);

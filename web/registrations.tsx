@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
-import { api, Badge, decimal, Field, fields, Loading, matches, message, Modal, ModalForm, notify, PageActions, SearchInput, Select, Table, Unit, useData } from './ui';
+import {
+  api, applyFilters, Badge, decimal, Field, fields, Loading, matches, message, Modal, ModalForm, notify, PageActions, SearchInput, Select, Table, TableFilter,
+  TableFilters, Unit, useData, yesNo, yesNoOptions,
+} from './ui';
 
 export const referenceKinds = [
   { id: 'GRUPO', name: 'Grupo', label: 'Grupos', field: 'groupId' },
@@ -8,22 +11,40 @@ export const referenceKinds = [
   { id: 'COR', name: 'Cor', label: 'Cores', field: 'colorId' },
   { id: 'DEPARTAMENTO', name: 'Departamento', label: 'Departamentos', field: 'departmentId' },
 ] as const;
-type Reference = { id: string; name: string; kind: string };
+type Reference = { id: string; name: string; kind: string; products?: number };
 export type ProductType = { id: string; name: string; isInput: boolean; isManufactured: boolean; products: number; isDefault: boolean; deleteBlock: string | null };
-type Family = { id: string; name: string; deleteBlock?: string | null };
-type MeasureUnit = Unit & { factorBlock?: string | null; deleteBlock?: string | null };
+type Family = { id: string; name: string; products?: number; deleteBlock?: string | null };
+type MeasureUnit = Unit & { products?: number; factorBlock?: string | null; deleteBlock?: string | null };
 type Removal = { path: 'families' | 'units'; id: string; name: string; block?: string | null };
 export type RegistrationData = { families: Family[]; references: Reference[]; units: MeasureUnit[]; productTypes: ProductType[] };
 export type RegistrationPage = typeof referenceKinds[number]['id'] | 'families' | 'units' | 'product-types';
 
+const inUseFilter = <T extends { products?: number }>(): TableFilter<T> => ({
+  id: 'inUse', label: 'Em uso', options: yesNoOptions, value: row => yesNo((row.products ?? 0) > 0),
+});
+const typeFilters: TableFilter<ProductType>[] = [
+  { id: 'isInput', label: 'Usado como insumo', options: yesNoOptions, value: row => yesNo(row.isInput) },
+  { id: 'isManufactured', label: 'É fabricado', options: yesNoOptions, value: row => yesNo(row.isManufactured) },
+  inUseFilter<ProductType>(),
+];
+const unitFilters = (families: Family[]): TableFilter<MeasureUnit>[] => [
+  { id: 'familyId', label: 'Família', options: families, value: row => row.familyId },
+  { id: 'unitKind', label: 'Tipo', options: [{ id: 'base', name: 'Base' }, { id: 'conversion', name: 'Conversão' }], value: row => row.isBase ? 'base' : 'conversion' },
+  inUseFilter<MeasureUnit>(),
+];
+
 function ProductTypes({ types, edit, reload }: { types: ProductType[]; edit: boolean; reload: () => Promise<unknown> }) {
   const [type, setType] = useState<ProductType | null>();
   const [removal, setRemoval] = useState<ProductType>();
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<Record<string, string>>({});
   const flag = (active: boolean) => active ? <Badge tone="ok">Sim</Badge> : <span className="muted">Não</span>;
   return <>
     {edit && <PageActions><button type="button" className="btn" onClick={() => setType(null)}><Plus size={16} aria-hidden="true" />Novo tipo</button></PageActions>}
-    <Table columns={['Tipo', 'Usado como insumo', 'É fabricado', { label: 'Produtos', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
-      rows={types.map(item => [
+    <div className="toolbar"><SearchInput value={query} onChange={setQuery} placeholder="Buscar tipo" /></div>
+    <TableFilters filters={typeFilters} selected={selected} onChange={setSelected} />
+    <Table empty="Nenhum tipo encontrado." columns={['Tipo', 'Usado como insumo', 'É fabricado', { label: 'Produtos', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
+      rows={applyFilters(types.filter(item => matches(query, item.name)), typeFilters, selected).map(item => [
         <span className="cell-title with-badge">{item.name}{item.isDefault && <Badge tone="brand">Padrão</Badge>}</span>,
         flag(item.isInput), flag(item.isManufactured), <span className="num">{item.products}</span>,
         ...(edit ? [<div className="actions">
@@ -66,6 +87,7 @@ export function Registrations({ page, edit, admin }: { page: RegistrationPage; e
   const [unit, setUnit] = useState<MeasureUnit>();
   const [removal, setRemoval] = useState<Removal>();
   const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<Record<string, string>>({});
   const measureActions = (open: () => void, target: Removal) => <div className="actions">
     <button type="button" className="btn secondary small" onClick={open}><Pencil size={14} aria-hidden="true" />Editar</button>
     <button type="button" className={'btn ghost small' + (target.block ? ' unavailable' : '')} title={target.block ?? undefined}
@@ -88,21 +110,34 @@ export function Registrations({ page, edit, admin }: { page: RegistrationPage; e
       {page === 'product-types' && <ProductTypes types={data.productTypes} edit={edit} reload={reload} />}
       {kind && <>
         <div className="toolbar"><SearchInput value={query} onChange={setQuery} placeholder={'Buscar ' + kind.name.toLowerCase()} /></div>
-        <Table empty={query ? 'Nada encontrado.' : 'Nenhum registro.'} columns={['Nome', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
-          rows={data.references.filter(item => item.kind === kind.id && matches(query, item.name)).map(item => [
-            <span className="cell-title">{item.name}</span>,
+        <TableFilters filters={[inUseFilter<Reference>()]} selected={selected} onChange={setSelected} />
+        <Table empty={query || selected.inUse ? 'Nada encontrado.' : 'Nenhum registro.'} columns={['Nome', { label: 'Produtos', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
+          rows={applyFilters(data.references.filter(item => item.kind === kind.id && matches(query, item.name)), [inUseFilter<Reference>()], selected).map(item => [
+            <span className="cell-title">{item.name}</span>, <span className="num">{item.products ?? 0}</span>,
             ...(edit ? [<button type="button" className="btn secondary small" onClick={() => setReference(item)}><Pencil size={14} aria-hidden="true" />Editar</button>] : []),
           ])} />
       </>}
-      {page === 'families' && <Table columns={['Família', 'Unidade base', ...(admin ? [{ label: 'Ações', actions: true }] : [])]} rows={data.families.map(item => [
-        <span className="cell-title">{item.name}</span>, data.units.find(row => row.familyId === item.id && row.isBase)?.symbol ?? '—',
-        ...(admin ? [measureActions(() => setFamily(item), { path: 'families', id: item.id, name: item.name, block: item.deleteBlock })] : []),
-      ])} />}
-      {page === 'units' && <Table columns={['Unidade', 'Família', { label: 'Fator', end: true }, 'Tipo', ...(admin ? [{ label: 'Ações', actions: true }] : [])]} rows={data.units.map(item => [
+      {page === 'families' && <>
+        <div className="toolbar"><SearchInput value={query} onChange={setQuery} placeholder="Buscar família" /></div>
+        <TableFilters filters={[inUseFilter<Family>()]} selected={selected} onChange={setSelected} />
+        <Table empty="Nenhuma família encontrada." columns={['Família', 'Unidade base', { label: 'Produtos', end: true }, ...(admin ? [{ label: 'Ações', actions: true }] : [])]}
+          rows={applyFilters(data.families.filter(item => matches(query, item.name)), [inUseFilter<Family>()], selected).map(item => [
+            <span className="cell-title">{item.name}</span>, data.units.find(row => row.familyId === item.id && row.isBase)?.symbol ?? '—',
+            <span className="num">{item.products ?? 0}</span>,
+            ...(admin ? [measureActions(() => setFamily(item), { path: 'families', id: item.id, name: item.name, block: item.deleteBlock })] : []),
+          ])} />
+      </>}
+      {page === 'units' && <>
+        <div className="toolbar"><SearchInput value={query} onChange={setQuery} placeholder="Buscar unidade" /></div>
+        <TableFilters filters={unitFilters(data.families)} selected={selected} onChange={setSelected} />
+        <Table empty="Nenhuma unidade encontrada." columns={['Unidade', 'Família', { label: 'Fator', end: true }, 'Tipo', { label: 'Produtos', end: true }, ...(admin ? [{ label: 'Ações', actions: true }] : [])]}
+          rows={applyFilters(data.units.filter(item => matches(query, item.symbol)), unitFilters(data.families), selected).map(item => [
         <span className="cell-title">{item.symbol}</span>, data.families.find(row => row.id === item.familyId)?.name,
         <span className="num">{decimal(item.factor)}</span>, item.isBase ? <Badge tone="brand">Base</Badge> : <span className="muted">Conversão</span>,
+        <span className="num">{item.products ?? 0}</span>,
         ...(admin ? [measureActions(() => setUnit(item), { path: 'units', id: item.id, name: item.symbol, block: item.deleteBlock })] : []),
-      ])} />}
+          ])} />
+      </>}
     </>}
 
     {kind && edit && reference !== undefined && <ModalForm title={(reference ? 'Editar ' : 'Cadastrar ') + kind.name.toLowerCase()}

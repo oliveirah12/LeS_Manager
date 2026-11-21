@@ -48,6 +48,23 @@ export function suggestedConsumption(
   return String(Math.round(Math.max(0, number(planned) - saved) * 1000) / 1000);
 }
 
+export type TableFilter<T> = {
+  id: string; label: string; options: { id: string; name: string }[];
+  /** The row's value for this filter. A list matches when any of its values was selected. */
+  value: (row: T) => string | string[] | null | undefined;
+};
+export const yesNoOptions = [{ id: 'yes', name: 'Sim' }, { id: 'no', name: 'Não' }];
+export const yesNo = (value: boolean) => value ? 'yes' : 'no';
+
+/** Keeps the rows that match every selected filter. An empty selection does not filter. */
+export function applyFilters<T>(rows: T[], filters: TableFilter<T>[], selected: Record<string, string>) {
+  const active = filters.filter(filter => selected[filter.id]);
+  return rows.filter(row => active.every(filter => {
+    const value = filter.value(row);
+    return Array.isArray(value) ? value.includes(selected[filter.id]) : value === selected[filter.id];
+  }));
+}
+
 /** Finds the screen whose path matches the address hash, ignoring case, slashes at the ends and URL encoding. */
 export function pageFromHash<P extends string>(hash: string, paths: Record<P, string>): P | undefined {
   let path = hash.replace(/^#\/?/, '').replace(/\/+$/, '');

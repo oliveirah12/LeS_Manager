@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 // tsx loads the panel's TypeScript directly, without a separate build.
 const { require: load } = require('tsx/cjs/api');
-const { accessible, brl, decimal, displayDate, pageFromHash, suggestedConsumption } = load('../web/format.ts', __filename);
+const { accessible, applyFilters, brl, decimal, displayDate, pageFromHash, suggestedConsumption, yesNo } = load('../web/format.ts', __filename);
 
 // Intl separates the currency symbol with a non-breaking space.
 const plain = text => text.replace(/\s/g, ' ');
@@ -44,6 +44,24 @@ test('only the item with lost pieces reduces a shared input', () => {
   assert.equal(suggestedConsumption('150', parts, [
     { productId: 'a', planned: '10', lost: '1', printedPercent: '0' }, { productId: 'b', planned: '5', lost: '', printedPercent: '' },
   ]), '140');
+});
+
+test('combines table filters and matches lists of values', () => {
+  const rows = [
+    { id: 1, type: 'a', recipe: true, parts: ['x', 'y'] }, { id: 2, type: 'a', recipe: false, parts: ['y'] }, { id: 3, type: 'b', recipe: true, parts: [] },
+  ];
+  const filters = [
+    { id: 'type', label: 'Tipo', options: [], value: row => row.type },
+    { id: 'recipe', label: 'Ficha', options: [], value: row => yesNo(row.recipe) },
+    { id: 'part', label: 'Parte', options: [], value: row => row.parts },
+  ];
+  const ids = selected => applyFilters(rows, filters, selected).map(row => row.id);
+  assert.deepEqual(ids({}), [1, 2, 3]);
+  assert.deepEqual(ids({ type: '', recipe: '' }), [1, 2, 3]);
+  assert.deepEqual(ids({ type: 'a' }), [1, 2]);
+  assert.deepEqual(ids({ type: 'a', recipe: 'no' }), [2]);
+  assert.deepEqual(ids({ part: 'x' }), [1]);
+  assert.deepEqual(ids({ type: 'b', part: 'x' }), []);
 });
 
 test('shows ISO dates in the Brazilian order', () => {
