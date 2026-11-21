@@ -3,7 +3,7 @@
 - Preserve a arquitetura de monólito modular. Controllers validam a entrada e aplicam permissões, serviços contêm regras do negócio e o adaptador Inter encapsula autenticação e transporte.
 - Prefira mudanças pequenas e código direto. Aplique SOLID e Clean Architecture onde melhorarem a leitura e os testes.
 - Banco, planilhas e API usam decimais exatos. Normalize quantidades na unidade base e congele o custo da saída no histórico.
-- O custo do produto é a média ponderada móvel. Compras e carga inicial recalculam a média, e as demais movimentações a preservam. O custo da última compra é apenas informativo.
+- O custo do produto é a média ponderada móvel. Compras, carga inicial e entradas de produção recalculam a média, e as demais movimentações a preservam. Impressões em andamento reservam os insumos, e saídas operacionais não consomem a reserva. Ordens concluídas congelam custos e valores da máquina. O custo da última compra é apenas informativo.
 - Produtos e kits só são excluídos se nunca entraram no histórico: produto sem movimentação, kit ou inventário confirmado, e kit sem saídas. Os demais são inativados, e um produto com histórico só troca de unidade dentro da mesma família. Itens inativos não recebem movimentações, e um produto só é inativado com saldo zerado e fora de kits ativos.
 - Movimentações, kits e lotes de planilha são atômicos. Preserve a revisão de estoque e nunca permita saldo negativo.
 - Autorize cada rota no backend. Mantenha o código de primeiro acesso temporário e de uso único. Nunca registre senhas, códigos, tokens ou certificados.

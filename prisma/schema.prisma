@@ -21,6 +21,15 @@ enum MovementKind {
   ADJUSTMENT
   KIT_OUT
   INVENTORY
+  PRODUCTION_IN
+  PRODUCTION_OUT
+}
+
+enum ProductionStatus {
+  PLANNED
+  PRINTING
+  DONE
+  CANCELED
 }
 
 model Profile {
@@ -46,6 +55,7 @@ model User {
   imports           InitialImport[]
   bankReconciliations BankReconciliation[]
   bankConnections   BankConnection[]
+  productionOrders  ProductionOrder[]
 }
 
 model Session {
@@ -113,9 +123,100 @@ model Product {
   lastPurchaseCost Decimal?     @db.Decimal(30, 12)
   active        Boolean         @default(true)
   revision      Int             @default(0)
+  wastePercent  Decimal         @default(0) @db.Decimal(5, 2)
   movements     Movement[]
   kitComponents KitComponent[]
   inventoryRows InventoryRow[]
+  recipe        ProductInput[]  @relation("Recipe")
+  usedInRecipes ProductInput[]  @relation("RecipeInput")
+  productionItems  ProductionItem[]
+  productionInputs ProductionConsumption[]
+}
+
+/// Technical sheet: what one base unit of a manufactured product consumes, in the input's base unit.
+model ProductInput {
+  productId String
+  product   Product @relation("Recipe", fields: [productId], references: [id])
+  inputId   String
+  input     Product @relation("RecipeInput", fields: [inputId], references: [id])
+  quantity  Decimal @db.Decimal(30, 12)
+  @@id([productId, inputId])
+  @@index([inputId])
+}
+
+model Printer {
+  id         String  @id @default(uuid())
+  name       String  @unique
+  powerWatts Decimal @db.Decimal(12, 2)
+  hourlyCost Decimal @db.Decimal(30, 12)
+  active     Boolean @default(true)
+  orders     ProductionOrder[]
+}
+
+/// Single row with the values shared by every production order.
+model ProductionSettings {
+  id         String  @id @default("default")
+  energyRate Decimal @default(0) @db.Decimal(30, 12)
+}
+
+/// A print job. Machine values and costs are frozen when it finishes, so later changes never rewrite it.
+model ProductionOrder {
+  id               String           @id @default(uuid())
+  number           Int              @unique @default(autoincrement())
+  status           ProductionStatus @default(PLANNED)
+  printerId        String
+  printer          Printer          @relation(fields: [printerId], references: [id])
+  userId           String
+  user             User             @relation(fields: [userId], references: [id])
+  notes            String?
+  createdAt        DateTime         @default(now())
+  plannedStart     DateTime
+  estimatedMinutes Int
+  expectedEnd      DateTime
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  printMinutes     Int?
+  powerWatts       Decimal?         @db.Decimal(12, 2)
+  energyRate       Decimal?         @db.Decimal(30, 12)
+  hourlyCost       Decimal?         @db.Decimal(30, 12)
+  machineCost      Decimal?         @db.Decimal(30, 12)
+  totalCost        Decimal?         @db.Decimal(30, 12)
+  lossCost         Decimal?         @db.Decimal(30, 12)
+  absorbLoss       Boolean          @default(false)
+  items            ProductionItem[]
+  movements        Movement[]
+  @@index([status])
+  @@index([printerId])
+}
+
+model ProductionItem {
+  orderId     String
+  order       ProductionOrder         @relation(fields: [orderId], references: [id])
+  productId   String
+  product     Product                 @relation(fields: [productId], references: [id])
+  planned     Decimal                 @db.Decimal(30, 12)
+  good        Decimal?                @db.Decimal(30, 12)
+  lost        Decimal?                @db.Decimal(30, 12)
+  unitCost    Decimal?                @db.Decimal(30, 12)
+  totalCost   Decimal?                @db.Decimal(30, 12)
+  lossCost    Decimal?                @db.Decimal(30, 12)
+  consumption ProductionConsumption[]
+  @@id([orderId, productId])
+  @@index([productId])
+}
+
+/// Inputs of one order item, in the input's base unit. While printing, planned is the reserved balance.
+model ProductionConsumption {
+  orderId   String
+  productId String
+  item      ProductionItem @relation(fields: [orderId, productId], references: [orderId, productId])
+  inputId   String
+  input     Product        @relation(fields: [inputId], references: [id])
+  planned   Decimal        @db.Decimal(30, 12)
+  used      Decimal?       @db.Decimal(30, 12)
+  unitCost  Decimal?       @db.Decimal(30, 12)
+  @@id([orderId, productId, inputId])
+  @@index([inputId])
 }
 
 model Movement {
@@ -131,7 +232,10 @@ model Movement {
   user      User         @relation(fields: [userId], references: [id])
   kitId     String?
   kit       Kit?         @relation(fields: [kitId], references: [id])
+  productionOrderId String?
+  productionOrder   ProductionOrder? @relation(fields: [productionOrderId], references: [id])
   @@index([productId, createdAt])
+  @@index([productionOrderId])
 }
 
 model Kit {

@@ -10,9 +10,12 @@ import { proxySetting } from './access/attempts';
 import { AuditController } from './audit/audit';
 import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
+import { RecipeController, RecipeService } from './catalog/recipe';
 import { BankConnectionService } from './finance/connection';
 import { FinanceController, FinanceService } from './finance/finance';
 import { HealthController } from './health';
+import { ProductionOrderController, ProductionOrderService } from './production/orders';
+import { ProductionController, ProductionService } from './production/production';
 import { Database, DatabaseErrors } from './shared';
 import { StockController } from './stock/controller';
 import { PreviewCleanup, StockService } from './stock/stock';
@@ -24,19 +27,27 @@ class PersistenceModule {}
 @Module({ controllers: [AccessController], providers: [AccessService, SessionCleanup, { provide: APP_GUARD, useClass: AccessGuard }] })
 class AccessModule {}
 
-@Module({ controllers: [CatalogController], providers: [CatalogService], exports: [CatalogService] })
+@Module({ controllers: [CatalogController, RecipeController], providers: [CatalogService, RecipeService], exports: [CatalogService] })
 class CatalogModule {}
 
-@Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService, PreviewCleanup] })
+@Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService, PreviewCleanup], exports: [StockService] })
 class StockModule {}
 
 @Module({ controllers: [FinanceController], providers: [FinanceService, BankConnectionService] })
 class FinanceModule {}
 
+@Module({
+  imports: [StockModule], controllers: [ProductionController, ProductionOrderController], providers: [ProductionService, ProductionOrderService],
+})
+class ProductionModule {}
+
 @Module({ controllers: [AuditController], providers: [AuditRetention] })
 class AuditModule {}
 
-@Module({ imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, AuditModule], controllers: [HealthController] })
+@Module({
+  imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, ProductionModule, AuditModule],
+  controllers: [HealthController],
+})
 class AppModule {}
 
 export async function createApp() {

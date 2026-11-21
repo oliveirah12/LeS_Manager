@@ -9,9 +9,26 @@ const controllers = [
   require('../dist/api/access/access.js').AccessController,
   require('../dist/api/audit/audit.js').AuditController,
   require('../dist/api/catalog/catalog.js').CatalogController,
+  require('../dist/api/catalog/recipe.js').RecipeController,
   require('../dist/api/finance/finance.js').FinanceController,
+  require('../dist/api/production/orders.js').ProductionOrderController,
+  require('../dist/api/production/production.js').ProductionController,
   require('../dist/api/stock/controller.js').StockController,
 ];
+
+test('production routes require the production permission', () => {
+  const productionControllers = [
+    require('../dist/api/production/production.js').ProductionController, require('../dist/api/production/orders.js').ProductionOrderController,
+  ];
+  for (const controller of productionControllers) {
+    for (const name of Object.getOwnPropertyNames(controller.prototype)) {
+      const handler = controller.prototype[name];
+      const method = Reflect.getMetadata(METHOD_METADATA, handler);
+      if (method === undefined) continue;
+      assert.deepEqual(Reflect.getMetadata('permissions', handler), [method === RequestMethod.GET ? 'production:view' : 'production:operate'], name);
+    }
+  }
+});
 
 test('every route that writes declares whether it is audited', () => {
   const missing = [];

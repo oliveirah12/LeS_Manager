@@ -2,7 +2,7 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  ChevronDown, Home as HomeIcon, Layers, LogOut, Menu, Moon, MoreHorizontal, Package, PanelLeftClose, PanelLeftOpen,
+  ChevronDown, Home as HomeIcon, Layers, LogOut, Menu, Moon, MoreHorizontal, Package, PanelLeftClose, PanelLeftOpen, Printer,
   ShieldCheck, Sun, Tag, UserRound, Users, Wallet,
 } from 'lucide-react';
 import { AccountSettings, Administration, SignIn } from './access';
@@ -11,6 +11,8 @@ import { Catalog } from './catalog';
 import { Finance } from './finance';
 import { Home } from './home';
 import { pageFromHash } from './format';
+import { ProductionOrders } from './orders';
+import { Printers } from './production';
 import { InstallApp } from './pwa';
 import { referenceKinds, Registrations } from './registrations';
 import { Stock } from './stock';
@@ -25,6 +27,9 @@ const groups = [
   ] },
   { id: 'finance', label: 'Financeiro', icon: Wallet, section: 'ops', permission: 'finance:view', pages: [
     { id: 'balance', label: 'Saldo' }, { id: 'statement', label: 'Extrato' }, { id: 'reconciliation', label: 'Conciliação' }, { id: 'integration', label: 'Integração' },
+  ] },
+  { id: 'production', label: 'Produção', icon: Printer, section: 'ops', permission: 'production:view', pages: [
+    { id: 'production-orders', label: 'Ordens' }, { id: 'printers', label: 'Impressoras' },
   ] },
   { id: 'registrations', label: 'Cadastros', icon: Layers, section: 'admin', permission: 'registrations:view', pages: [
     { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' }, { id: 'product-types', label: 'Tipos de produto' },
@@ -50,6 +55,8 @@ const pageDescriptions: Record<Page, string> = {
   balance: 'Saldo da conta bancária na última sincronização.', statement: 'Transações bancárias por período.',
   reconciliation: 'Confira os lançamentos do banco com as referências internas.',
   integration: 'Credenciais e certificado usados para ler o saldo e o extrato.',
+  'production-orders': 'Planeje, acompanhe e conclua as impressões.',
+  printers: 'Impressoras e tarifa de energia usadas no custo da produção.',
   audit: 'Inclusões, alterações, acessos e tentativas negadas dos últimos 12 meses.',
   admin: 'Perfis de acesso e contas da equipe.', 'admin-account': 'Seus dados e sua senha.', account: 'Seus dados e sua senha.',
 };
@@ -61,6 +68,7 @@ const paths: Record<Page, string> = {
   GRUPO: 'cadastros/grupos', MARCA: 'cadastros/marcas', COR: 'cadastros/cores', DEPARTAMENTO: 'cadastros/departamentos',
   families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque',
   balance: 'financeiro/saldo', statement: 'financeiro/extrato', reconciliation: 'financeiro/conciliacao', integration: 'financeiro/integracao',
+  'production-orders': 'producao/ordens', printers: 'producao/impressoras',
   audit: 'auditoria', admin: 'acessos/usuarios', 'admin-account': 'acessos/minha-conta', account: 'conta',
 };
 const hashOf = (page: Page) => '#/' + paths[page];
@@ -260,6 +268,8 @@ function App() {
     {(page === 'balance' || page === 'statement' || page === 'reconciliation' || page === 'integration') &&
       <Finance key={page} page={page} edit={can('finance:operate')} admin={admin} openStatement={() => navigate('statement')}
         openIntegration={() => navigate('integration')} />}
+    {page === 'production-orders' && <ProductionOrders edit={can('production:operate')} />}
+    {page === 'printers' && <Printers edit={can('production:operate')} />}
     {page === 'admin' && <Administration onUserChanged={async id => { if (id === identity.id) await signIn(); }} />}
     {page === 'audit' && <Audit />}
     {(page === 'account' || page === 'admin-account') && <AccountSettings identity={identity} changed={setIdentity}

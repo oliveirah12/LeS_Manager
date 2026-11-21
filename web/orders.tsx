@@ -1,0 +1,219 @@
+import { useState } from 'react';
+import { CheckCircle2, Eye, Play, Plus, Trash2, X } from 'lucide-react';
+import {
+  api, Badge, brl, dateTime, Field, Form, Loading, message, Modal, ModalForm, notify, PageActions, quantity, Select, Table, Title, useClosePanel, useData,
+} from './ui';
+
+type Status = 'PLANNED' | 'PRINTING' | 'DONE' | 'CANCELED';
+type OrderItem = {
+  productId: string; sku: string; name: string; symbol: string; planned: string;
+  good: string | null; lost: string | null; unitCost: string | null; totalCost: string | null; lossCost: string | null;
+};
+type OrderInput = { inputId: string; sku: string; name: string; symbol: string; planned: string; used: string | null };
+type Order = {
+  id: string; number: number; status: Status; notes: string | null; printer: { id: string; name: string }; user: { name: string };
+  plannedStart: string; estimatedMinutes: number; expectedEnd: string; startedAt: string | null; finishedAt: string | null; printMinutes: number | null;
+  machineCost: string | null; totalCost: string | null; lossCost: string | null; absorbLoss: boolean; items: OrderItem[]; inputs: OrderInput[];
+};
+type OrdersView = { orders: Order[]; printers: { id: string; name: string }[]; products: { id: string; sku: string; name: string; symbol: string }[] };
+type PreviewItem = { productId: string; sku: string; name: string; symbol: string; good: string; lost: string; unitCost: string | null; fullUnitCost: string; lossCost: string };
+type Preview = { printMinutes: number; machineCost: string; totalCost: string; lossCost: string; partialCost: boolean; items: PreviewItem[] };
+type Dialog = { kind: 'new' } | { kind: 'start' | 'finish' | 'cancel' | 'details'; order: Order };
+
+const statuses: Record<Status, { name: string; tone?: 'ok' | 'warn' | 'brand' }> = {
+  PLANNED: { name: 'Planejada' }, PRINTING: { name: 'Em impressão', tone: 'brand' }, DONE: { name: 'Concluída', tone: 'ok' }, CANCELED: { name: 'Cancelada', tone: 'warn' },
+};
+const localValue = (date = new Date()) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+const iso = (value: FormDataEntryValue | null) => new Date(String(value)).toISOString();
+const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60 ? (minutes % 60) + ' min' : minutes >= 60 ? '' : '0 min');
+
+export function ProductionOrders({ edit }: { edit: boolean }) {
+  const { data, error, loading, reload } = useData<OrdersView>('production/orders');
+  const [dialog, setDialog] = useState<Dialog>();
+  async function done(text: string) {
+    notify(text);
+    await reload();
+  }
+  const open = (kind: 'start' | 'finish' | 'cancel' | 'details', order: Order) => setDialog({ kind, order });
+  return <>
+    {edit && <PageActions><button type="button" className="btn" onClick={() => setDialog({ kind: 'new' })}><Plus size={16} aria-hidden="true" />Nova ordem</button></PageActions>}
+    {message(error)}
+    {!data ? loading && <Loading label="Carregando ordens…" /> : <Table empty="Nenhuma ordem de produção."
+      columns={['Ordem', 'Produtos', 'Impressora', 'Situação', 'Previsão', { label: 'Custo', end: true }, { label: 'Ações', actions: true }]}
+      rows={data.orders.map(order => [
+        <span className="cell-title">#{order.number}</span>,
+        <span>{order.items.map(item => quantity(item.planned) + ' ' + item.symbol + ' ' + item.sku).join(' · ')}</span>,
+        order.printer.name, <Badge tone={statuses[order.status].tone}>{statuses[order.status].name}</Badge>,
+        <span className="muted">{dateTime(order.finishedAt ?? order.expectedEnd)}</span>, brl(order.totalCost),
+        <div className="actions">
+          <button type="button" className="btn ghost small" aria-label={'Ver ordem ' + order.number} onClick={() => open('details', order)}><Eye size={14} aria-hidden="true" />Ver</button>
+          {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" onClick={() => open('start', order)}><Play size={14} aria-hidden="true" />Iniciar</button>}
+          {edit && order.status === 'PRINTING' && <button type="button" className="btn secondary small" onClick={() => open('finish', order)}><CheckCircle2 size={14} aria-hidden="true" />Concluir</button>}
+          {edit && (order.status === 'PLANNED' || order.status === 'PRINTING') &&
+            <button type="button" className="btn ghost small" onClick={() => open('cancel', order)}><X size={14} aria-hidden="true" />Cancelar</button>}
+        </div>,
+      ])} />}
+
+    {data && dialog?.kind === 'new' && <Modal wide title="Nova ordem de produção" close={() => setDialog(undefined)}><NewOrder view={data} done={done} /></Modal>}
+    {dialog?.kind === 'start' && <ModalForm title={'Iniciar ordem #' + dialog.order.number} subtitle="Os insumos ficam reservados até a conclusão." label="Iniciar impressão"
+      close={() => setDialog(undefined)} action={async values => {
+        await api('production/orders/' + dialog.order.id + '/start', { startedAt: iso(values.get('startedAt')) });
+        await done('Impressão iniciada.');
+      }}>
+      <Field name="startedAt" label="Início real" type="datetime-local" defaultValue={localValue()} />
+      <InputsTable inputs={dialog.order.inputs} />
+    </ModalForm>}
+    {dialog?.kind === 'finish' && <Modal wide title={'Concluir ordem #' + dialog.order.number} close={() => setDialog(undefined)}>
+      <FinishOrder order={dialog.order} done={done} /></Modal>}
+    {dialog?.kind === 'cancel' && <ModalForm title={'Cancelar ordem #' + dialog.order.number} label="Cancelar ordem" cancel="Voltar" danger close={() => setDialog(undefined)}
+      action={async values => {
+        const inputs = dialog.order.status === 'PRINTING'
+          ? dialog.order.inputs.map(input => ({ inputId: input.inputId, used: String(values.get('used' + input.inputId) || '0') })) : [];
+        await api('production/orders/' + dialog.order.id + '/cancel', { inputs });
+        await done('Ordem cancelada.');
+      }}>
+      {dialog.order.status === 'PRINTING' ? <>
+        <p className="muted">Informe quanto foi gasto até aqui. Só isso sai do estoque, e o restante da reserva é liberado.</p>
+        {dialog.order.inputs.map(input => <Field key={input.inputId} name={'used' + input.inputId} label={input.sku + ' gasto (' + input.symbol + ')'}
+          inputMode="decimal" required={false} placeholder="0" hint={'Reservado: ' + quantity(input.planned) + ' ' + input.symbol} />)}
+      </> : <p className="muted">A ordem ainda não iniciou, então nada muda no estoque.</p>}
+    </ModalForm>}
+    {dialog?.kind === 'details' && <Modal wide title={'Ordem #' + dialog.order.number} subtitle={statuses[dialog.order.status].name} close={() => setDialog(undefined)}>
+      <OrderDetails order={dialog.order} /></Modal>}
+  </>;
+}
+
+function InputsTable({ inputs }: { inputs: OrderInput[] }) {
+  return <Table responsive={false} columns={['Insumo', { label: 'Previsto', end: true }, ...(inputs.some(input => input.used !== null) ? [{ label: 'Real', end: true }] : [])]}
+    rows={inputs.map(input => [
+      <Title name={input.name} code={input.sku} />, quantity(input.planned) + ' ' + input.symbol,
+      ...(inputs.some(row => row.used !== null) ? [input.used === null ? '—' : quantity(input.used) + ' ' + input.symbol] : []),
+    ])} />;
+}
+
+function NewOrder({ view, done }: { view: OrdersView; done: (text: string) => Promise<void> }) {
+  const [rows, setRows] = useState([{ key: 0, productId: '' }]);
+  const closePanel = useClosePanel();
+  if (!view.printers.length || !view.products.length) return <div className="info">
+    {!view.printers.length ? 'Cadastre uma impressora ativa em Produção → Impressoras.' : 'Monte a ficha técnica de um produto fabricado em Cadastros → Produtos.'}
+  </div>;
+  return <Form label="Criar ordem" cancel="Cancelar" action={async values => {
+    const estimatedMinutes = Number(values.get('hours') || 0) * 60 + Number(values.get('minutes') || 0);
+    if (!Number.isInteger(estimatedMinutes) || estimatedMinutes <= 0) throw new Error('Informe o tempo de impressão em horas e minutos inteiros.');
+    const expectedEnd = values.get('expectedEnd');
+    await api('production/orders', {
+      printerId: values.get('printerId'), plannedStart: iso(values.get('plannedStart')), estimatedMinutes,
+      ...(expectedEnd ? { expectedEnd: iso(expectedEnd) } : {}), notes: String(values.get('notes') ?? ''),
+      items: rows.map(({ key }) => ({ productId: values.get('product' + key), quantity: values.get('quantity' + key) })),
+    });
+    await done('Ordem criada.');
+    closePanel?.();
+  }}>
+    <div className="form-grid">
+      <Select name="printerId" label="Impressora" options={view.printers} />
+      <Field name="plannedStart" label="Início previsto" type="datetime-local" defaultValue={localValue()} />
+    </div>
+    <div className="form-grid">
+      <Field name="hours" label="Tempo de impressão (horas)" inputMode="numeric" required={false} placeholder="10" />
+      <Field name="minutes" label="Minutos" inputMode="numeric" required={false} placeholder="0" />
+      <Field name="expectedEnd" label="Término previsto" type="datetime-local" required={false} hint="Vazio: início + tempo de impressão." />
+    </div>
+    <h3>Produtos da impressão</h3>
+    {rows.map(({ key, productId }, index) => {
+      const product = view.products.find(item => item.id === productId);
+      const options = view.products.filter(item => item.id === productId || !rows.some(row => row.productId === item.id));
+      return <div className="component-row" style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr) auto' }} key={key}>
+        <Select name={'product' + key} label={'Produto ' + (index + 1)} options={options.map(item => ({ id: item.id, name: item.sku + ' · ' + item.name }))}
+          onChange={value => setRows(items => items.map(item => item.key === key ? { key, productId: value } : item))} />
+        <Field name={'quantity' + key} label={'Quantidade' + (product ? ' (' + product.symbol + ')' : '')} inputMode="decimal" />
+        <button type="button" className="icon-button" aria-label={'Remover produto ' + (index + 1)} disabled={rows.length === 1}
+          onClick={() => setRows(items => items.filter(item => item.key !== key))}><Trash2 size={18} aria-hidden="true" /></button>
+      </div>;
+    })}
+    <button type="button" className="btn secondary" style={{ alignSelf: 'flex-start' }} disabled={rows.length >= view.products.length}
+      onClick={() => setRows(items => [...items, { key: Math.max(...items.map(item => item.key)) + 1, productId: '' }])}>
+      <Plus size={16} aria-hidden="true" />Adicionar produto</button>
+    <Field name="notes" label="Observação" required={false} placeholder="Pedido, cliente ou lote" />
+  </Form>;
+}
+
+function FinishOrder({ order, done }: { order: Order; done: (text: string) => Promise<void> }) {
+  const [review, setReview] = useState<{ payload: Record<string, unknown>; preview: Preview; absorb: boolean; shipOut: boolean }>();
+  const closePanel = useClosePanel();
+  const path = 'production/orders/' + order.id;
+  const lost = review?.preview.items.filter(item => Number(item.lost) > 0) ?? [];
+  return <>
+    <div hidden={!!review}>
+      <Form label="Conferir custos" cancel="Cancelar" action={async values => {
+        const minutes = String(values.get('printMinutes') ?? '').trim();
+        const payload = {
+          finishedAt: iso(values.get('finishedAt')), absorbLoss: values.has('absorbLoss'), shipOut: values.has('shipOut'),
+          ...(minutes ? { printMinutes: Number(minutes) } : {}),
+          items: order.items.map(item => ({ productId: item.productId, lost: String(values.get('lost' + item.productId) || '0') })),
+          inputs: order.inputs.map(input => ({ inputId: input.inputId, used: String(values.get('used' + input.inputId) || input.planned) })),
+        };
+        const preview = await api<Preview>(path + '/preview', payload);
+        setReview({ payload, preview, absorb: payload.absorbLoss, shipOut: payload.shipOut });
+      }}>
+        <div className="form-grid">
+          <Field name="finishedAt" label="Término real" type="datetime-local" defaultValue={localValue()} />
+          <Field name="printMinutes" label="Tempo cobrado (min)" inputMode="numeric" required={false} hint="Vazio: diferença entre início e término." />
+        </div>
+        <h3>Peças perdidas (opcional)</h3>
+        <div className="form-grid">{order.items.map(item => <Field key={item.productId} name={'lost' + item.productId} label={item.sku + ' (' + item.symbol + ')'}
+          inputMode="decimal" required={false} placeholder="0" hint={'De ' + quantity(item.planned) + ' ' + item.symbol} />)}</div>
+        <h3>Consumo real</h3>
+        <div className="form-grid">{order.inputs.map(input => <Field key={input.inputId} name={'used' + input.inputId} label={input.sku + ' (' + input.symbol + ')'}
+          inputMode="decimal" defaultValue={input.planned} />)}</div>
+        <label className="check"><input name="absorbLoss" type="checkbox" />Embutir a perda no custo das peças boas</label>
+        <label className="check"><input name="shipOut" type="checkbox" />Produzir e já dar saída (encomenda)</label>
+      </Form>
+    </div>
+    {review && <div className="stack">
+      {review.preview.partialCost && <div className="info">Há insumo sem custo registrado, então o custo considera apenas os demais.</div>}
+      {lost.length > 0 && (review.absorb
+        ? <div className="info" role="alert"><strong>A perda será embutida no custo.</strong> {lost.map(item => item.sku + ' passa de ' + brl(item.fullUnitCost) + ' para ' +
+          (item.unitCost === null ? '— (nenhuma peça boa)' : brl(item.unitCost)) + ' por ' + item.symbol).join('; ')}. Isso aumenta o custo médio em estoque.</div>
+        : <div className="info">As peças boas mantêm o custo normal. A perda de <strong>{brl(review.preview.lossCost)}</strong> fica registrada na ordem.</div>)}
+      <Table columns={['Produto', { label: 'Boas', end: true }, { label: 'Perdidas', end: true }, { label: 'Custo por peça', end: true }, { label: 'Valor da perda', end: true }]}
+        rows={review.preview.items.map(item => [
+          <Title name={item.name} code={item.sku} />, quantity(item.good) + ' ' + item.symbol, quantity(item.lost) + ' ' + item.symbol,
+          <strong>{brl(item.unitCost)}</strong>, brl(item.lossCost),
+        ])}
+        footer={<><span>Máquina e energia: {brl(review.preview.machineCost)} · {duration(review.preview.printMinutes)}</span>
+          <span>Custo total: <strong>{brl(review.preview.totalCost)}</strong></span></>} />
+      {review.shipOut && <p className="hint">As peças boas entram e saem do estoque na mesma operação.</p>}
+      <Form label="Confirmar conclusão" extra={<button type="button" className="btn secondary" onClick={() => setReview(undefined)}>Voltar</button>} action={async () => {
+        await api(path + '/finish', review.payload);
+        await done('Ordem concluída.');
+        closePanel?.();
+      }} />
+    </div>}
+  </>;
+}
+
+function OrderDetails({ order }: { order: Order }) {
+  const finished = order.items.some(item => item.good !== null);
+  return <div className="stack">
+    <dl className="dl">
+      <div><dt>Impressora</dt><dd>{order.printer.name}</dd></div>
+      <div><dt>Criada por</dt><dd>{order.user.name}</dd></div>
+      <div><dt>Início previsto</dt><dd>{dateTime(order.plannedStart)}</dd></div>
+      <div><dt>Término previsto</dt><dd>{dateTime(order.expectedEnd)}</dd></div>
+      <div><dt>Tempo estimado</dt><dd>{duration(order.estimatedMinutes)}</dd></div>
+      {order.startedAt && <div><dt>Início real</dt><dd>{dateTime(order.startedAt)}</dd></div>}
+      {order.finishedAt && <div><dt>Encerrada em</dt><dd>{dateTime(order.finishedAt)}</dd></div>}
+      {order.printMinutes !== null && <div><dt>Tempo cobrado</dt><dd>{duration(order.printMinutes)}</dd></div>}
+      {order.machineCost !== null && <div><dt>Máquina e energia</dt><dd>{brl(order.machineCost)}</dd></div>}
+      {order.totalCost !== null && <div><dt>Custo total</dt><dd>{brl(order.totalCost)}</dd></div>}
+      {order.lossCost !== null && <div><dt>Valor da perda</dt><dd>{brl(order.lossCost)}{order.absorbLoss ? ' (embutida nas peças boas)' : ''}</dd></div>}
+      {order.notes && <div><dt>Observação</dt><dd>{order.notes}</dd></div>}
+    </dl>
+    <Table responsive={false} columns={['Produto', { label: 'Ordem', end: true }, ...(finished ? [{ label: 'Boas', end: true }, { label: 'Perdidas', end: true }, { label: 'Custo por peça', end: true }] : [])]}
+      rows={order.items.map(item => [
+        <Title name={item.name} code={item.sku} />, quantity(item.planned) + ' ' + item.symbol,
+        ...(finished ? [quantity(item.good ?? '0'), quantity(item.lost ?? '0'), brl(item.unitCost)] : []),
+      ])} />
+    <InputsTable inputs={order.inputs} />
+  </div>;
+}

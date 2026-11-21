@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost, costPerBaseUnit, kitCosting } = require('../dist/api/stock/cost.js');
+const { averageCost, costPerBaseUnit, kitCosting, printerHourCost, productionCosting } = require('../dist/api/stock/cost.js');
 
 const d = value => new Prisma.Decimal(value);
 const average = (balance, current, quantity, cost) =>
@@ -50,6 +50,75 @@ test('marks the kit total as partial when a component has no cost', () => {
 
 test('a kit that costs zero has no share to divide', () => {
   assert.equal(kitCosting([component('1', '1', '0')]).components[0].share, null);
+});
+
+test('a printer hour adds the energy drawn to the wear', () => {
+  assert.equal(printerHourCost(d('200'), d('0.9'), d('2')).toString(), '2.18');
+  assert.equal(printerHourCost(d('350.5'), d('0'), d('1.5')).toString(), '1.5');
+});
+
+const printJob = (absorbLoss, used = '2520') => productionCosting({
+  items: [{ productId: 'p', planned: d('20'), lost: d('1') }],
+  rows: [{ productId: 'p', inputId: 'pla', planned: d('2520'), familyId: 'mass', unitCost: d('0.1') }],
+  used: new Map([['pla', d(used)]]), machineCost: d('21.8'), absorbLoss,
+});
+
+test('a lost piece does not raise the cost of the good ones by default', () => {
+  const { items: [item], totalCost, lossCost } = printJob(false);
+  assert.equal(totalCost.toString(), '273.8');
+  assert.equal(item.good.toString(), '19');
+  assert.equal(item.unitCost.toString(), '13.69');
+  assert.equal(lossCost.toString(), '13.69');
+});
+
+test('the good pieces absorb the loss only when asked', () => {
+  assert.equal(printJob(true).items[0].unitCost.toString(), '14.410526315789');
+});
+
+test('the real consumption drives the cost', () => {
+  assert.equal(printJob(false, '3000').totalCost.toString(), '321.8');
+});
+
+test('a job with no good piece has no unit cost', () => {
+  const job = productionCosting({
+    items: [{ productId: 'p', planned: d('2'), lost: d('2') }],
+    rows: [{ productId: 'p', inputId: 'pla', planned: d('10'), familyId: 'mass', unitCost: d('1') }],
+    used: new Map(), machineCost: d('0'), absorbLoss: true,
+  });
+  assert.equal(job.items[0].unitCost, null);
+  assert.equal(job.lossCost.toString(), '10');
+});
+
+test('machine time follows the weight and ignores inputs of other unit families', () => {
+  const job = productionCosting({
+    items: [{ productId: 'a', planned: d('1'), lost: d('0') }, { productId: 'b', planned: d('1'), lost: d('0') }],
+    rows: [
+      { productId: 'a', inputId: 'pla', planned: d('300'), familyId: 'mass', unitCost: d('0') },
+      { productId: 'b', inputId: 'pla', planned: d('100'), familyId: 'mass', unitCost: d('0') },
+      { productId: 'b', inputId: 'screw', planned: d('50'), familyId: 'pieces', unitCost: d('0') },
+    ],
+    used: new Map(), machineCost: d('40'), absorbLoss: false,
+  });
+  assert.deepEqual(job.items.map(item => item.totalCost.toString()), ['30', '10']);
+});
+
+test('real consumption is shared by the planned share of each item', () => {
+  const job = productionCosting({
+    items: [{ productId: 'a', planned: d('1'), lost: d('0') }, { productId: 'b', planned: d('1'), lost: d('0') }],
+    rows: [
+      { productId: 'a', inputId: 'pla', planned: d('75'), familyId: 'mass', unitCost: d('1') },
+      { productId: 'b', inputId: 'pla', planned: d('25'), familyId: 'mass', unitCost: d('1') },
+    ],
+    used: new Map([['pla', d('200')]]), machineCost: d('0'), absorbLoss: false,
+  });
+  assert.deepEqual(job.rows.map(row => row.used.toString()), ['150', '50']);
+});
+
+test('reserved balance does not count toward the kits available', () => {
+  const free = kitCosting([{ ...component('10', '30', '1'), product: { quantity: d('30'), currentCost: d('1'), reserved: d('15') } }]);
+  assert.equal(free.available.toString(), '1');
+  const short = kitCosting([{ ...component('10', '5', '1'), product: { quantity: d('5'), currentCost: d('1'), reserved: d('9') } }]);
+  assert.equal(short.available.toString(), '0');
 });
 
 test('values the balance exactly and sums without floating point', () => {

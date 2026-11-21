@@ -33,15 +33,28 @@ function distinctSkus(rows: { sku: string }[]) {
 export class StockService {
   constructor(@Inject(Database) private db: Database, @Inject(CatalogService) private catalog: CatalogService) {}
 
-  private async record(
+  /** Balance held by running prints. A finishing order leaves its own reservation out. */
+  async reservedBalance(tx: Prisma.TransactionClient, productId: string, exceptOrderId?: string) {
+    const { _sum } = await tx.productionConsumption.aggregate({
+      _sum: { planned: true },
+      where: { inputId: productId, item: { order: { status: 'PRINTING', ...(exceptOrderId ? { id: { not: exceptOrderId } } : {}) } } },
+    });
+    return _sum.planned ?? new Prisma.Decimal(0);
+  }
+
+  async record(
     tx: Prisma.TransactionClient, product: Product, quantity: Prisma.Decimal,
-    kind: MovementKind, userId: string, reason: string, unitCost = product.currentCost, kitId?: string,
+    kind: MovementKind, userId: string, reason: string, unitCost = product.currentCost, kitId?: string, productionOrderId?: string,
   ) {
     if (!product.active) throw new ConflictException('O produto ' + product.sku + ' está inativo.');
     const balance = storedDecimal(product.quantity.plus(quantity));
     if (balance.lt(0)) throw new ConflictException('Saldo insuficiente para ' + product.sku + '.');
+    // A physical count records what exists, so only operational outputs respect the reservation.
+    if (quantity.lt(0) && kind !== 'INVENTORY' && balance.lt(await this.reservedBalance(tx, product.id, productionOrderId))) {
+      throw new ConflictException('O saldo de ' + product.sku + ' está reservado para uma impressão em andamento.');
+    }
     // Entries with their own cost update the moving average; other movements keep it.
-    const updatedCost = (kind === 'PURCHASE' || kind === 'INITIAL') && unitCost !== null
+    const updatedCost = (kind === 'PURCHASE' || kind === 'INITIAL' || kind === 'PRODUCTION_IN') && unitCost !== null
       ? storedDecimal(averageCost(product.quantity, product.currentCost, quantity, unitCost)) : product.currentCost;
     await tx.product.update({
       where: { id: product.id },
@@ -54,7 +67,7 @@ export class StockService {
       { [product.sku + ' · saldo']: product.quantity, [product.sku + ' · custo médio']: product.currentCost },
       { [product.sku + ' · saldo']: balance, [product.sku + ' · custo médio']: updatedCost },
     );
-    return tx.movement.create({ data: { productId: product.id, userId, quantity, kind, reason, unitCost, kitId } });
+    return tx.movement.create({ data: { productId: product.id, userId, quantity, kind, reason, unitCost, kitId, productionOrderId } });
   }
 
   movement(data: z.infer<typeof movementFields>, userId: string) {
