@@ -95,6 +95,26 @@ export function productionBudget({ items, rows, minutes, hourCost }: {
   };
 }
 
+/**
+ * What one piece of a recipe costs in inputs, waste included, and how many pieces the free balance yields.
+ * Reserved balance and inactive inputs cannot be used by a new order.
+ */
+export function recipeEstimate(wastePercent: Prisma.Decimal, rows: {
+  sku: string; quantity: Prisma.Decimal; active: boolean; balance: Prisma.Decimal; reserved: Prisma.Decimal; unitCost: Prisma.Decimal | null;
+}[]) {
+  const factor = wastePercent.div(100).plus(1);
+  const lines = rows.map(row => {
+    const needed = row.quantity.times(factor).toDecimalPlaces(12);
+    const free = row.active ? Prisma.Decimal.max(0, row.balance.minus(row.reserved)) : new Prisma.Decimal(0);
+    return { sku: row.sku, needed, yields: free.div(needed).floor(), cost: row.unitCost?.times(needed).toDecimalPlaces(12) ?? null };
+  });
+  const limiting = lines.reduce((lowest, line) => line.yields.lt(lowest.yields) ? line : lowest, lines[0]);
+  return {
+    unitCost: sumValues(lines.flatMap(line => line.cost ?? [])), partialCost: lines.some(line => line.cost === null),
+    producible: limiting.yields, limiting: limiting.sku,
+  };
+}
+
 type CostedComponent = {
   quantity: Prisma.Decimal; product: { quantity: Prisma.Decimal; currentCost: Prisma.Decimal | null; reserved?: Prisma.Decimal };
 };

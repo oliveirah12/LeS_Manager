@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react';
-import { ClipboardList, Pencil, Plus, Power, PowerOff, Trash2 } from 'lucide-react';
+import { ClipboardList, Eye, Pencil, Plus, Power, PowerOff, Trash2 } from 'lucide-react';
+import { CatalogDetails, DetailTarget } from './catalog-details';
 import { RecipeEditor } from './recipe';
 import { RegistrationData, referenceKinds } from './registrations';
 import {
@@ -50,6 +51,9 @@ export function Catalog({ page, edit, seeStock = false }: { page: 'products' | '
   const [query, setQuery] = useState('');
   const [situation, setSituation] = useState<Situation>('active');
   const [selected, setSelected] = useState<Record<string, string>>({});
+  const [details, setDetails] = useState<DetailTarget>();
+  const detailsButton = (kind: DetailTarget['kind'], row: { id: string; sku: string }) => <button type="button" className="btn ghost small"
+    aria-label={'Detalhes de ' + row.sku} onClick={() => setDetails({ kind, id: row.id, sku: row.sku })}><Eye size={14} aria-hidden="true" />Detalhes</button>;
   async function save(path: string, payload: unknown, id?: string) {
     await api('catalog/' + path + (id ? '/' + id : ''), payload, id ? 'PATCH' : 'POST');
     notify(id ? 'Alterações salvas.' : 'Cadastro criado.');
@@ -84,36 +88,39 @@ export function Catalog({ page, edit, seeStock = false }: { page: 'products' | '
       {page === 'inputs' && <TableFilters key={balances ? 'stock' : 'plain'} filters={inputFilters(data, balances)} selected={selected} onChange={setSelected} />}
       {page === 'kits' && <TableFilters filters={kitFilters(data)} selected={selected} onChange={setSelected} />}
       {page === 'inputs' && <Table empty="Nenhum insumo encontrado."
-        columns={['Insumo', 'Tipo', ...(balances ? [{ label: 'Saldo', end: true }, { label: 'Reservado', end: true }, { label: 'Custo médio', end: true }] : []), 'Situação']}
+        columns={['Insumo', 'Tipo', ...(balances ? [{ label: 'Saldo', end: true }, { label: 'Reservado', end: true }, { label: 'Custo médio', end: true }] : []), 'Situação', { label: 'Ações', actions: true }]}
         rows={applyFilters(visible(data.products.filter(row => data.productTypes.find(type => type.id === row.typeId)?.isInput)), inputFilters(data, balances), selected).map(row => {
           const balance = balances?.find(item => item.id === row.id);
           const symbol = baseUnit(row).symbol;
           return [
             <Title name={row.name} code={row.sku} />, data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
             ...(balances ? [quantity(balance?.quantity ?? '0') + ' ' + symbol, quantity(balance?.reserved ?? '0') + ' ' + symbol, brl(balance?.currentCost)] : []),
-            situationBadge(row),
+            situationBadge(row), detailsButton('products', row),
           ];
         })} />}
       {page === 'products' && <Table empty="Nenhum produto encontrado."
-        columns={['Produto', 'Tipo', 'Unidade', 'Classificação', 'Situação', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
+        columns={['Produto', 'Tipo', ...(edit ? ['Unidade', 'Classificação'] : []), 'Situação', { label: 'Ações', actions: true }]}
         rows={applyFilters(visible(data.products), productFilters(data), selected).map(row => [
-          <Title name={row.name} code={row.sku} />, data.productTypes.find(type => type.id === row.typeId)?.name ?? '—', row.unit.symbol,
-          <div className="actions">{referenceKinds.map(kind => data.references.find(item => item.id === row[kind.field])?.name)
-            .filter(Boolean).map(name => <Badge key={name}>{name}</Badge>)}</div>,
+          <Title name={row.name} code={row.sku} />, data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
+          ...(edit ? [row.unit.symbol, <div className="actions">{referenceKinds.map(kind => data.references.find(item => item.id === row[kind.field])?.name)
+            .filter(Boolean).map(name => <Badge key={name}>{name}</Badge>)}</div>] : []),
           situationBadge(row),
-          ...(edit ? [rowActions('products', row, () => setProduct(row),
+          edit ? rowActions('products', row, () => setProduct(row),
             data.productTypes.find(type => type.id === row.typeId)?.isManufactured &&
-              <button type="button" className="btn secondary small" onClick={() => setRecipe(row)}><ClipboardList size={14} aria-hidden="true" />Ficha técnica</button>)] : []),
+              <button type="button" className="btn secondary small" onClick={() => setRecipe(row)}><ClipboardList size={14} aria-hidden="true" />Ficha técnica</button>)
+            : detailsButton('products', row),
         ])} />}
       {page === 'kits' && <Table empty="Nenhum kit encontrado."
-        columns={['Kit', 'Componentes', 'Situação', ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
+        columns={['Kit', edit ? 'Componentes' : 'Itens', 'Situação', { label: 'Ações', actions: true }]}
         rows={applyFilters(visible(data.kits), kitFilters(data), selected).map(row => [
           <Title name={row.name} code={row.sku} />,
-          <span className="muted">{row.components.map(item => quantity(item.quantity) + ' ' + baseUnit(item.product).symbol + ' ' + item.product.sku).join(' · ')}</span>,
+          edit ? <span className="muted">{row.components.map(item => quantity(item.quantity) + ' ' + baseUnit(item.product).symbol + ' ' + item.product.sku).join(' · ')}</span>
+            : row.components.length,
           situationBadge(row),
-          ...(edit ? [rowActions('kits', row, () => setKit(row))] : []),
+          edit ? rowActions('kits', row, () => setKit(row)) : detailsButton('kits', row),
         ])} />}
     </>}
+    {details && <CatalogDetails target={details} close={() => setDetails(undefined)} />}
 
     {data && edit && product !== undefined && <ModalForm title={product ? 'Editar produto' : 'Novo produto'} subtitle={product?.sku}
       close={() => setProduct(undefined)} label={product ? 'Salvar alterações' : 'Cadastrar produto'} action={async values => {

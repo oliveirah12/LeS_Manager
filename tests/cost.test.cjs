@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting } = require('../dist/api/stock/cost.js');
+const { averageCost, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, recipeEstimate } = require('../dist/api/stock/cost.js');
 
 const d = value => new Prisma.Decimal(value);
 const average = (balance, current, quantity, cost) =>
@@ -141,6 +141,22 @@ test('the budget is partial when an input has no known cost', () => {
   });
   assert.equal(budget.totalCost.toString(), '11');
   assert.equal(budget.partialCost, true);
+});
+
+test('a recipe estimate adds the waste and finds the limiting input', () => {
+  const estimate = recipeEstimate(d('10'), [
+    { sku: 'PLA', quantity: d('100'), active: true, balance: d('1000'), reserved: d('450'), unitCost: d('0.1') },
+    { sku: 'PARAFUSO', quantity: d('2'), active: true, balance: d('100'), reserved: d('0'), unitCost: null },
+  ]);
+  assert.equal(estimate.unitCost.toString(), '11');
+  assert.equal(estimate.partialCost, true);
+  assert.equal(estimate.producible.toString(), '5');
+  assert.equal(estimate.limiting, 'PLA');
+});
+
+test('an inactive input yields no piece', () => {
+  const estimate = recipeEstimate(d('0'), [{ sku: 'PLA', quantity: d('1'), active: false, balance: d('10'), reserved: d('0'), unitCost: d('1') }]);
+  assert.equal(estimate.producible.toString(), '0');
 });
 
 test('reserved balance does not count toward the kits available', () => {
