@@ -54,6 +54,24 @@ Para atualizar, faça backup da base, rode `git pull`, repita o `up -d --build` 
 
 Rode uma única instância da API. Os limites de tentativas de login e a trava da sincronização bancária ficam na memória do processo. Para usar mais de uma instância, mova esse estado para o banco ou para um Redis antes.
 
+## Produção em servidor Windows, sem Docker
+
+Instale **Git**, **Node.js 22 LTS**, **PostgreSQL 17** e **cloudflared**, e clone a `main`. Em um PowerShell como administrador, na pasta do projeto, instale primeiro sem publicar. Informe os arquivos trazidos do servidor anterior, ou omita `-Backup` e `-EnvAntigo` para começar com um banco vazio:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows\instalar.ps1 -Backup C:\migracao\les.dump -EnvAntigo C:\migracao\.env
+```
+
+Confira `http://localhost:3000`. Desligue o túnel do servidor anterior, porque dois servidores no mesmo túnel dividiriam os acessos entre bancos diferentes, e publique:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows\instalar.ps1 -TunelDir C:\migracao\.cloudflared -LigarTunel
+```
+
+Com banco vazio, crie o administrador com `node --env-file=..\LeS_Manager_dados\.env ..\LeS_Manager_dados\atual\dist\api\create-admin.js "Seu nome" admin@empresa.com`. App e túnel iniciam com o Windows, sem depender de login. Configuração, versões, backups e logs ficam em `LeS_Manager_dados`, ao lado do repositório, e só administradores têm acesso.
+
+Para atualizar, use o atalho **Atualizar LeS Manager** da Área de Trabalho. Ele gera a última versão da `main` com o site no ar e só então para o app. Quando há migração, faz o backup antes. Se a migração ou a subida falhar, restaura o backup e volta à versão anterior.
+
 ## Conferir o primeiro fluxo
 
 1. Em **Cadastros → Famílias de medida**, crie Peças com base `un` e Peso com base `g`. Em **Cadastros → Unidades de medida**, cadastre `kg` com fator `1000`. Somente administradores cadastram famílias e unidades, porque o fator define como todas as quantidades são gravadas. Nome e símbolo podem ser editados a qualquer momento. O fator só muda, e a unidade só pode ser excluída, enquanto nenhum produto da família tiver saldo ou histórico. A unidade base mantém o fator 1 e só sai junto com a família, que pode ser excluída quando não tem produtos.
