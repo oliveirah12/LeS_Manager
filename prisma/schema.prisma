@@ -162,7 +162,8 @@ model Product {
   recipe        ProductInput[]  @relation("Recipe")
   usedInRecipes ProductInput[]  @relation("RecipeInput")
   productionItems  ProductionItem[]
-  productionInputs ProductionConsumption[]
+  productionInputs ProductionConsumption[] @relation("ConsumptionInput")
+  replacedInputs   ProductionConsumption[] @relation("ConsumptionOriginal")
   productionExpenses ProductionExpense[]
   files         ProductFile[]
   purchaseItems PurchaseItem[]
@@ -311,12 +312,16 @@ model ProductionConsumption {
   productId String
   item      ProductionItem @relation(fields: [orderId, productId], references: [orderId, productId])
   inputId   String
-  input     Product        @relation(fields: [inputId], references: [id])
+  input     Product        @relation("ConsumptionInput", fields: [inputId], references: [id])
+  /// Recipe input this line replaced in a planned order. Empty when it is the recipe's own input.
+  originalInputId String?
+  originalInput   Product? @relation("ConsumptionOriginal", fields: [originalInputId], references: [id], onDelete: Restrict)
   planned   Decimal        @db.Decimal(30, 12)
   used      Decimal?       @db.Decimal(30, 12)
   unitCost  Decimal?       @db.Decimal(30, 12)
   @@id([orderId, productId, inputId])
   @@index([inputId])
+  @@index([originalInputId])
 }
 
 /// Extra cost of an order. An INPUT row follows the last purchase expense × consumption until someone types a value.

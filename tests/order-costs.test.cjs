@@ -3,6 +3,7 @@ const { test } = require('node:test');
 require('reflect-metadata');
 const { Prisma } = require('@prisma/client');
 const { presentOrder, ProductionOrderService } = require('../dist/api/production/orders.js');
+const { planExpenses, setInputTotals, substituteInputs } = require('../dist/api/production/plan.js');
 
 const d = value => new Prisma.Decimal(value);
 const date = new Date('2026-11-21T10:00:00.000Z');
@@ -98,4 +99,34 @@ test('the finish preview charges the input expense on the real consumption', asy
   const preview = await service(order()).preview('order', data, true);
   assert.equal(preview.expenseCost.toFixed(), '0.1');
   assert.equal(preview.totalCost.toFixed(), '2.8');
+});
+
+const planRow = (productId, inputId, planned, originalInputId = null) => ({ productId, inputId, planned: d(planned), originalInputId });
+
+test('a substitute keeps the original input and joins repeated lines', () => {
+  const rows = substituteInputs([planRow('a', 'pla', 10), planRow('a', 'petg', 5), planRow('b', 'pla', 3)], new Map([['pla', 'petg']]));
+  assert.deepEqual(rows.map(row => [row.productId, row.inputId, row.planned.toFixed(), row.originalInputId]), [['a', 'petg', '15', 'pla'], ['b', 'petg', '3', 'pla']]);
+});
+
+test('returning to the recipe input clears the substitution', () => {
+  const [row] = substituteInputs([planRow('a', 'petg', 10, 'pla')], new Map([['petg', 'pla']]));
+  assert.deepEqual([row.inputId, row.originalInputId], ['pla', null]);
+  const [chained] = substituteInputs([planRow('a', 'petg', 10, 'pla')], new Map([['petg', 'abs']]));
+  assert.equal(chained.originalInputId, 'pla');
+});
+
+test('a typed input total keeps each item share and closes exactly', () => {
+  const rows = setInputTotals([planRow('a', 'pla', 1), planRow('b', 'pla', 2)], new Map([['pla', d(10)]]));
+  assert.equal(rows[0].planned.plus(rows[1].planned).toFixed(), '10');
+  assert.equal(rows[0].planned.toFixed(), '3.333333333333');
+});
+
+test('expenses follow a substitute: suggestions recalculate and typed values travel', () => {
+  const uses = new Map([['petg', { unitExpense: d(2), quantity: d(10) }]]);
+  const replaced = new Map([['pla', 'petg']]);
+  assert.equal(planExpenses([{ inputId: 'pla', value: d(1), edited: false }], replaced, uses, new Map())[0].value.toFixed(), '20');
+  const typed = planExpenses([{ inputId: 'pla', value: d(7), edited: true }], replaced, uses, new Map())[0];
+  assert.deepEqual([typed.value.toFixed(), typed.edited], ['7', true]);
+  const reset = planExpenses([{ inputId: 'pla', value: d(7), edited: true }], replaced, uses, new Map([['petg', null]]))[0];
+  assert.deepEqual([reset.value.toFixed(), reset.edited], ['20', false]);
 });

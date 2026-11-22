@@ -776,6 +776,61 @@ test('API REST com PostgreSQL', {
     assert.equal(frozen.expenses.find(row => row.source === 'INPUT').value, '10');
   });
 
+  await t.test('ordem planejada é editável e aceita filamento substituto', async () => {
+    const typed = async (name, typeId, unitId = unit.id) => {
+      const product = await createProduct(name, unitId);
+      expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name, typeId: '00000000-0000-4000-8000-00000000000' + typeId } }), 200);
+      return product;
+    };
+    const original = await typed('EDITA-PLA', 2);
+    const substitute = await typed('EDITA-PETG', 2);
+    const piece = await typed('EDITA-PECA', 3);
+    const other = await typed('EDITA-OUTRA', 3);
+    const family = expectStatus(await post('/catalog/families', { name: 'Edita ' + sku('F'), baseSymbol: sku('un') }), 201);
+    const foreign = await typed('EDITA-PARAFUSO', 2, family.units[0].id);
+    const notInput = await createProduct('EDITA-COMUM', unit.id);
+    expectStatus(await movement(original.id, unit.id, 'PURCHASE', '100', '1'), 201);
+    expectStatus(await movement(substitute.id, unit.id, 'PURCHASE', '15', '2'), 201);
+    for (const product of [piece, other]) {
+      expectStatus(await admin(`/catalog/products/${product.id}/recipe`, { method: 'PUT', body: { wastePercent: '0', inputs: [{ inputId: original.id, unitId: unit.id, quantity: '10' }] } }), 200);
+    }
+    const printer = expectStatus(await post('/production/printers', { name: sku('EDITA-IMPRESSORA'), powerWatts: '100', hourlyCost: '0' }), 201);
+    const plan = { printerId: printer.id, plannedStart: '2026-11-21T10:00:00.000Z', estimatedMinutes: 60 };
+    const order = expectStatus(await post('/production/orders', { ...plan, items: [{ productId: piece.id, quantity: '2', salePrice: '50' }] }), 201);
+    const edit = (body, client = admin) => client('/production/orders/' + order.id, { method: 'PATCH', body: { ...plan, items: [{ productId: piece.id, quantity: '2' }], ...body } });
+    const swap = substituteId => ({ replacements: [{ inputId: original.id, substituteId }] });
+
+    expectStatus(await edit(swap(foreign.id)), 409);
+    expectStatus(await edit(swap(notInput.id)), 409);
+    const reader = await session('EDITA-LEITURA', ['production:view']);
+    expectStatus(await edit(swap(substitute.id), reader), 403);
+    const unrelated = await session('EDITA-SEM', ['stock:operate']);
+    expectStatus(await edit(swap(substitute.id), unrelated), 403);
+
+    const swapped = expectStatus(await edit({ ...swap(substitute.id), estimatedMinutes: 90 }), 200);
+    assert.deepEqual([swapped.inputs[0].inputId, swapped.inputs[0].planned, swapped.inputs[0].replaces, swapped.estimatedMinutes], [substitute.id, '20', [sku('EDITA-PLA')], 90]);
+    assert.equal(swapped.items[0].salePrice, '50');
+    const listed = expectStatus(await admin('/production/orders'), 200).orders.find(row => row.id === order.id);
+    assert.equal(listed.budget.materialCost, '40');
+
+    // 20 g of the substitute with only 15 g in stock: the plan is saved, but the print cannot start.
+    expectStatus(await post(`/production/orders/${order.id}/start`, { startedAt: plan.plannedStart }), 409);
+    assert.equal((await productRow(substitute.id)).quantity.toString(), '15');
+    const fitted = expectStatus(await edit({ inputs: [{ inputId: substitute.id, planned: '15' }] }), 200);
+    assert.equal(fitted.inputs[0].planned, '15');
+
+    const operator = await session('EDITA-OPERA', ['production:operate']);
+    const kept = expectStatus(await edit({ items: [{ productId: piece.id, quantity: '2', marginPercent: '90' }] }, operator), 200);
+    assert.equal(kept.items[0].marginPercent, undefined);
+    assert.equal((await db.productionItem.findFirst({ where: { orderId: order.id } })).marginPercent, null);
+
+    const grown = expectStatus(await edit({ items: [{ productId: piece.id, quantity: '1' }, { productId: other.id, quantity: '1' }] }), 200);
+    assert.deepEqual(grown.inputs.map(row => row.planned).sort(), ['10', '7.5']);
+    expectStatus(await edit({ items: [{ productId: piece.id, quantity: '1' }], inputs: [{ inputId: substitute.id, planned: '10' }] }), 200);
+    expectStatus(await post(`/production/orders/${order.id}/start`, { startedAt: plan.plannedStart }), 200);
+    expectStatus(await edit({}), 409);
+  });
+
   await t.test('famílias e unidades só mudam o que não afeta o histórico', async () => {
     const id = 'M' + Date.now();
     const patch = (path, body) => admin(path, { method: 'PATCH', body });

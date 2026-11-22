@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Post, Query, Req,
+  BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post, Query, Req,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
@@ -11,20 +11,29 @@ import { Database, idField, nonnegative, parse, positive, serial, sortField, sto
 import { printerHourCost, productionBudget, productionCosting, salePricing, sumValues } from '../stock/cost';
 import { StockService } from '../stock/stock';
 import { InputUse, resolveExpenses, suggestedExpense } from './expenses';
+import { PlanRow, planExpenses, setInputTotals, substituteInputs } from './plan';
 import { orderSale, saleFields, saleResult } from './sale';
 
 const dateField = z.iso.datetime().transform(value => new Date(value));
 const minutesField = z.number().int().positive().max(1000000);
 const expenseTitle = z.string().trim().min(1, 'Informe o título da despesa').max(120);
 const manualExpenses = z.array(z.object({ title: expenseTitle, value: nonnegative })).max(50);
-const createFields = z.object({
+const orderFields = {
   printerId: idField, plannedStart: dateField, estimatedMinutes: minutesField,
   notes: z.string().trim().max(500).optional(),
   ...saleFields,
-  manualExpenses: manualExpenses.default([]),
   items: z.array(z.object({
     productId: idField, quantity: positive, salePrice: positive.nullable().optional(), marginPercent: marginField.nullable().optional(),
   })).min(1).max(50),
+};
+const createFields = z.object({ ...orderFields, manualExpenses: manualExpenses.default([]) });
+/** Inputs are named by their id before the swap. A blank field of the form simply is not sent, so what was not touched stays. */
+export const updateFields = z.object({
+  ...orderFields,
+  manualExpenses: manualExpenses.optional(),
+  inputExpenses: z.array(z.object({ inputId: idField, value: nonnegative.nullable() })).max(200).default([]),
+  replacements: z.array(z.object({ inputId: idField, substituteId: idField })).max(50).default([]),
+  inputs: z.array(z.object({ inputId: idField, planned: positive })).max(200).default([]),
 });
 const startFields = z.object({ startedAt: dateField.optional() });
 const usedField = z.array(z.object({ inputId: idField, used: nonnegative })).max(200);
@@ -42,7 +51,13 @@ const orderInclude = {
     orderBy: { productId: 'asc' },
     include: {
       product: { select: { sku: true, name: true, ...productInclude } },
-      consumption: { orderBy: { inputId: 'asc' }, include: { input: { select: { sku: true, name: true, currentCost: true, lastPurchaseExpense: true, ...productInclude } } } },
+      consumption: {
+        orderBy: { inputId: 'asc' },
+        include: {
+          input: { select: { sku: true, name: true, currentCost: true, lastPurchaseExpense: true, ...productInclude } },
+          originalInput: { select: { sku: true } },
+        },
+      },
     },
   },
 } as const;
@@ -53,15 +68,17 @@ const symbolOf = (product: { unit: { symbol: string; family: { units: { symbol: 
 /** One line per input, with the exact sums the panel shows. */
 function orderInputs(order: LoadedOrder) {
   const inputs = new Map<string, {
-    inputId: string; sku: string; name: string; symbol: string; planned: Prisma.Decimal; used: Prisma.Decimal | null;
-    parts: { productId: string; planned: Prisma.Decimal }[];
+    inputId: string; sku: string; name: string; symbol: string; familyId: string; planned: Prisma.Decimal; used: Prisma.Decimal | null;
+    parts: { productId: string; planned: Prisma.Decimal }[]; replaces: string[];
   }>();
   for (const row of order.items.flatMap(item => item.consumption)) {
     const line = inputs.get(row.inputId) ?? {
-      inputId: row.inputId, sku: row.input.sku, name: row.input.name, symbol: symbolOf(row.input), planned: new Prisma.Decimal(0), used: null, parts: [],
+      inputId: row.inputId, sku: row.input.sku, name: row.input.name, symbol: symbolOf(row.input), familyId: row.input.unit.familyId,
+      planned: new Prisma.Decimal(0), used: null, parts: [], replaces: [],
     };
     line.planned = line.planned.plus(row.planned);
     line.parts.push({ productId: row.productId, planned: row.planned });
+    if (row.originalInput && !line.replaces.includes(row.originalInput.sku)) line.replaces.push(row.originalInput.sku);
     if (row.used !== null) line.used = (line.used ?? new Prisma.Decimal(0)).plus(row.used);
     inputs.set(row.inputId, line);
   }
@@ -174,6 +191,32 @@ function closing(order: LoadedOrder, energyRate: Prisma.Decimal, data: Finish) {
   return { printMinutes, machineCost, used, costing, sale, feePercent, expenses };
 }
 
+type RecipeProduct = Prisma.ProductGetPayload<{ include: { type: true; recipe: { include: { input: true } } } }>;
+
+function requireManufactured(product: RecipeProduct | undefined) {
+  if (!product) throw new NotFoundException('Produto não encontrado.');
+  if (!product.active || !product.type.isManufactured) throw new ConflictException(product.sku + ' não é um produto fabricado ativo.');
+  return product;
+}
+
+/** What a new line of the order consumes, from the product's recipe with its waste. */
+function recipeConsumption(product: RecipeProduct, quantity: Prisma.Decimal) {
+  if (!product.recipe.length) throw new ConflictException(product.sku + ' ainda não tem ficha técnica.');
+  const inactive = product.recipe.find(row => !row.input.active);
+  if (inactive) throw new ConflictException('Insumo inativo na ficha de ' + product.sku + ': ' + inactive.input.sku + '.');
+  const factor = product.wastePercent.div(100).plus(1);
+  return product.recipe.map(row => ({ inputId: row.inputId, planned: storedDecimal(row.quantity.times(quantity).times(factor).toDecimalPlaces(12)) }));
+}
+
+/** Readable picture of a planned order, so the audit shows what an edit changed. */
+const planValues = (order: LoadedOrder) => ({
+  Impressora: order.printer.name, 'Início previsto': order.plannedStart.toISOString(), 'Tempo (min)': order.estimatedMinutes, 'Observação': order.notes,
+  Produtos: order.items.map(item => item.product.sku + ' × ' + item.planned.toFixed() + ' · preço ' + (item.salePrice?.toFixed() ?? '—')).sort(),
+  Insumos: orderInputs(order).map(input => input.sku + ' × ' + input.planned.toFixed() + (input.replaces.length ? ' (substitui ' + input.replaces.join(', ') + ')' : '')).sort(),
+  Despesas: currentExpenses(order).filter(row => row.value.gt(0)).map(row => row.title + ': ' + row.value.toFixed()).sort(),
+  'Desconto (%)': order.discountPercent.toFixed(), 'Forma de pagamento': order.paymentMethod?.name ?? null, 'Taxa (%)': order.feePercent?.toFixed() ?? null,
+});
+
 const orderPageSize = 50;
 const orderListFields = z.object({
   page: z.coerce.number().int().min(1).max(1_000_000).default(1),
@@ -199,7 +242,7 @@ export class ProductionOrderService {
     const orderBy: Prisma.ProductionOrderOrderByWithRelationInput[] = !sort ? [{ number: 'desc' }]
       : sort.key === 'number' ? [{ number: sort.direction }]
       : [sort.key === 'printer' ? { printer: { name: sort.direction } } : { status: sort.direction }, { number: 'desc' }];
-    const [energyRate, orders, total, printers, products, paymentMethods] = await Promise.all([
+    const [energyRate, orders, total, printers, products, paymentMethods, inputs] = await Promise.all([
       this.energyRate(this.db),
       this.db.productionOrder.findMany({ include: orderInclude, orderBy, skip: (page - 1) * orderPageSize, take: orderPageSize }),
       this.db.productionOrder.count(),
@@ -209,6 +252,9 @@ export class ProductionOrderService {
         select: { id: true, sku: true, name: true, salePrice: true, marginPercent: true, ...productInclude }, orderBy: { sku: 'asc' },
       }),
       this.db.paymentMethod.findMany({ where: { active: true }, select: { id: true, name: true, feePercent: true }, orderBy: { name: 'asc' } }),
+      this.db.product.findMany({
+        where: { active: true, type: { isInput: true } }, select: { id: true, sku: true, name: true, ...productInclude }, orderBy: { sku: 'asc' },
+      }),
     ]);
     return {
       orders: orders.map(order => {
@@ -216,6 +262,7 @@ export class ProductionOrderService {
         return { ...presentOrder(order, seeCosts, budget?.totalCost ?? null), budget };
       }),
       page, pageSize: orderPageSize, total, printers, paymentMethods,
+      inputs: inputs.map(input => ({ id: input.id, sku: input.sku, name: input.name, symbol: symbolOf(input), familyId: input.unit.familyId })),
       products: products.map(product => ({
         id: product.id, sku: product.sku, name: product.name, symbol: symbolOf(product),
         ...(seeCosts ? { salePrice: product.salePrice, marginPercent: product.marginPercent } : {}),
@@ -232,21 +279,13 @@ export class ProductionOrderService {
       const payment = await this.paymentMethod(tx, data.paymentMethodId);
       const products = await tx.product.findMany({ where: { id: { in: ids } }, include: { type: true, recipe: { include: { input: true } } } });
       const items = data.items.map(item => {
-        const product = products.find(row => row.id === item.productId);
-        if (!product) throw new NotFoundException('Produto não encontrado.');
-        if (!product.active || !product.type.isManufactured) throw new ConflictException(product.sku + ' não é um produto fabricado ativo.');
-        if (!product.recipe.length) throw new ConflictException(product.sku + ' ainda não tem ficha técnica.');
-        const inactive = product.recipe.find(row => !row.input.active);
-        if (inactive) throw new ConflictException('Insumo inativo na ficha de ' + product.sku + ': ' + inactive.input.sku + '.');
-        const factor = product.wastePercent.div(100).plus(1);
+        const product = requireManufactured(products.find(row => row.id === item.productId));
         return {
           productId: product.id, planned: storedDecimal(item.quantity),
           // The registered price and margin are the starting point. Changing them here affects only this order.
           salePrice: item.salePrice === undefined ? product.salePrice : item.salePrice && storedDecimal(item.salePrice),
           marginPercent: !seeCosts || item.marginPercent === undefined ? product.marginPercent : item.marginPercent,
-          consumption: { create: product.recipe.map(row => ({
-            inputId: row.inputId, planned: storedDecimal(row.quantity.times(item.quantity).times(factor).toDecimalPlaces(12)),
-          })) },
+          consumption: { create: recipeConsumption(product, item.quantity) },
         };
       });
       const expectedEnd = new Date(data.plannedStart.getTime() + data.estimatedMinutes * 60000);
@@ -278,6 +317,92 @@ export class ProductionOrderService {
         Despesas: expenses.filter(row => row.value.gt(0)).map(row => row.title + ': ' + row.value.toFixed()).sort(),
       });
       return presentOrder(order, seeCosts);
+    });
+  }
+
+  /** A planned order has moved nothing yet, so its lines are rebuilt from what the edit decided. */
+  update(id: string, data: z.infer<typeof updateFields>, seeCosts: boolean) {
+    const ids = data.items.map(item => item.productId);
+    if (new Set(ids).size !== ids.length) throw new BadRequestException('Inclua cada produto apenas uma vez.');
+    const replacements = new Map(data.replacements.map(row => [row.inputId, row.substituteId]));
+    if (replacements.size !== data.replacements.length) throw new BadRequestException('Escolha um único substituto para cada insumo.');
+    return serial(this.db, async tx => {
+      const order = await this.load(tx, id);
+      if (order.status !== 'PLANNED') throw new ConflictException('Só uma ordem planejada pode ser editada.');
+      const printer = await tx.printer.findUnique({ where: { id: data.printerId } });
+      if (!printer || (!printer.active && printer.id !== order.printerId)) throw new ConflictException('Escolha uma impressora ativa.');
+      const payment = data.paymentMethodId === undefined ? order.paymentMethod : await this.paymentMethod(tx, data.paymentMethodId, order.paymentMethodId);
+      const products = await tx.product.findMany({ where: { id: { in: ids } }, include: { type: true, recipe: { include: { input: true } } } });
+      const quantities = new Map(data.items.map(item => [item.productId, storedDecimal(item.quantity)]));
+      const baseRows: PlanRow[] = data.items.flatMap(item => {
+        const product = requireManufactured(products.find(row => row.id === item.productId));
+        const current = order.items.find(row => row.productId === item.productId);
+        if (!current) return recipeConsumption(product, item.quantity).map(row => ({ ...row, productId: product.id, originalInputId: null }));
+        const ratio = item.quantity.div(current.planned);
+        return current.consumption.map(row => ({
+          productId: row.productId, inputId: row.inputId, originalInputId: row.originalInputId, planned: storedDecimal(row.planned.times(ratio).toDecimalPlaces(12)),
+        }));
+      });
+      const known = await tx.product.findMany({
+        where: { id: { in: [...new Set([...baseRows.map(row => row.inputId), ...replacements.values()])] } }, include: { type: true, unit: true },
+      });
+      for (const [inputId, substituteId] of replacements) {
+        const original = known.find(row => row.id === inputId);
+        const substitute = known.find(row => row.id === substituteId);
+        if (!original || !baseRows.some(row => row.inputId === inputId)) throw new BadRequestException('Insumo fora da ordem.');
+        if (!substitute) throw new NotFoundException('Insumo substituto não encontrado.');
+        if (!substitute.active || !substitute.type.isInput) throw new ConflictException(substitute.sku + ' não é um insumo ativo.');
+        if (substitute.unit.familyId !== original.unit.familyId) throw new ConflictException(substitute.sku + ' não é da mesma família de medida de ' + original.sku + '.');
+        if (quantities.has(substituteId)) throw new ConflictException(substitute.sku + ' é um produto desta ordem.');
+      }
+      const finalId = (inputId: string) => replacements.get(inputId) ?? inputId;
+      const swapped = substituteInputs(baseRows, replacements);
+      const typedTotals = new Map(data.inputs.map(row => [finalId(row.inputId), storedDecimal(row.planned)]));
+      if (typedTotals.size !== data.inputs.length) throw new BadRequestException('Informe uma quantidade por insumo.');
+      if ([...typedTotals.keys()].some(inputId => !swapped.some(row => row.inputId === inputId))) throw new BadRequestException('Insumo fora da ordem.');
+      const rows = setInputTotals(swapped, typedTotals);
+      const uses = new Map<string, InputUse>();
+      for (const row of rows) {
+        const input = known.find(line => line.id === row.inputId)!;
+        uses.set(row.inputId, { unitExpense: input.lastPurchaseExpense, quantity: (uses.get(row.inputId)?.quantity ?? new Prisma.Decimal(0)).plus(row.planned) });
+      }
+      const typedExpenses = new Map(data.inputExpenses.map(row => [finalId(row.inputId), row.value && storedDecimal(row.value)]));
+      if ([...typedExpenses.keys()].some(inputId => !uses.has(inputId))) throw new BadRequestException('Despesa de insumo fora da ordem.');
+      const current = currentExpenses(order).filter(row => row.source === 'INPUT').map(row => ({ inputId: row.inputId!, value: row.value, edited: row.edited }));
+      const inputExpenses = planExpenses(current, replacements, uses, typedExpenses).map(row => ({
+        ...row, source: 'INPUT' as const, title: 'Despesas de compra · ' + known.find(line => line.id === row.inputId)!.sku,
+      }));
+      const manual = (data.manualExpenses ?? order.expenses.filter(row => row.source === 'MANUAL'))
+        .map(row => ({ source: 'MANUAL' as const, title: row.title, value: storedDecimal(row.value), edited: true }));
+      const items = data.items.map(item => {
+        const before = order.items.find(row => row.productId === item.productId);
+        const product = products.find(row => row.id === item.productId)!;
+        return {
+          productId: item.productId, planned: quantities.get(item.productId)!,
+          salePrice: item.salePrice === undefined ? before ? before.salePrice : product.salePrice : item.salePrice && storedDecimal(item.salePrice),
+          marginPercent: seeCosts && item.marginPercent !== undefined ? item.marginPercent : before ? before.marginPercent : product.marginPercent,
+          consumption: { create: rows.filter(row => row.productId === item.productId).map(row => ({
+            inputId: row.inputId, planned: row.planned, originalInputId: row.originalInputId,
+          })) },
+        };
+      });
+      await tx.productionConsumption.deleteMany({ where: { orderId: id } });
+      await tx.productionItem.deleteMany({ where: { orderId: id } });
+      await tx.productionExpense.deleteMany({ where: { orderId: id } });
+      const updated = await tx.productionOrder.update({
+        where: { id },
+        data: {
+          printerId: printer.id, plannedStart: data.plannedStart, estimatedMinutes: data.estimatedMinutes,
+          expectedEnd: new Date(data.plannedStart.getTime() + data.estimatedMinutes * 60000),
+          notes: data.notes === undefined ? order.notes : data.notes || null,
+          discountPercent: data.discountPercent ?? order.discountPercent, paymentMethodId: payment?.id ?? null,
+          feePercent: data.feePercent === undefined ? order.feePercent : data.feePercent,
+          items: { create: items }, expenses: { create: [...inputExpenses, ...manual] },
+        },
+        include: orderInclude,
+      });
+      auditChange(planValues(order), planValues(updated));
+      return presentOrder(updated, seeCosts);
     });
   }
 
@@ -441,6 +566,13 @@ export class ProductionOrderController {
   @Audit('Criar ordem de produção')
   @Post()
   create(@Req() request: Authenticated, @Body() body: unknown) { return this.orders.create(parse(createFields, body), request.identity.id, seesCosts(request)); }
+
+  @Require('production:operate')
+  @Audit('Editar ordem de produção')
+  @Patch(':id')
+  update(@Req() request: Authenticated, @Param('id') id: string, @Body() body: unknown) {
+    return this.orders.update(parse(idField, id), parse(updateFields, body), seesCosts(request));
+  }
 
   @Require('production:operate')
   @Audit('Iniciar ordem de produção')

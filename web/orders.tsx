@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle2, Eye, Play, Plus, X } from 'lucide-react';
+import { CheckCircle2, Eye, Pencil, Play, Plus, X } from 'lucide-react';
 import { decimal, suggestedConsumption } from './format';
 import { OrderForm } from './order-form';
 import {
@@ -7,18 +7,18 @@ import {
 } from './ui';
 
 type Status = 'PLANNED' | 'PRINTING' | 'DONE' | 'CANCELED';
-type OrderItem = {
+export type OrderItem = {
   productId: string; sku: string; name: string; symbol: string; planned: string;
   good: string | null; lost: string | null; unitCost?: string | null; totalCost?: string | null; lossCost?: string | null;
   salePrice: string | null; marginPercent?: string | null;
 };
 type SaleValues = { gross: string; discount: string; total: string; fee: string; net: string; partial: boolean; profit?: string; marginPercent?: string | null };
 type Sale = { discountPercent: string; paymentMethodId: string | null; paymentName: string | null; feePercent: string; customFee: boolean; values: SaleValues | null };
-type OrderInput = {
-  inputId: string; sku: string; name: string; symbol: string; planned: string; used: string | null;
-  parts: { productId: string; planned: string }[];
+export type OrderInput = {
+  inputId: string; sku: string; name: string; symbol: string; familyId: string; planned: string; used: string | null;
+  parts: { productId: string; planned: string }[]; replaces: string[];
 };
-type Order = {
+export type Order = {
   id: string; number: number; status: Status; notes: string | null; printer: { id: string; name: string }; user: { name: string };
   plannedStart: string; estimatedMinutes: number; expectedEnd: string; startedAt: string | null; finishedAt: string | null; printMinutes: number | null;
   machineCost?: string | null; totalCost?: string | null; lossCost?: string | null; absorbLoss: boolean; items: OrderItem[]; inputs: OrderInput[];
@@ -32,6 +32,7 @@ type Budget = {
 export type OrdersView = {
   orders: Order[]; page: number; pageSize: number; total: number; printers: { id: string; name: string }[];
   paymentMethods: { id: string; name: string; feePercent: string | null }[];
+  inputs: { id: string; sku: string; name: string; symbol: string; familyId: string }[];
   products: { id: string; sku: string; name: string; symbol: string; salePrice?: string | null; marginPercent?: string | null }[];
 };
 /** The values only come with stock:view. */
@@ -40,7 +41,7 @@ type Preview = {
   printMinutes: number; machineCost?: string; expenseCost?: string; totalCost?: string; lossCost?: string; partialCost?: boolean; items: PreviewItem[];
   sale: (SaleValues & { feePercent: string; paymentName: string | null }) | null;
 };
-type Dialog = { kind: 'new' } | { kind: 'start' | 'finish' | 'cancel' | 'details'; order: Order };
+type Dialog = { kind: 'new' } | { kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details'; order: Order };
 
 const statuses: Record<Status, { name: string; tone?: 'ok' | 'warn' | 'brand' }> = {
   PLANNED: { name: 'Planejada' }, PRINTING: { name: 'Em impressão', tone: 'brand' }, DONE: { name: 'Concluída', tone: 'ok' }, CANCELED: { name: 'Cancelada', tone: 'warn' },
@@ -68,7 +69,7 @@ export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: 
     setSort(null);
   }
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
-  const open = (kind: 'start' | 'finish' | 'cancel' | 'details', order: Order) => setDialog({ kind, order });
+  const open = (kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details', order: Order) => setDialog({ kind, order });
   return <>
     {edit && <PageActions><button type="button" className="btn" onClick={() => setDialog({ kind: 'new' })}><Plus size={16} aria-hidden="true" />Nova ordem</button></PageActions>}
     {message(error)}
@@ -92,6 +93,7 @@ export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: 
           <span className="hint" style={{ display: 'block' }}>{order.budget.partialCost ? 'Orçamento parcial' : 'Orçamento'}</span></span> : brl(order.totalCost)] : []),
         <div className="actions">
           <button type="button" className="btn ghost small" aria-label={'Ver ordem ' + order.number} onClick={() => open('details', order)}><Eye size={14} aria-hidden="true" />Ver</button>
+          {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" aria-label={'Editar ordem ' + order.number} onClick={() => open('edit', order)}><Pencil size={14} aria-hidden="true" />Editar</button>}
           {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" onClick={() => open('start', order)}><Play size={14} aria-hidden="true" />Iniciar</button>}
           {edit && order.status === 'PRINTING' && <button type="button" className="btn secondary small" onClick={() => open('finish', order)}><CheckCircle2 size={14} aria-hidden="true" />Concluir</button>}
           {edit && (order.status === 'PLANNED' || order.status === 'PRINTING') &&
@@ -100,6 +102,8 @@ export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: 
       ])} />}
 
     {data && dialog?.kind === 'new' && <Modal wide title="Nova ordem de produção" close={() => setDialog(undefined)}><OrderForm view={data} seeCosts={seeCosts} done={created} /></Modal>}
+    {data && dialog?.kind === 'edit' && <Modal wide title={'Editar ordem #' + dialog.order.number} subtitle="Nada muda no estoque até a impressão começar." close={() => setDialog(undefined)}>
+      <OrderForm view={data} order={dialog.order} seeCosts={seeCosts} done={done} /></Modal>}
     {dialog?.kind === 'start' && <ModalForm title={'Iniciar ordem #' + dialog.order.number} subtitle="Os insumos ficam reservados até a conclusão." label="Iniciar impressão"
       close={() => setDialog(undefined)} action={async values => {
         await api('production/orders/' + dialog.order.id + '/start', { startedAt: iso(values.get('startedAt')) });
@@ -131,7 +135,8 @@ export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: 
 function InputsTable({ inputs }: { inputs: OrderInput[] }) {
   return <Table responsive={false} columns={['Insumo', { label: 'Previsto', end: true }, ...(inputs.some(input => input.used !== null) ? [{ label: 'Real', end: true }] : [])]}
     rows={inputs.map(input => [
-      by(input.name, <Title name={input.name} code={input.sku} />), by(input.planned, quantity(input.planned) + ' ' + input.symbol),
+      by(input.name, <><Title name={input.name} code={input.sku} />{input.replaces.length > 0 && <span className="hint" style={{ display: 'block' }}>Substitui {input.replaces.join(', ')}</span>}</>),
+      by(input.planned, quantity(input.planned) + ' ' + input.symbol),
       ...(inputs.some(row => row.used !== null) ? [by(input.used, input.used === null ? '—' : quantity(input.used) + ' ' + input.symbol)] : []),
     ])} />;
 }

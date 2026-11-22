@@ -1,55 +1,79 @@
 import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { saleEstimate } from './format';
-import type { OrdersView } from './orders';
-import { api, brl, dateTime, Field, Form, Select, useClosePanel } from './ui';
+import type { Order, OrdersView } from './orders';
+import { api, brl, dateTime, Field, Form, quantity, Select, useClosePanel } from './ui';
 
 const localValue = (date = new Date()) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 type Row = { key: number; productId: string; quantity: string; salePrice: string; marginPercent: string };
 const blankRow = (key: number): Row => ({ key, productId: '', quantity: '', salePrice: '', marginPercent: '' });
 
-export function OrderForm({ view, seeCosts, done }: { view: OrdersView; seeCosts: boolean; done: (text: string) => Promise<void> }) {
-  const [rows, setRows] = useState<Row[]>([blankRow(0)]);
-  const [plannedStart, setPlannedStart] = useState(() => localValue());
-  const [hours, setHours] = useState('');
-  const [minutes, setMinutes] = useState('');
-  const [discount, setDiscount] = useState('');
-  const [paymentId, setPaymentId] = useState('');
-  const [fee, setFee] = useState('');
-  const [expenses, setExpenses] = useState<{ key: number; title: string; value: string }[]>([]);
+const orderRows = (order: Order): Row[] => order.items.map((item, key) => ({
+  key, productId: item.productId, quantity: item.planned, salePrice: item.salePrice ?? '', marginPercent: item.marginPercent ?? '',
+}));
+
+/** Creates an order or, when one is given, edits it while it is still planned. */
+export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; order?: Order; seeCosts: boolean; done: (text: string) => Promise<void> }) {
+  const [rows, setRows] = useState<Row[]>(() => order ? orderRows(order) : [blankRow(0)]);
+  const [plannedStart, setPlannedStart] = useState(() => localValue(order ? new Date(order.plannedStart) : undefined));
+  const [hours, setHours] = useState(() => order && order.estimatedMinutes >= 60 ? String(Math.floor(order.estimatedMinutes / 60)) : '');
+  const [minutes, setMinutes] = useState(() => order && order.estimatedMinutes % 60 ? String(order.estimatedMinutes % 60) : '');
+  const [discount, setDiscount] = useState(() => order && Number(order.sale.discountPercent) > 0 ? order.sale.discountPercent : '');
+  const [paymentId, setPaymentId] = useState(order?.sale.paymentMethodId ?? '');
+  const [fee, setFee] = useState(() => order?.sale.customFee ? order.sale.feePercent : '');
+  const [expenses, setExpenses] = useState<{ key: number; title: string; value: string }[]>(() => (order?.expenses ?? [])
+    .filter(row => row.source === 'MANUAL').map((row, key) => ({ key, title: row.title, value: row.value })));
+  const [substitutes, setSubstitutes] = useState<Record<string, string>>({});
+  const [typedInputs, setTypedInputs] = useState<Record<string, string>>({});
+  const [typedExpenses, setTypedExpenses] = useState<Record<string, string | null>>({});
   const closePanel = useClosePanel();
   const estimatedMinutes = Number(hours || 0) * 60 + Number(minutes || 0);
   const validTime = Number.isInteger(estimatedMinutes) && estimatedMinutes > 0;
   const startTime = new Date(plannedStart).getTime();
   const expectedEnd = validTime && Number.isFinite(startTime) ? new Date(startTime + estimatedMinutes * 60000).toISOString() : null;
-  const payment = view.paymentMethods.find(method => method.id === paymentId);
+  // An order may keep a printer, method or product that has since left the active lists.
+  const printers = order && !view.printers.some(row => row.id === order.printer.id) ? [...view.printers, order.printer] : view.printers;
+  const payments = order?.sale.paymentMethodId && !view.paymentMethods.some(row => row.id === order.sale.paymentMethodId)
+    ? [...view.paymentMethods, { id: order.sale.paymentMethodId, name: order.sale.paymentName ?? 'Forma inativa', feePercent: order.sale.feePercent }] : view.paymentMethods;
+  const products = [...view.products, ...(order?.items ?? []).filter(item => !view.products.some(row => row.id === item.productId))
+    .map(item => ({ id: item.productId, sku: item.sku, name: item.name, symbol: item.symbol, salePrice: item.salePrice, marginPercent: item.marginPercent }))];
+  const orderInputs = (order?.inputs ?? []).filter(input => input.parts.some(part => rows.some(row => row.productId === part.productId)));
+  const inputExpenses = (order?.expenses ?? []).filter(row => row.source === 'INPUT' && orderInputs.some(input => input.inputId === row.inputId));
+  const payment = payments.find(method => method.id === paymentId);
   const sale = saleEstimate(rows, discount, fee.trim() ? fee : payment?.feePercent ?? '0');
   const change = (key: number, values: Partial<Row>) => setRows(items => items.map(item => item.key === key ? { ...item, ...values } : item));
   /** Choosing a product brings its registered price and margin, which stay editable for this order only. */
   function choose(key: number, productId: string) {
-    const product = view.products.find(item => item.id === productId);
+    const product = products.find(item => item.id === productId);
     change(key, { productId, salePrice: product?.salePrice ?? '', marginPercent: product?.marginPercent ?? '' });
   }
-  if (!view.printers.length || !view.products.length) return <div className="info">
+  if (!order && (!view.printers.length || !view.products.length)) return <div className="info">
     {!view.printers.length ? 'Cadastre uma impressora ativa em Produção → Impressoras.' : 'Monte a ficha técnica de um produto fabricado em Cadastros → Produtos.'}
   </div>;
-  return <Form label="Criar ordem" cancel="Cancelar" action={async values => {
+  return <Form label={order ? 'Salvar alterações' : 'Criar ordem'} cancel="Cancelar" action={async values => {
     if (!validTime) throw new Error('Informe o tempo de impressão em horas e minutos inteiros.');
-    await api('production/orders', {
+    const edits = order ? {
+      replacements: orderInputs.filter(input => substitutes[input.inputId] && substitutes[input.inputId] !== input.inputId)
+        .map(input => ({ inputId: input.inputId, substituteId: substitutes[input.inputId] })),
+      inputs: orderInputs.filter(input => typedInputs[input.inputId]?.trim()).map(input => ({ inputId: input.inputId, planned: typedInputs[input.inputId].trim() })),
+      inputExpenses: inputExpenses.filter(row => typedExpenses[row.inputId!] !== undefined).map(row => ({ inputId: row.inputId, value: typedExpenses[row.inputId!]?.trim() || null })),
+    } : {};
+    await api('production/orders' + (order ? '/' + order.id : ''), {
+      ...edits,
       printerId: values.get('printerId'), plannedStart: new Date(plannedStart).toISOString(), estimatedMinutes, notes: String(values.get('notes') ?? ''),
       manualExpenses: expenses.map(({ title, value }) => ({ title, value })),
       discountPercent: discount.trim() || '0', paymentMethodId: paymentId || null, feePercent: fee.trim() || null,
       items: rows.map(row => ({
         productId: row.productId, quantity: row.quantity,
-        ...(row.salePrice.trim() ? { salePrice: row.salePrice.trim() } : seeCosts ? { salePrice: null } : {}),
+        ...(row.salePrice.trim() ? { salePrice: row.salePrice.trim() } : seeCosts || order ? { salePrice: null } : {}),
         ...(seeCosts ? { marginPercent: row.marginPercent.trim() || null } : {}),
       })),
-    });
-    await done('Ordem criada.');
+    }, order ? 'PATCH' : 'POST');
+    await done(order ? 'Ordem atualizada.' : 'Ordem criada.');
     closePanel?.();
   }}>
     <div className="form-grid">
-      <Select name="printerId" label="Impressora" options={view.printers} />
+      <Select name="printerId" label="Impressora" options={printers} defaultValue={order?.printer.id} />
       <label>Início previsto<input name="plannedStart" type="datetime-local" required value={plannedStart} onChange={event => setPlannedStart(event.target.value)} /></label>
     </div>
     <div className="form-grid">
@@ -59,11 +83,12 @@ export function OrderForm({ view, seeCosts, done }: { view: OrdersView; seeCosts
     <p className="hint" role="status">{expectedEnd ? <>Término previsto: <strong>{dateTime(expectedEnd)}</strong></> : 'Informe o início e o tempo para calcular o término.'}</p>
     <h3>Produtos da impressão</h3>
     {rows.map((row, index) => {
-      const product = view.products.find(item => item.id === row.productId);
-      const options = view.products.filter(item => item.id === row.productId || !rows.some(other => other.productId === item.id));
+      const product = products.find(item => item.id === row.productId);
+      const options = products.filter(item => item.id === row.productId || !rows.some(other => other.productId === item.id));
+      const estimate = order?.budget?.items.find(item => item.productId === row.productId);
       return <div className="stack" style={{ gap: 8 }} key={row.key}>
         <div className="component-row" style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr) auto' }}>
-          <Select name={'product' + row.key} label={'Produto ' + (index + 1)} options={options.map(item => ({ id: item.id, name: item.sku + ' · ' + item.name }))}
+          <Select name={'product' + row.key} label={'Produto ' + (index + 1)} options={options.map(item => ({ id: item.id, name: item.sku + ' · ' + item.name }))} defaultValue={row.productId}
             onChange={value => choose(row.key, value)} />
           <label>{'Quantidade' + (product ? ' (' + product.symbol + ')' : '')}
             <input name={'quantity' + row.key} inputMode="decimal" required value={row.quantity} onChange={event => change(row.key, { quantity: event.target.value })} /></label>
@@ -72,17 +97,44 @@ export function OrderForm({ view, seeCosts, done }: { view: OrdersView; seeCosts
         </div>
         <div className="form-grid">
           <label>Preço por unidade<input aria-label={'Preço do produto ' + (index + 1)} inputMode="decimal" value={row.salePrice} placeholder={seeCosts ? 'Sem preço' : 'Preço do cadastro'}
-            onChange={event => change(row.key, { salePrice: event.target.value })} /></label>
+            onChange={event => change(row.key, { salePrice: event.target.value })} />
+            {estimate?.suggestedPrice && estimate.suggestedPrice !== row.salePrice && <button type="button" className="btn ghost small" style={{ alignSelf: 'flex-start' }}
+              onClick={() => change(row.key, { salePrice: estimate.suggestedPrice! })}>Usar sugerido: {brl(estimate.suggestedPrice)}</button>}
+            {estimate?.belowTargetMargin && <span className="hint">O preço está abaixo da margem desejada.</span>}</label>
           {seeCosts && <label>Margem desejada (%)<input aria-label={'Margem do produto ' + (index + 1)} inputMode="decimal" value={row.marginPercent}
             onChange={event => change(row.key, { marginPercent: event.target.value })} /><span className="hint">Vale só para esta ordem.</span></label>}
         </div>
       </div>;
     })}
-    <button type="button" className="btn secondary" style={{ alignSelf: 'flex-start' }} disabled={rows.length >= view.products.length}
+    <button type="button" className="btn secondary" style={{ alignSelf: 'flex-start' }} disabled={rows.length >= products.length}
       onClick={() => setRows(items => [...items, blankRow(Math.max(...items.map(item => item.key)) + 1)])}>
       <Plus size={16} aria-hidden="true" />Adicionar produto</button>
-    <h3>Despesas adicionais</h3>
+    {orderInputs.length > 0 && <>
+      <h3>Insumos</h3>
+      <p className="hint">Troque por outro insumo da mesma família ou ajuste o total. Produtos novos usam a ficha técnica ao salvar.</p>
+      {orderInputs.map(input => {
+        const options = view.inputs.filter(item => item.familyId === input.familyId && item.id !== input.inputId && !rows.some(row => row.productId === item.id));
+        return <div className="form-grid" key={input.inputId}>
+          <Select name={'substitute' + input.inputId} label={'Insumo ' + input.sku} required={false} placeholder={input.sku + ' · manter'}
+            options={options.map(item => ({ id: item.id, name: item.sku + ' · ' + item.name }))}
+            onChange={value => setSubstitutes(items => ({ ...items, [input.inputId]: value }))} />
+          <label>{'Total (' + input.symbol + ')'}<input aria-label={'Total de ' + input.sku} inputMode="decimal" placeholder={quantity(input.planned)} value={typedInputs[input.inputId] ?? ''}
+            onChange={event => setTypedInputs(items => ({ ...items, [input.inputId]: event.target.value }))} />
+            <span className="hint">{input.replaces.length ? 'Substitui ' + input.replaces.join(', ') + '. ' : ''}Vazio: mantém a proporção.</span></label>
+        </div>;
+      })}
+    </>}
+    <h3>Despesas</h3>
     <p className="hint">As despesas de compra dos insumos entram sozinhas, pelo consumo. Adicione aqui o que for só desta ordem.</p>
+    {inputExpenses.map(row => {
+      const typed = typedExpenses[row.inputId!];
+      return <label key={row.id}>{row.title}
+        <input aria-label={row.title} inputMode="decimal" value={typed ?? (typed === null ? row.suggested ?? '' : row.value)}
+          onChange={event => setTypedExpenses(items => ({ ...items, [row.inputId!]: event.target.value }))} />
+        {row.edited && typed !== null && <button type="button" className="btn ghost small" style={{ alignSelf: 'flex-start' }}
+          onClick={() => setTypedExpenses(items => ({ ...items, [row.inputId!]: null }))}>Usar sugestão: {brl(row.suggested)}</button>}
+      </label>;
+    })}
     {expenses.map((row, index) => <div className="component-row" style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr) auto' }} key={row.key}>
       <label>Título<input aria-label={'Título da despesa ' + (index + 1)} required maxLength={120} value={row.title}
         onChange={event => setExpenses(items => items.map(item => item.key === row.key ? { ...item, title: event.target.value } : item))} /></label>
@@ -97,11 +149,11 @@ export function OrderForm({ view, seeCosts, done }: { view: OrdersView; seeCosts
     <h3>Venda</h3>
     <div className="form-grid">
       <label>Desconto sobre o total (%)<input name="discountPercent" inputMode="decimal" placeholder="0" value={discount} onChange={event => setDiscount(event.target.value)} /></label>
-      <Select name="paymentMethodId" label="Forma de pagamento" required={false} options={view.paymentMethods} onChange={setPaymentId} />
+      <Select name="paymentMethodId" label="Forma de pagamento" required={false} options={payments} defaultValue={order?.sale.paymentMethodId ?? undefined} onChange={setPaymentId} />
       <label>Taxa (%)<input name="feePercent" inputMode="decimal" value={fee} placeholder={payment?.feePercent ?? '0'} onChange={event => setFee(event.target.value)} />
         <span className="hint">Vazio: usa a taxa da forma de pagamento.</span></label>
     </div>
     {sale && <p className="hint" role="status">Bruto {brl(sale.gross)} · Desconto {brl(sale.discount)} · Total {brl(sale.total)} · Taxa {brl(sale.fee)} · <strong>Líquido {brl(sale.net)}</strong></p>}
-    <Field name="notes" label="Observação" required={false} placeholder="Pedido, cliente ou lote" />
+    <Field name="notes" label="Observação" required={false} placeholder="Pedido, cliente ou lote" defaultValue={order?.notes ?? undefined} />
   </Form>;
 }
