@@ -664,6 +664,33 @@ test('API REST com PostgreSQL', {
     assert.equal(closed.lossCost, '10');
     assert.equal((await productRow(filament.id)).quantity.toString(), '900');
     assert.equal(expectStatus(await admin('/stock'), 200).products.find(row => row.id === filament.id).reserved, '0');
+
+    // Costs of an order need stock:view on every route, reads and writes alike.
+    const noCosts = value => assert.doesNotMatch(JSON.stringify(value), /cost|energyRate|powerWatts/i);
+    const listedOrder = async (client, id) => expectStatus(await client('/production/orders'), 200).orders.find(row => row.id === id);
+    const stranger = await session('ORDEM-SEM', ['finance:view']);
+    expectStatus(await stranger('/production/orders'), 403);
+    const reader = await session('ORDEM-LEITURA', ['production:view']);
+    noCosts(await listedOrder(reader, order.id));
+    expectStatus(await reader('/production/orders', { method: 'POST', body: {} }), 403);
+    expectStatus(await reader(`/production/orders/${order.id}/preview`, { method: 'POST', body: closing }), 403);
+
+    const operator = await session('ORDEM-OPERA', ['production:operate']);
+    const send = (path, body) => operator('/production/orders' + path, { method: 'POST', body });
+    const operated = expectStatus(await send('', {
+      printerId: printer.id, plannedStart: started, estimatedMinutes: 60, items: [{ productId: printed.id, quantity: '1' }],
+    }), 201);
+    noCosts(operated);
+    noCosts(await listedOrder(operator, operated.id));
+    noCosts(expectStatus(await send(`/${operated.id}/start`, { startedAt: started }), 200));
+    const ending = { finishedAt: '2026-11-21T11:00:00.000Z', items: [{ productId: printed.id, lost: '0' }], inputs: [{ inputId: filament.id, used: '126' }] };
+    const reviewed = expectStatus(await send(`/${operated.id}/preview`, ending), 200);
+    noCosts(reviewed);
+    assert.equal(reviewed.items[0].good, '1');
+    noCosts(expectStatus(await send(`/${operated.id}/finish`, ending), 200));
+
+    const costs = await session('ORDEM-CUSTOS', ['production:view', 'stock:view']);
+    assert.ok(Number((await listedOrder(costs, operated.id)).totalCost) > 0);
   });
 
   await t.test('famílias e unidades só mudam o que não afeta o histórico', async () => {

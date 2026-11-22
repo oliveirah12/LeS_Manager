@@ -8,7 +8,7 @@ import {
 type Status = 'PLANNED' | 'PRINTING' | 'DONE' | 'CANCELED';
 type OrderItem = {
   productId: string; sku: string; name: string; symbol: string; planned: string;
-  good: string | null; lost: string | null; unitCost: string | null; totalCost: string | null; lossCost: string | null;
+  good: string | null; lost: string | null; unitCost?: string | null; totalCost?: string | null; lossCost?: string | null;
 };
 type OrderInput = {
   inputId: string; sku: string; name: string; symbol: string; planned: string; used: string | null;
@@ -17,7 +17,7 @@ type OrderInput = {
 type Order = {
   id: string; number: number; status: Status; notes: string | null; printer: { id: string; name: string }; user: { name: string };
   plannedStart: string; estimatedMinutes: number; expectedEnd: string; startedAt: string | null; finishedAt: string | null; printMinutes: number | null;
-  machineCost: string | null; totalCost: string | null; lossCost: string | null; absorbLoss: boolean; items: OrderItem[]; inputs: OrderInput[];
+  machineCost?: string | null; totalCost?: string | null; lossCost?: string | null; absorbLoss: boolean; items: OrderItem[]; inputs: OrderInput[];
   budget: Budget | null;
 };
 type Budget = {
@@ -25,8 +25,9 @@ type Budget = {
   items: { productId: string; totalCost: string; unitCost: string }[];
 };
 type OrdersView = { orders: Order[]; page: number; pageSize: number; total: number; printers: { id: string; name: string }[]; products: { id: string; sku: string; name: string; symbol: string }[] };
-type PreviewItem = { productId: string; sku: string; name: string; symbol: string; good: string; lost: string; unitCost: string | null; fullUnitCost: string; lossCost: string };
-type Preview = { printMinutes: number; machineCost: string; totalCost: string; lossCost: string; partialCost: boolean; items: PreviewItem[] };
+/** The values only come with stock:view. */
+type PreviewItem = { productId: string; sku: string; name: string; symbol: string; good: string; lost: string; unitCost?: string | null; fullUnitCost?: string; lossCost?: string };
+type Preview = { printMinutes: number; machineCost?: string; totalCost?: string; lossCost?: string; partialCost?: boolean; items: PreviewItem[] };
 type Dialog = { kind: 'new' } | { kind: 'start' | 'finish' | 'cancel' | 'details'; order: Order };
 
 const statuses: Record<Status, { name: string; tone?: 'ok' | 'warn' | 'brand' }> = {
@@ -36,7 +37,7 @@ const localValue = (date = new Date()) => new Date(date.getTime() - date.getTime
 const iso = (value: FormDataEntryValue | null) => new Date(String(value)).toISOString();
 const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60 ? (minutes % 60) + ' min' : minutes >= 60 ? '' : '0 min');
 
-export function ProductionOrders({ edit }: { edit: boolean }) {
+export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: boolean }) {
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>(null);
   const query = new URLSearchParams({ page: String(page), ...(sort ? { sort: sortParam(sort)! } : {}) });
@@ -69,14 +70,14 @@ export function ProductionOrders({ edit }: { edit: boolean }) {
         </div>
       </>}
       columns={[{ label: 'Ordem', sortKey: 'number' }, 'Produtos', { label: 'Impressora', sortKey: 'printer' }, { label: 'Situação', sortKey: 'status' }, 'Previsão',
-        { label: 'Custo', end: true }, { label: 'Ações', actions: true }]}
+        ...(seeCosts ? [{ label: 'Custo', end: true }] : []), { label: 'Ações', actions: true }]}
       rows={data.orders.map(order => [
         <span className="cell-title">#{order.number}</span>,
         <span>{order.items.map(item => quantity(item.planned) + ' ' + item.symbol + ' ' + item.sku).join(' · ')}</span>,
         order.printer.name, <Badge tone={statuses[order.status].tone}>{statuses[order.status].name}</Badge>,
         <span className="muted">{dateTime(order.finishedAt ?? order.expectedEnd)}</span>,
-        order.budget ? <span title="Estimativa com os custos atuais. Nada é congelado até concluir.">≈ {brl(order.budget.totalCost)}
-          <span className="hint" style={{ display: 'block' }}>{order.budget.partialCost ? 'Orçamento parcial' : 'Orçamento'}</span></span> : brl(order.totalCost),
+        ...(seeCosts ? [order.budget ? <span title="Estimativa com os custos atuais. Nada é congelado até concluir.">≈ {brl(order.budget.totalCost)}
+          <span className="hint" style={{ display: 'block' }}>{order.budget.partialCost ? 'Orçamento parcial' : 'Orçamento'}</span></span> : brl(order.totalCost)] : []),
         <div className="actions">
           <button type="button" className="btn ghost small" aria-label={'Ver ordem ' + order.number} onClick={() => open('details', order)}><Eye size={14} aria-hidden="true" />Ver</button>
           {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" onClick={() => open('start', order)}><Play size={14} aria-hidden="true" />Iniciar</button>}
@@ -96,7 +97,7 @@ export function ProductionOrders({ edit }: { edit: boolean }) {
       <InputsTable inputs={dialog.order.inputs} />
     </ModalForm>}
     {dialog?.kind === 'finish' && <Modal wide title={'Concluir ordem #' + dialog.order.number} close={() => setDialog(undefined)}>
-      <FinishOrder order={dialog.order} done={done} /></Modal>}
+      <FinishOrder order={dialog.order} seeCosts={seeCosts} done={done} /></Modal>}
     {dialog?.kind === 'cancel' && <ModalForm title={'Cancelar ordem #' + dialog.order.number} label="Cancelar ordem" cancel="Voltar" danger close={() => setDialog(undefined)}
       action={async values => {
         const inputs = dialog.order.status === 'PRINTING'
@@ -111,7 +112,7 @@ export function ProductionOrders({ edit }: { edit: boolean }) {
       </> : <p className="muted">A ordem ainda não iniciou, então nada muda no estoque.</p>}
     </ModalForm>}
     {dialog?.kind === 'details' && <Modal wide title={'Ordem #' + dialog.order.number} subtitle={statuses[dialog.order.status].name} close={() => setDialog(undefined)}>
-      <OrderDetails order={dialog.order} /></Modal>}
+      <OrderDetails order={dialog.order} seeCosts={seeCosts} /></Modal>}
   </>;
 }
 
@@ -173,7 +174,7 @@ function NewOrder({ view, done }: { view: OrdersView; done: (text: string) => Pr
   </Form>;
 }
 
-function FinishOrder({ order, done }: { order: Order; done: (text: string) => Promise<void> }) {
+function FinishOrder({ order, seeCosts, done }: { order: Order; seeCosts: boolean; done: (text: string) => Promise<void> }) {
   const [review, setReview] = useState<{ payload: Record<string, unknown>; preview: Preview; absorb: boolean; shipOut: boolean }>();
   const [lostPieces, setLostPieces] = useState<Record<string, string>>({});
   const [printed, setPrinted] = useState<Record<string, string>>({});
@@ -188,7 +189,7 @@ function FinishOrder({ order, done }: { order: Order; done: (text: string) => Pr
   const clearTyped = (inputId: string) => setTypedUse(({ [inputId]: _removed, ...others }) => others);
   return <>
     <div hidden={!!review}>
-      <Form label="Conferir custos" cancel="Cancelar" action={async values => {
+      <Form label={seeCosts ? 'Conferir custos' : 'Conferir conclusão'} cancel="Cancelar" action={async values => {
         const minutes = String(values.get('printMinutes') ?? '').trim();
         const payload = {
           finishedAt: iso(values.get('finishedAt')), absorbLoss: values.has('absorbLoss'), shipOut: values.has('shipOut'),
@@ -234,17 +235,19 @@ function FinishOrder({ order, done }: { order: Order; done: (text: string) => Pr
     </div>
     {review && <div className="stack">
       {review.preview.partialCost && <div className="info">Há insumo sem custo registrado, então o custo considera apenas os demais.</div>}
-      {lost.length > 0 && (review.absorb
+      {lost.length > 0 && !seeCosts && <div className="info">{review.absorb ? 'A perda será embutida no custo das peças boas.' : 'As peças boas mantêm o custo normal, e a perda fica registrada na ordem.'}</div>}
+      {lost.length > 0 && seeCosts && (review.absorb
         ? <div className="info" role="alert"><strong>A perda será embutida no custo.</strong> {lost.map(item => item.sku + ' passa de ' + brl(item.fullUnitCost) + ' para ' +
           (item.unitCost === null ? '— (nenhuma peça boa)' : brl(item.unitCost)) + ' por ' + item.symbol).join('; ')}. Isso aumenta o custo médio em estoque.</div>
         : <div className="info">As peças boas mantêm o custo normal. A perda de <strong>{brl(review.preview.lossCost)}</strong> fica registrada na ordem.</div>)}
-      <Table columns={['Produto', { label: 'Boas', end: true }, { label: 'Perdidas', end: true }, { label: 'Custo por peça', end: true }, { label: 'Valor da perda', end: true }]}
+      <Table columns={['Produto', { label: 'Boas', end: true }, { label: 'Perdidas', end: true },
+        ...(seeCosts ? [{ label: 'Custo por peça', end: true }, { label: 'Valor da perda', end: true }] : [])]}
         rows={review.preview.items.map(item => [
           by(item.name, <Title name={item.name} code={item.sku} />), by(item.good, quantity(item.good) + ' ' + item.symbol), by(item.lost, quantity(item.lost) + ' ' + item.symbol),
-          by(item.unitCost, <strong>{brl(item.unitCost)}</strong>), by(item.lossCost, brl(item.lossCost)),
+          ...(seeCosts ? [by(item.unitCost, <strong>{brl(item.unitCost)}</strong>), by(item.lossCost, brl(item.lossCost))] : []),
         ])}
-        footer={<><span>Máquina e energia: {brl(review.preview.machineCost)} · {duration(review.preview.printMinutes)}</span>
-          <span>Custo total: <strong>{brl(review.preview.totalCost)}</strong></span></>} />
+        footer={seeCosts ? <><span>Máquina e energia: {brl(review.preview.machineCost)} · {duration(review.preview.printMinutes)}</span>
+          <span>Custo total: <strong>{brl(review.preview.totalCost)}</strong></span></> : <span>Tempo cobrado: {duration(review.preview.printMinutes)}</span>} />
       {review.shipOut && <p className="hint">As peças boas entram e saem do estoque na mesma operação.</p>}
       <Form label="Confirmar conclusão" extra={<button type="button" className="btn secondary" onClick={() => setReview(undefined)}>Voltar</button>} action={async () => {
         await api(path + '/finish', review.payload);
@@ -255,7 +258,7 @@ function FinishOrder({ order, done }: { order: Order; done: (text: string) => Pr
   </>;
 }
 
-function OrderDetails({ order }: { order: Order }) {
+function OrderDetails({ order, seeCosts }: { order: Order; seeCosts: boolean }) {
   const finished = order.items.some(item => item.good !== null);
   return <div className="stack">
     <dl className="dl">
@@ -267,20 +270,20 @@ function OrderDetails({ order }: { order: Order }) {
       {order.startedAt && <div><dt>Início real</dt><dd>{dateTime(order.startedAt)}</dd></div>}
       {order.finishedAt && <div><dt>Encerrada em</dt><dd>{dateTime(order.finishedAt)}</dd></div>}
       {order.printMinutes !== null && <div><dt>Tempo cobrado</dt><dd>{duration(order.printMinutes)}</dd></div>}
-      {order.machineCost !== null && <div><dt>Máquina e energia</dt><dd>{brl(order.machineCost)}</dd></div>}
-      {order.totalCost !== null && <div><dt>Custo total</dt><dd>{brl(order.totalCost)}</dd></div>}
-      {order.lossCost !== null && <div><dt>Valor da perda</dt><dd>{brl(order.lossCost)}{order.absorbLoss ? ' (embutida nas peças boas)' : ''}</dd></div>}
+      {seeCosts && order.machineCost != null && <div><dt>Máquina e energia</dt><dd>{brl(order.machineCost)}</dd></div>}
+      {seeCosts && order.totalCost != null && <div><dt>Custo total</dt><dd>{brl(order.totalCost)}</dd></div>}
+      {seeCosts && order.lossCost != null && <div><dt>Valor da perda</dt><dd>{brl(order.lossCost)}{order.absorbLoss ? ' (embutida nas peças boas)' : ''}</dd></div>}
       {order.notes && <div><dt>Observação</dt><dd>{order.notes}</dd></div>}
     </dl>
     {order.budget && <BudgetSummary budget={order.budget} minutes={order.estimatedMinutes} />}
     <Table responsive={false} columns={['Produto', { label: 'Ordem', end: true },
-      ...(finished ? [{ label: 'Boas', end: true }, { label: 'Perdidas', end: true }, { label: 'Custo por peça', end: true }] : []),
+      ...(finished ? [{ label: 'Boas', end: true }, { label: 'Perdidas', end: true }, ...(seeCosts ? [{ label: 'Custo por peça', end: true }] : [])] : []),
       ...(order.budget ? [{ label: 'Total estimado', end: true }, { label: 'Estimado por peça', end: true }] : [])]}
       rows={order.items.map(item => {
         const estimate = order.budget?.items.find(row => row.productId === item.productId);
         return [
           by(item.name, <Title name={item.name} code={item.sku} />), by(item.planned, quantity(item.planned) + ' ' + item.symbol),
-          ...(finished ? [by(item.good ?? '0', quantity(item.good ?? '0')), by(item.lost ?? '0', quantity(item.lost ?? '0')), by(item.unitCost, brl(item.unitCost))] : []),
+          ...(finished ? [by(item.good ?? '0', quantity(item.good ?? '0')), by(item.lost ?? '0', quantity(item.lost ?? '0')), ...(seeCosts ? [by(item.unitCost, brl(item.unitCost))] : [])] : []),
           ...(order.budget ? [by(estimate?.totalCost, '≈ ' + brl(estimate?.totalCost)), by(estimate?.unitCost, '≈ ' + brl(estimate?.unitCost))] : []),
         ];
       })} />

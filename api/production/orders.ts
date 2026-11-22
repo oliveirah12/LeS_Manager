@@ -4,6 +4,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
+import { canAccess } from '../access/security';
 import { Audit, auditChange, auditContext } from '../audit/recorder';
 import { productInclude } from '../catalog/catalog';
 import { Database, idField, nonnegative, parse, positive, serial, sortField, storedDecimal } from '../shared';
@@ -58,11 +59,22 @@ function orderInputs(order: LoadedOrder) {
   return [...inputs.values()];
 }
 
-function present(order: LoadedOrder) {
-  const { items, printer, ...fields } = order;
+/** Fields are listed one by one, so a new cost column stays private until it is added to the stock:view block. */
+export function presentOrder(order: LoadedOrder, seeCosts: boolean) {
   return {
-    ...fields, printer: { id: printer.id, name: printer.name }, inputs: orderInputs(order),
-    items: items.map(({ consumption: _consumption, product, ...item }) => ({ ...item, sku: product.sku, name: product.name, symbol: symbolOf(product) })),
+    id: order.id, number: order.number, status: order.status, printerId: order.printerId, userId: order.userId, user: order.user, notes: order.notes,
+    createdAt: order.createdAt, plannedStart: order.plannedStart, estimatedMinutes: order.estimatedMinutes, expectedEnd: order.expectedEnd,
+    startedAt: order.startedAt, finishedAt: order.finishedAt, printMinutes: order.printMinutes, absorbLoss: order.absorbLoss,
+    printer: { id: order.printer.id, name: order.printer.name }, inputs: orderInputs(order),
+    items: order.items.map(item => ({
+      orderId: item.orderId, productId: item.productId, planned: item.planned, good: item.good, lost: item.lost,
+      sku: item.product.sku, name: item.product.name, symbol: symbolOf(item.product),
+      ...(seeCosts ? { unitCost: item.unitCost, totalCost: item.totalCost, lossCost: item.lossCost } : {}),
+    })),
+    ...(seeCosts ? {
+      powerWatts: order.powerWatts, energyRate: order.energyRate, hourlyCost: order.hourlyCost,
+      machineCost: order.machineCost, totalCost: order.totalCost, lossCost: order.lossCost,
+    } : {}),
   };
 }
 
@@ -123,7 +135,7 @@ export class ProductionOrderService {
     return tx.productionSettings.findUniqueOrThrow({ where: { id: 'default' } }).then(settings => settings.energyRate);
   }
 
-  async overview({ page, sort }: z.infer<typeof orderListFields>) {
+  async overview({ page, sort }: z.infer<typeof orderListFields>, seeCosts: boolean) {
     const orderBy: Prisma.ProductionOrderOrderByWithRelationInput[] = !sort ? [{ number: 'desc' }]
       : sort.key === 'number' ? [{ number: sort.direction }]
       : [sort.key === 'printer' ? { printer: { name: sort.direction } } : { status: sort.direction }, { number: 'desc' }];
@@ -138,12 +150,12 @@ export class ProductionOrderService {
       }),
     ]);
     return {
-      orders: orders.map(order => ({ ...present(order), budget: orderBudget(order, energyRate) })), page, pageSize: orderPageSize, total, printers,
+      orders: orders.map(order => ({ ...presentOrder(order, seeCosts), budget: seeCosts ? orderBudget(order, energyRate) : null })), page, pageSize: orderPageSize, total, printers,
       products: products.map(product => ({ id: product.id, sku: product.sku, name: product.name, symbol: symbolOf(product) })),
     };
   }
 
-  create(data: z.infer<typeof createFields>, userId: string) {
+  create(data: z.infer<typeof createFields>, userId: string, seeCosts: boolean) {
     const ids = data.items.map(item => item.productId);
     if (new Set(ids).size !== ids.length) throw new BadRequestException('Inclua cada produto apenas uma vez.');
     return serial(this.db, async tx => {
@@ -177,12 +189,12 @@ export class ProductionOrderService {
         Ordem: order.number, Impressora: printer.name, 'Situação': statusNames.PLANNED,
         Produtos: order.items.map(item => item.product.sku + ' × ' + item.planned.toFixed()).sort(),
       });
-      return present(order);
+      return presentOrder(order, seeCosts);
     });
   }
 
   /** Starting reserves the inputs, so two running prints never count on the same balance. */
-  start(id: string, data: z.infer<typeof startFields>) {
+  start(id: string, data: z.infer<typeof startFields>, seeCosts: boolean) {
     return serial(this.db, async tx => {
       const order = await this.load(tx, id);
       if (order.status !== 'PLANNED') throw new ConflictException('Só uma ordem planejada pode ser iniciada.');
@@ -202,20 +214,28 @@ export class ProductionOrderService {
         data: { status: 'PRINTING', startedAt, expectedEnd: new Date(startedAt.getTime() + order.estimatedMinutes * 60000) },
         include: orderInclude,
       });
-      return present(updated);
+      return presentOrder(updated, seeCosts);
     });
   }
 
-  async preview(id: string, data: Finish) {
+  /** An operator without stock:view still reviews pieces and time before finishing, just without the values. */
+  async preview(id: string, data: Finish, seeCosts: boolean) {
     const order = await this.load(this.db, id);
     const result = closing(order, await this.energyRate(this.db), data);
+    const named = (productId: string) => {
+      const product = order.items.find(row => row.productId === productId)!.product;
+      return { sku: product.sku, name: product.name, symbol: symbolOf(product) };
+    };
+    if (!seeCosts) {
+      return {
+        printMinutes: result.printMinutes,
+        items: result.costing.items.map(item => ({ productId: item.productId, planned: item.planned, good: item.good, lost: item.lost, ...named(item.productId) })),
+      };
+    }
     return {
       printMinutes: result.printMinutes, machineCost: result.machineCost, totalCost: result.costing.totalCost,
       lossCost: result.costing.lossCost, partialCost: result.costing.partialCost,
-      items: result.costing.items.map(item => {
-        const product = order.items.find(row => row.productId === item.productId)!.product;
-        return { ...item, sku: product.sku, name: product.name, symbol: symbolOf(product) };
-      }),
+      items: result.costing.items.map(item => ({ ...item, ...named(item.productId) })),
     };
   }
 
@@ -228,7 +248,7 @@ export class ProductionOrderService {
     }
   }
 
-  finish(id: string, data: Finish, userId: string) {
+  finish(id: string, data: Finish, userId: string, seeCosts: boolean) {
     return serial(this.db, async tx => {
       const order = await this.load(tx, id);
       const energyRate = await this.energyRate(tx);
@@ -264,12 +284,12 @@ export class ProductionOrderService {
         },
         include: orderInclude,
       });
-      return present(updated);
+      return presentOrder(updated, seeCosts);
     });
   }
 
   /** A canceled print only takes from stock what it really used; the rest of the reservation is released. */
-  cancel(id: string, data: z.infer<typeof cancelFields>, userId: string) {
+  cancel(id: string, data: z.infer<typeof cancelFields>, userId: string, seeCosts: boolean) {
     return serial(this.db, async tx => {
       const order = await this.load(tx, id);
       if (order.status !== 'PLANNED' && order.status !== 'PRINTING') throw new ConflictException('Esta ordem já foi encerrada.');
@@ -297,10 +317,12 @@ export class ProductionOrderService {
       const updated = await tx.productionOrder.update({
         where: { id }, data: { status: 'CANCELED', finishedAt: new Date(), totalCost: lossCost, lossCost }, include: orderInclude,
       });
-      return present(updated);
+      return presentOrder(updated, seeCosts);
     });
   }
 }
+
+const seesCosts = (request: Authenticated) => canAccess(request.identity.permissions, 'stock:view');
 
 @Controller('production/orders')
 export class ProductionOrderController {
@@ -308,31 +330,35 @@ export class ProductionOrderController {
 
   @Require('production:view')
   @Get()
-  overview(@Query() query: unknown) { return this.orders.overview(parse(orderListFields, query)); }
+  overview(@Req() request: Authenticated, @Query() query: unknown) { return this.orders.overview(parse(orderListFields, query), seesCosts(request)); }
 
   @Require('production:operate')
   @Audit('Criar ordem de produção')
   @Post()
-  create(@Req() request: Authenticated, @Body() body: unknown) { return this.orders.create(parse(createFields, body), request.identity.id); }
+  create(@Req() request: Authenticated, @Body() body: unknown) { return this.orders.create(parse(createFields, body), request.identity.id, seesCosts(request)); }
 
   @Require('production:operate')
   @Audit('Iniciar ordem de produção')
   @Post(':id/start')
   @HttpCode(200)
-  start(@Param('id') id: string, @Body() body: unknown) { return this.orders.start(parse(idField, id), parse(startFields, body)); }
+  start(@Req() request: Authenticated, @Param('id') id: string, @Body() body: unknown) {
+    return this.orders.start(parse(idField, id), parse(startFields, body), seesCosts(request));
+  }
 
   @Require('production:operate')
   @Audit(false)
   @Post(':id/preview')
   @HttpCode(200)
-  preview(@Param('id') id: string, @Body() body: unknown) { return this.orders.preview(parse(idField, id), parse(finishFields, body)); }
+  preview(@Req() request: Authenticated, @Param('id') id: string, @Body() body: unknown) {
+    return this.orders.preview(parse(idField, id), parse(finishFields, body), seesCosts(request));
+  }
 
   @Require('production:operate')
   @Audit('Concluir ordem de produção')
   @Post(':id/finish')
   @HttpCode(200)
   finish(@Req() request: Authenticated, @Param('id') id: string, @Body() body: unknown) {
-    return this.orders.finish(parse(idField, id), parse(finishFields, body), request.identity.id);
+    return this.orders.finish(parse(idField, id), parse(finishFields, body), request.identity.id, seesCosts(request));
   }
 
   @Require('production:operate')
@@ -340,6 +366,6 @@ export class ProductionOrderController {
   @Post(':id/cancel')
   @HttpCode(200)
   cancel(@Req() request: Authenticated, @Param('id') id: string, @Body() body: unknown) {
-    return this.orders.cancel(parse(idField, id), parse(cancelFields, body), request.identity.id);
+    return this.orders.cancel(parse(idField, id), parse(cancelFields, body), request.identity.id, seesCosts(request));
   }
 }
