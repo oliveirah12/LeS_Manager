@@ -11,11 +11,18 @@ import { AuditController } from './audit/audit';
 import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
 import { RecipeController, RecipeService } from './catalog/recipe';
+import { FileMaintenance, FileService, ProductFilesController, ProductImageController } from './files/files';
+import { DiskFileStorage, FileStorage } from './files/storage';
 import { BankConnectionService } from './finance/connection';
 import { FinanceController, FinanceService } from './finance/finance';
 import { HealthController } from './health';
+import { ProductionCorrectionController, ProductionCorrectionService } from './production/corrections';
 import { ProductionOrderController, ProductionOrderService } from './production/orders';
+import { PaymentMethodController, PaymentMethodService } from './production/payments';
 import { ProductionController, ProductionService } from './production/production';
+import { PurchaseDocumentController, PurchaseDocumentSearch, PurchaseDocumentSearchController, PurchaseDocumentService } from './purchases/documents';
+import { PurchaseController, PurchaseService } from './purchases/purchases';
+import { SupplierController, SupplierService } from './purchases/suppliers';
 import { Database, DatabaseErrors } from './shared';
 import { StockController } from './stock/controller';
 import { PreviewCleanup, StockService } from './stock/stock';
@@ -27,7 +34,14 @@ class PersistenceModule {}
 @Module({ controllers: [AccessController], providers: [AccessService, SessionCleanup, { provide: APP_GUARD, useClass: AccessGuard }] })
 class AccessModule {}
 
-@Module({ controllers: [CatalogController, RecipeController], providers: [CatalogService, RecipeService], exports: [CatalogService] })
+@Module({
+  controllers: [ProductFilesController, ProductImageController],
+  providers: [FileService, FileMaintenance, { provide: FileStorage, useClass: DiskFileStorage }],
+  exports: [FileService],
+})
+class FilesModule {}
+
+@Module({ imports: [FilesModule], controllers: [CatalogController, RecipeController], providers: [CatalogService, RecipeService], exports: [CatalogService] })
 class CatalogModule {}
 
 @Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService, PreviewCleanup], exports: [StockService] })
@@ -37,21 +51,30 @@ class StockModule {}
 class FinanceModule {}
 
 @Module({
-  imports: [StockModule], controllers: [ProductionController, ProductionOrderController], providers: [ProductionService, ProductionOrderService],
+  imports: [StockModule], controllers: [ProductionController, ProductionCorrectionController, ProductionOrderController, PaymentMethodController],
+  providers: [ProductionService, ProductionOrderService, ProductionCorrectionService, PaymentMethodService],
 })
 class ProductionModule {}
+
+@Module({
+  imports: [StockModule, FilesModule], controllers: [PurchaseController, PurchaseDocumentController, PurchaseDocumentSearchController, SupplierController],
+  providers: [PurchaseService, PurchaseDocumentService, PurchaseDocumentSearch, SupplierService],
+})
+class PurchasesModule {}
 
 @Module({ controllers: [AuditController], providers: [AuditRetention] })
 class AuditModule {}
 
 @Module({
-  imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, ProductionModule, AuditModule],
+  imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, ProductionModule, PurchasesModule, AuditModule],
   controllers: [HealthController],
 })
 class AppModule {}
 
 export async function createApp() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: ['error', 'warn'] });
+  // The default of 5 minutes would cut a 100 MB attachment on a slow connection.
+  app.getHttpServer().requestTimeout = 30 * 60 * 1000;
   app.setGlobalPrefix('api');
   app.useGlobalFilters(new DatabaseErrors());
   app.useGlobalInterceptors(new AuditInterceptor());

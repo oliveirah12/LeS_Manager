@@ -1,9 +1,10 @@
 /// <reference types="vite/client" />
 import { ReactNode, useEffect, useRef, useState } from 'react';
+import { ReleaseNotices } from './release-notices';
 import { createRoot } from 'react-dom/client';
 import {
   ChevronDown, Home as HomeIcon, Layers, LogOut, Menu, Moon, MoreHorizontal, Package, PanelLeftClose, PanelLeftOpen, Printer,
-  ShieldCheck, Sun, Tag, UserRound, Users, Wallet,
+  ShieldCheck, ShoppingCart, Sun, Tag, UserRound, Users, Wallet,
 } from 'lucide-react';
 import { AccountSettings, Administration, SignIn } from './access';
 import { Audit } from './audit';
@@ -12,16 +13,21 @@ import { Finance } from './finance';
 import { Home } from './home';
 import { pageFromHash } from './format';
 import { ProductionOrders } from './orders';
+import { PaymentMethods } from './payment-methods';
 import { Printers } from './production';
+import { PurchaseDocuments } from './purchase-documents';
+import { Purchases } from './purchases';
 import { InstallApp } from './pwa';
 import { referenceKinds, Registrations } from './registrations';
 import { Stock } from './stock';
+import { Suppliers } from './suppliers';
 import { accessible, api, Identity, Loading, ModalForm, PageActionsProvider, sessionExpired, Toaster } from './ui';
 import './style.css';
 
 const groups = [
   { id: 'home', label: 'Início', icon: HomeIcon, section: 'ops', permission: null, pages: [{ id: 'home', label: 'Início' }] },
   { id: 'stock', label: 'Estoque', icon: Package, section: 'ops', permission: 'stock:view', pages: [{ id: 'stock', label: 'Estoque' }] },
+  { id: 'purchases', label: 'Compras', icon: ShoppingCart, section: 'ops', permission: 'purchases:view', pages: [{ id: 'purchases', label: 'Compras' }, { id: 'purchase-documents', label: 'Documentos' }] },
   { id: 'catalog', label: 'Catálogo', icon: Tag, section: 'ops', permission: 'catalog:view', pages: [
     { id: 'products', label: 'Produtos' }, { id: 'inputs', label: 'Insumos' }, { id: 'kits', label: 'Kits' },
   ] },
@@ -32,7 +38,7 @@ const groups = [
     { id: 'production-orders', label: 'Ordens' }, { id: 'printers', label: 'Impressoras' },
   ] },
   { id: 'registrations', label: 'Cadastros', icon: Layers, section: 'admin', permission: 'registrations:view', pages: [
-    { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' }, { id: 'product-types', label: 'Tipos de produto' },
+    { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' }, { id: 'suppliers', label: 'Fornecedores' }, { id: 'payment-methods', label: 'Formas de pagamento' }, { id: 'product-types', label: 'Tipos de produto' },
     ...referenceKinds.map(({ id, label }) => ({ id, label })),
     { id: 'families', label: 'Famílias de medida' }, { id: 'units', label: 'Unidades de medida' },
   ] },
@@ -47,11 +53,15 @@ export type Page = Group['pages'][number]['id'] | 'account';
 const pageDescriptions: Record<Page, string> = {
   home: '', products: 'Consulte os produtos do catálogo.', inputs: 'Materiais usados nas fichas técnicas e na produção.', kits: 'Consulte os kits e suas composições.',
   'register-products': 'Cadastre, edite e inative produtos.', 'register-kits': 'Monte e edite a composição dos kits.',
+  suppliers: 'Empresas e pessoas de quem você compra.',
+  'payment-methods': 'Formas de pagamento e taxas usadas na venda das ordens.',
   'product-types': 'Defina o que cada produto é e como ele se comporta na produção.',
   GRUPO: 'Organize os produtos por grupos.', MARCA: 'Gerencie as marcas do catálogo.',
   COR: 'Mantenha a lista de cores disponíveis.', DEPARTAMENTO: 'Organize os departamentos do catálogo.',
   families: 'Cada família tem uma unidade base, como g para peso.', units: 'Unidades e fatores de conversão para a unidade base.',
   stock: 'Saldos e custos na unidade base de cada produto.',
+  purchases: 'Lance compras com vários itens, custos adicionais e rateio.',
+  'purchase-documents': 'Encontre e baixe as notas, recibos e comprovantes das compras.',
   balance: 'Saldo da conta bancária na última sincronização.', statement: 'Transações bancárias por período.',
   reconciliation: 'Confira os lançamentos do banco com as referências internas.',
   integration: 'Credenciais e certificado usados para ler o saldo e o extrato.',
@@ -64,9 +74,9 @@ const pageDescriptions: Record<Page, string> = {
 // Each screen has its own address so reload, back/forward and shared links keep the page.
 const paths: Record<Page, string> = {
   home: '', products: 'catalogo/produtos', inputs: 'catalogo/insumos', kits: 'catalogo/kits',
-  'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits', 'product-types': 'cadastros/tipos-de-produto',
+  'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits', suppliers: 'cadastros/fornecedores', 'payment-methods': 'cadastros/formas-de-pagamento', 'product-types': 'cadastros/tipos-de-produto',
   GRUPO: 'cadastros/grupos', MARCA: 'cadastros/marcas', COR: 'cadastros/cores', DEPARTAMENTO: 'cadastros/departamentos',
-  families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque',
+  families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque', purchases: 'compras', 'purchase-documents': 'compras/documentos',
   balance: 'financeiro/saldo', statement: 'financeiro/extrato', reconciliation: 'financeiro/conciliacao', integration: 'financeiro/integracao',
   'production-orders': 'producao/ordens', printers: 'producao/impressoras',
   audit: 'auditoria', admin: 'acessos/usuarios', 'admin-account': 'acessos/minha-conta', account: 'conta',
@@ -264,11 +274,15 @@ function App() {
       <Catalog key={page} page={page === 'register-products' ? 'products' : 'kits'} edit={can('catalog:operate')} editStock={can('stock:operate')} />}
     {(page === 'product-types' || page === 'GRUPO' || page === 'MARCA' || page === 'COR' || page === 'DEPARTAMENTO' || page === 'families' || page === 'units') &&
       <Registrations key={page} page={page} edit={can('registrations:operate')} admin={admin} />}
+    {page === 'suppliers' && <Suppliers edit={can('registrations:operate')} />}
+    {page === 'payment-methods' && <PaymentMethods edit={can('registrations:operate')} />}
+    {page === 'purchases' && <Purchases edit={can('purchases:operate')} />}
+    {page === 'purchase-documents' && <PurchaseDocuments edit={can('purchases:operate')} />}
     {page === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}
     {(page === 'balance' || page === 'statement' || page === 'reconciliation' || page === 'integration') &&
       <Finance key={page} page={page} edit={can('finance:operate')} admin={admin} openStatement={() => navigate('statement')}
         openIntegration={() => navigate('integration')} />}
-    {page === 'production-orders' && <ProductionOrders edit={can('production:operate')} seeCosts={can('stock:view')} />}
+    {page === 'production-orders' && <ProductionOrders edit={can('production:operate')} correct={can('production:correct')} seeCosts={can('stock:view')} />}
     {page === 'printers' && <Printers edit={can('production:operate')} />}
     {page === 'admin' && <Administration onUserChanged={async id => { if (id === identity.id) await signIn(); }} />}
     {page === 'audit' && <Audit />}
@@ -300,6 +314,7 @@ function App() {
         <a href={hashOf('home')} className="brand" onClick={event => { event.preventDefault(); navigate('home'); }}>
           <img src="/brand.png" alt="" width="30" height="30" /><span>LeS Manager</span></a>
         <span className="spacer" />
+        <ReleaseNotices read={readPreference} save={savePreference} />
         <AccountMenu identity={identity} theme={theme} toggleTheme={toggleTheme}
           openAccount={() => navigate(admin ? 'admin-account' : 'account')} signOut={() => setLogout(true)} />
       </header>

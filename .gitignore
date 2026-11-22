@@ -11,3 +11,4 @@ dist/
 *.pfx
 *.p12
 coverage/
+.les-arquivos/

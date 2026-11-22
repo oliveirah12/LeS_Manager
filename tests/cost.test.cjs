@@ -3,6 +3,8 @@ const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
 const { averageCost, belowMinimum, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, recipeEstimate, saleMargin, salePricing } = require('../dist/api/stock/cost.js');
 
+const { orderSale, saleResult } = require('../dist/api/production/sale.js');
+
 const d = value => new Prisma.Decimal(value);
 const pricing = (price, cost, margin) => {
   const result = salePricing(price === null ? null : d(price), cost === null ? null : d(cost), margin === null ? null : d(margin));
@@ -227,4 +229,67 @@ test('the API sends decimals without scientific notation', () => {
   assert.equal(json('0.00000005'), '0.00000005');
   assert.equal(json('0.000000000001'), '0.000000000001');
   assert.equal(json('123456789012345678901234'), '123456789012345678901234');
+});
+
+test('the discount applies to the order total and the fee to what remains', () => {
+  const sale = orderSale([{ quantity: d(2), salePrice: d(50) }, { quantity: d(1), salePrice: d(100) }], d(10), d(5));
+  assert.deepEqual([sale.gross, sale.discount, sale.total, sale.fee, sale.net].map(value => value.toFixed()), ['200', '20', '180', '9', '171']);
+  assert.equal(sale.partial, false);
+});
+
+test('the fee lowers the margin but not the cost', () => {
+  const sale = orderSale([{ quantity: d(1), salePrice: d(100) }], d(0), d(10));
+  const result = saleResult(sale, d(60));
+  assert.deepEqual([result.profit.toFixed(), result.marginPercent.toFixed()], ['30', '30']);
+});
+
+test('an order without prices has no sale, and a missing price marks it as partial', () => {
+  assert.equal(orderSale([{ quantity: d(1), salePrice: null }], d(0), d(0)), null);
+  assert.equal(orderSale([{ quantity: d(1), salePrice: d(5) }, { quantity: d(1), salePrice: null }], d(0), d(0)).partial, true);
+});
+
+const twoItems = [{ productId: 'a', planned: d('1'), lost: d('0') }, { productId: 'b', planned: d('1'), lost: d('0') }];
+
+test('no item goes without machine cost when the orders use different unit families', () => {
+  const job = productionCosting({
+    items: twoItems,
+    rows: [
+      { productId: 'a', inputId: 'pla', planned: d('1000'), familyId: 'mass', unitCost: d('0') },
+      { productId: 'b', inputId: 'screw', planned: d('2'), familyId: 'pieces', unitCost: d('0') },
+    ],
+    used: new Map(), machineCost: d('40'), absorbLoss: false,
+  });
+  assert.deepEqual(job.items.map(item => item.totalCost.toString()), ['20', '20']);
+});
+
+test('machine shares always add up to the machine cost', () => {
+  const job = productionCosting({
+    items: [...twoItems, { productId: 'c', planned: d('1'), lost: d('0') }],
+    rows: ['a', 'b', 'c'].map(productId => ({ productId, inputId: 'pla', planned: d('1'), familyId: 'mass', unitCost: d('0') })),
+    used: new Map(), machineCost: d('10'), absorbLoss: false,
+  });
+  assert.equal(job.totalCost.toString(), '10');
+});
+
+test('an input expense follows the input and a manual one follows the machine share', () => {
+  const job = productionCosting({
+    items: twoItems,
+    rows: [
+      { productId: 'a', inputId: 'pla', planned: d('75'), familyId: 'mass', unitCost: d('0') },
+      { productId: 'b', inputId: 'pla', planned: d('25'), familyId: 'mass', unitCost: d('0') },
+      { productId: 'b', inputId: 'paint', planned: d('10'), familyId: 'mass', unitCost: d('0') },
+    ],
+    used: new Map(), machineCost: d('0'), absorbLoss: false,
+    expenses: [{ inputId: 'paint', value: d('6') }, { inputId: null, value: d('11') }],
+  });
+  assert.deepEqual(job.items.map(item => item.expenseCost.toString()), ['7.5', '9.5']);
+  assert.equal(job.expenseCost.toString(), '17');
+});
+
+test('the budget separates expenses from materials', () => {
+  const budget = productionBudget({
+    items: [{ productId: 'a', planned: d('1') }], rows: [{ productId: 'a', inputId: 'pla', planned: d('10'), familyId: 'mass', unitCost: d('1') }],
+    minutes: 60, hourCost: d('2'), expenses: [{ inputId: 'pla', value: d('3') }],
+  });
+  assert.deepEqual([budget.materialCost, budget.machineCost, budget.expenseCost, budget.totalCost].map(value => value.toString()), ['10', '2', '3', '15']);
 });

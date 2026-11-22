@@ -1,6 +1,8 @@
 import { ReactNode, useState } from 'react';
 import { ClipboardList, Eye, Pencil, Plus, Power, PowerOff, Trash2 } from 'lucide-react';
 import { CatalogDetails, DetailTarget } from './catalog-details';
+import { ProductFiles } from './product-files';
+import { ProductImageField, ProductThumb } from './product-image';
 import { CommercialSection, measureRows, technicalPayload, TechnicalFields } from './product-form';
 import { RecipeEditor } from './recipe';
 import { RegistrationData, referenceKinds } from './registrations';
@@ -12,7 +14,7 @@ import {
 type CatalogView = StockView & RegistrationData;
 type Situation = 'active' | 'inactive' | 'all';
 type Status = { kind: 'products' | 'kits'; id: string; sku: string; active: boolean };
-type Removal = { kind: Status['kind']; id: string; sku: string; block?: string | null };
+type Removal = { kind: Status['kind']; id: string; sku: string; block?: string | null; files?: number };
 
 const productFilters = (data: CatalogView): TableFilter<CatalogView['products'][number]>[] => [
   { id: 'typeId', label: 'Tipo', options: data.productTypes, value: row => row.typeId },
@@ -66,13 +68,13 @@ export function Catalog({ page, edit, seeStock = false, editStock = false }: {
     matches(query, row.sku, row.name) && (situation === 'all' || row.active === (situation === 'active')));
   const situationBadge = (row: { active: boolean }) => by(row.active ? 'Ativo' : 'Inativo', row.active
     ? <Badge tone="ok"><span className="dot" />Ativo</Badge> : <Badge>Inativo</Badge>);
-  const rowActions = (kind: Status['kind'], row: { id: string; sku: string; active: boolean; deleteBlock?: string | null }, open: () => void, extra?: ReactNode) => <div className="actions">
+  const rowActions = (kind: Status['kind'], row: { id: string; sku: string; active: boolean; deleteBlock?: string | null; fileCount?: number }, open: () => void, extra?: ReactNode) => <div className="actions">
     <button type="button" className="btn secondary small" onClick={open}><Pencil size={14} aria-hidden="true" />Editar</button>
     {extra}
     <button type="button" className="btn ghost small" onClick={() => setStatus({ kind, id: row.id, sku: row.sku, active: !row.active })}>
       {row.active ? <PowerOff size={14} aria-hidden="true" /> : <Power size={14} aria-hidden="true" />}{row.active ? 'Inativar' : 'Reativar'}</button>
     <button type="button" className={'btn ghost small' + (row.deleteBlock ? ' unavailable' : '')} title={row.deleteBlock ?? undefined}
-      onClick={() => setRemoval({ kind, id: row.id, sku: row.sku, block: row.deleteBlock })}><Trash2 size={14} aria-hidden="true" />Excluir</button>
+      onClick={() => setRemoval({ kind, id: row.id, sku: row.sku, block: row.deleteBlock, files: row.fileCount })}><Trash2 size={14} aria-hidden="true" />Excluir</button>
   </div>;
 
   return <>
@@ -96,7 +98,7 @@ export function Catalog({ page, edit, seeStock = false, editStock = false }: {
           const balance = balances?.find(item => item.id === row.id);
           const symbol = baseUnit(row).symbol;
           return [
-            by(row.name, <Title name={row.name} code={row.sku} />), data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
+            by(row.name, <div className="product-cell"><ProductThumb product={row} /><Title name={row.name} code={row.sku} /></div>), data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
             ...(balances ? [by(balance?.quantity ?? '0', quantity(balance?.quantity ?? '0') + ' ' + symbol), by(balance?.reserved ?? '0', quantity(balance?.reserved ?? '0') + ' ' + symbol),
               by(balance?.currentCost, brl(balance?.currentCost))] : []),
             situationBadge(row), detailsButton('products', row),
@@ -107,7 +109,7 @@ export function Catalog({ page, edit, seeStock = false, editStock = false }: {
         rows={applyFilters(visible(data.products), productFilters(data), selected).map(row => {
           const classes = referenceKinds.map(kind => data.references.find(item => item.id === row[kind.field])?.name).filter(Boolean);
           return [
-            by(row.name, <Title name={row.name} code={row.sku} />), data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
+            by(row.name, <div className="product-cell"><ProductThumb product={row} /><Title name={row.name} code={row.sku} /></div>), data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
             ...(edit ? [row.unit.symbol, by(classes.join(' '), <div className="actions">{classes.map(name => <Badge key={name}>{name}</Badge>)}</div>)] : []),
             situationBadge(row),
             edit ? rowActions('products', row, () => setProduct(row),
@@ -130,7 +132,7 @@ export function Catalog({ page, edit, seeStock = false, editStock = false }: {
 
     {data && edit && product !== undefined && <Modal wide title={product ? 'Editar produto' : 'Novo produto'} subtitle={product?.sku} close={() => setProduct(undefined)}>
       <ProductForm data={data} product={product} editStock={editStock} save={payload => save('products', payload, product?.id)}
-        savedStock={async () => { notify('Estoque e venda salvos.'); }} />
+        savedStock={async () => { notify('Estoque e venda salvos.'); }} filesChanged={reload} />
     </Modal>}
     {data && edit && kit !== undefined && <Modal wide title={kit ? 'Editar kit' : 'Novo kit'} subtitle={kit?.sku} close={() => setKit(undefined)}>
       <KitForm data={data} kit={kit ?? undefined} save={payload => save('kits', payload, kit?.id)} />
@@ -159,13 +161,14 @@ export function Catalog({ page, edit, seeStock = false, editStock = false }: {
         await reload();
       }}>
       <p className="muted">Esta ação não pode ser desfeita. O cadastro será removido, e a exclusão fica registrada na auditoria.</p>
+      {!!removal.files && <div className="info" role="alert">{removal.files === 1 ? 'O arquivo anexado também será excluído.' : 'Os ' + removal.files + ' arquivos anexados também serão excluídos.'}</div>}
     </ModalForm>}
   </>;
 }
 
 /** Registry and technical data share one route. Stock and sale values have their own permission, route and save button. */
-function ProductForm({ data, product, editStock, save, savedStock }: {
-  data: CatalogView; product: Product | null; editStock: boolean; save: (body: unknown) => Promise<void>; savedStock: () => Promise<void>;
+function ProductForm({ data, product, editStock, save, savedStock, filesChanged }: {
+  data: CatalogView; product: Product | null; editStock: boolean; save: (body: unknown) => Promise<void>; savedStock: () => Promise<void>; filesChanged: () => Promise<void>;
 }) {
   const [measures, setMeasures] = useState(() => measureRows(product));
   const closePanel = useClosePanel();
@@ -196,7 +199,9 @@ function ProductForm({ data, product, editStock, save, savedStock }: {
       <TechnicalFields product={product} rows={measures} setRows={setMeasures} />
     </Form>
     {hasStockSection && <CommercialSection id={product.id} saved={savedStock} />}
-    {!product && editStock && <p className="hint">Mínimo, margem e preço ficam disponíveis depois de cadastrar o produto.</p>}
+    {product && <ProductImageField product={product} changed={filesChanged} />}
+    {product && <ProductFiles productId={product.id} edit changed={filesChanged} />}
+    {!product && <p className="hint">{editStock ? 'Mínimo, margem, preço, imagem e arquivos ficam' : 'A imagem e os arquivos ficam'} disponíveis depois de cadastrar o produto.</p>}
   </div>;
 }
 

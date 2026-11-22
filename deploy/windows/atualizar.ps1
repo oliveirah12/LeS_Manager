@@ -20,13 +20,15 @@ function Remove-OldReleases([string]$Keep, [string]$Previous) {
 try {
   Assert-Admin
   Use-Database
+  $storageAdded = Set-FileStorage
   Write-Step 'Procurando atualizacao'
   Invoke-Git @('fetch', 'origin', 'main')
   $commit = (& git -c 'safe.directory=*' -C $Repo rev-parse origin/main).Trim()
   $previous = Get-ActiveRelease
   if (-not $previous) { throw 'Instalacao nao encontrada. Rode o instalar.ps1.' }
   if ((Split-Path $previous -Leaf) -eq $commit.Substring(0, 12)) {
-    if (-not (Test-Health)) { Write-Step 'Religando o app'; Start-App }
+    if ($storageAdded) { Write-Step 'Religando o app para ler a pasta de arquivos'; Stop-App; Start-App }
+    elseif (-not (Test-Health)) { Write-Step 'Religando o app'; Start-App }
     Write-Host "`nJa esta na versao mais recente." -ForegroundColor Green
     return
   }

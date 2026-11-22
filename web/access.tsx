@@ -10,8 +10,9 @@ type User = { id: string; name: string; email: string; active: boolean; pending:
 type Code = { code: string; expiresAt: string; name: string };
 const modules = [
   { id: 'catalog', name: 'Catálogo' }, { id: 'registrations', name: 'Cadastros' },
-  { id: 'stock', name: 'Estoque' }, { id: 'finance', name: 'Financeiro' }, { id: 'production', name: 'Produção' },
+  { id: 'stock', name: 'Estoque' }, { id: 'finance', name: 'Financeiro' }, { id: 'production', name: 'Produção' }, { id: 'purchases', name: 'Compras' },
 ];
+const correctPermission = 'production:correct';
 
 export function SignIn({ signedIn, notice }: { signedIn: () => Promise<void>; notice?: string }) {
   const [mode, setMode] = useState<'login' | 'activate'>('login');
@@ -77,6 +78,7 @@ function permissionSummary(profile: Profile) {
     if (profile.permissions.includes(module.id + ':view')) return [<Badge key={module.id}>{module.name} · ver</Badge>];
     return [];
   });
+  if (profile.permissions.includes(correctPermission)) items.push(<Badge key={correctPermission} tone="warn">Produção · corrigir concluídas</Badge>);
   return items.length ? items : [<span key="none" className="muted">Nenhuma permissão</span>];
 }
 
@@ -133,6 +135,8 @@ export function Administration({ onUserChanged }: { onUserChanged: (id: string) 
           <strong style={{ flex: '1 1 8rem' }}>{item.name}</strong>
           <label className="check"><input name="permissions" type="checkbox" value={item.id + ':view'} defaultChecked={profile?.permissions.includes(item.id + ':view')} />Ver</label>
           <label className="check"><input name="permissions" type="checkbox" value={item.id + ':operate'} defaultChecked={profile?.permissions.includes(item.id + ':operate')} />Operar</label>
+          {item.id === 'production' && <label className="check" title="Altera custos e estoque de ordens concluídas. Não vem junto com Operar e também exige Ver.">
+            <input name="permissions" type="checkbox" value={correctPermission} defaultChecked={profile?.permissions.includes(correctPermission)} />Corrigir concluídas</label>}
         </div>)}
       </div>
     </ModalForm>}

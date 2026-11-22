@@ -3,10 +3,14 @@ const { test } = require('node:test');
 // tsx loads the panel's TypeScript directly, without a separate build.
 const { require: load } = require('tsx/cjs/api');
 const {
-  accessible, applyFilters, brl, compareDecimal, decimal, displayDate, marginShortfall, nextSort, pageFromHash, sortParam, sortRows, suggestedConsumption, suggestedPrice, yesNo,
+  accessible, applyFilters, brl, compareDecimal, decimal, displayDate, fileSize, marginShortfall, nextSort, pageFromHash, sortParam, sortRows, suggestedConsumption, suggestedPrice, yesNo,
 } = load('../web/format.ts', __filename);
 const { Prisma } = require('@prisma/client');
 const { salePricing } = require('../dist/api/stock/cost.js');
+
+test('file sizes are shown in the closest unit', () => {
+  assert.deepEqual([512, 2048, 1536, 5 * 1024 * 1024, 100 * 1024 * 1024].map(fileSize), ['512 B', '2 KB', '1,5 KB', '5 MB', '100 MB']);
+});
 
 test('the price preview matches the API rule exactly', () => {
   for (const [cost, margin] of [['60', '40'], ['20', '30'], ['0.0853', '40'], ['7.77', '12.34'], ['10', '33.33'], ['10', '0'], ['0.000000000001', '99.99'], ['123456.789012345678', '0.01']]) {

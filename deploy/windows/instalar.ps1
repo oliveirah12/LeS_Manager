@@ -41,6 +41,8 @@ if (-not (Test-Path -LiteralPath $EnvFile)) {
   Write-TextFile $EnvFile ("DATABASE_URL=postgresql://les:$password@127.0.0.1:5432/les_manager`nPORT=3000`nCOOKIE_SECURE=true`nTRUST_PROXY=1`nCONFIG_ENCRYPTION_KEY=$key`n")
 }
 
+Set-FileStorage | Out-Null
+
 Write-Step 'Configurando o banco'
 Use-Database
 $appPassword = $env:PGPASSWORD
@@ -74,6 +76,11 @@ if (-not $release) {
   Push-Location -LiteralPath $release
   try { Invoke-Tool 'node' @($Prisma, 'migrate', 'deploy') } finally { Pop-Location }
   Set-ActiveRelease $release
+}
+
+if ($Backup) {
+  Write-Step 'Restaurando os arquivos'
+  Restore-Files (Get-StoredFileKeys) @(Join-Path (Split-Path (Resolve-Path -LiteralPath $Backup).Path -Parent) 'arquivos')
 }
 
 Write-Step 'Ligando o app'

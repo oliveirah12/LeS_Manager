@@ -27,6 +27,22 @@ export function sumValues(values: Prisma.Decimal[]) {
   return values.reduce((total, value) => total.plus(value), new Prisma.Decimal(0));
 }
 
+/** Splits a total by weight in exact decimals. The rounding residue goes to the last item with weight, so the sum always closes. */
+export function allocate(total: Prisma.Decimal, weights: Prisma.Decimal[]) {
+  const zero = new Prisma.Decimal(0);
+  const sum = sumValues(weights);
+  if (total.eq(0) || sum.lte(0)) return weights.map(() => zero);
+  const last = weights.reduce((found, weight, index) => weight.gt(0) ? index : found, -1);
+  let remaining = total;
+  return weights.map((weight, index) => {
+    if (index === last) return remaining;
+    if (weight.lte(0)) return zero;
+    const share = total.times(weight).div(sum).toDecimalPlaces(12, Prisma.Decimal.ROUND_DOWN);
+    remaining = remaining.minus(share);
+    return share;
+  });
+}
+
 /** Cost of one hour of a printer: the energy it draws plus its own wear. */
 export function printerHourCost(powerWatts: Prisma.Decimal, energyRate: Prisma.Decimal, hourlyCost: Prisma.Decimal) {
   return powerWatts.div(1000).times(energyRate).plus(hourlyCost).toDecimalPlaces(12);
@@ -60,36 +76,51 @@ export function salePricing(salePrice: Prisma.Decimal | null, cost: Prisma.Decim
 type CostingItem = { productId: string; planned: Prisma.Decimal; lost: Prisma.Decimal };
 type CostingRow = { productId: string; inputId: string; planned: Prisma.Decimal; familyId: string; unitCost: Prisma.Decimal | null };
 
+type CostingExpense = { inputId: string | null; value: Prisma.Decimal };
+
+/**
+ * Each item's share of the machine and of the expenses not tied to an input. Shares are computed inside each unit family,
+ * so grams are never added to pieces. Families used by every item decide; without one, all families count, so no item goes free.
+ */
+export function machineWeights(productIds: string[], rows: Pick<CostingRow, 'productId' | 'familyId' | 'planned'>[]) {
+  const families = [...new Set(rows.map(row => row.familyId))];
+  const shared = families.filter(family => productIds.every(id => rows.some(row => row.productId === id && row.familyId === family)));
+  const deciding = shared.length ? shared : families;
+  const weights = productIds.map(id => sumValues(deciding.map(family => {
+    const inFamily = rows.filter(row => row.familyId === family);
+    return sumValues(inFamily.filter(row => row.productId === id).map(row => row.planned)).div(sumValues(inFamily.map(row => row.planned)));
+  })));
+  return weights.some(weight => weight.gt(0)) ? weights : productIds.map(() => new Prisma.Decimal(1));
+}
+
 /**
  * Cost of a finished print. Real consumption is shared by each item's planned share of the input.
- * Machine time follows the weight of the order's main unit family, so grams are never added to pieces.
+ * An input's expense follows that input, and the machine and manual expenses follow machineWeights.
  * Lost pieces only raise the cost of the good ones when absorbLoss is set.
  */
-export function productionCosting({ items, rows, used, machineCost, absorbLoss }: {
-  items: CostingItem[]; rows: CostingRow[]; used: Map<string, Prisma.Decimal>; machineCost: Prisma.Decimal; absorbLoss: boolean;
+export function productionCosting({ items, rows, used, machineCost, absorbLoss, expenses = [] }: {
+  items: CostingItem[]; rows: CostingRow[]; used: Map<string, Prisma.Decimal>; machineCost: Prisma.Decimal; absorbLoss: boolean; expenses?: CostingExpense[];
 }) {
   const zero = new Prisma.Decimal(0);
-  const add = (totals: Map<string, Prisma.Decimal>, key: string, value: Prisma.Decimal) => totals.set(key, (totals.get(key) ?? zero).plus(value));
   const byInput = new Map<string, Prisma.Decimal>();
-  const byFamily = new Map<string, Prisma.Decimal>();
-  for (const row of rows) {
-    add(byInput, row.inputId, row.planned);
-    add(byFamily, row.familyId, row.planned);
-  }
-  const mainFamily = [...byFamily].reduce<[string, Prisma.Decimal] | null>((best, entry) => !best || entry[1].gt(best[1]) ? entry : best, null)?.[0];
+  for (const row of rows) byInput.set(row.inputId, (byInput.get(row.inputId) ?? zero).plus(row.planned));
   const allocated = rows.map(row => ({
     ...row, used: (used.get(row.inputId) ?? row.planned).times(row.planned).div(byInput.get(row.inputId)!).toDecimalPlaces(12),
   }));
-  const weight = (productId: string) => sumValues(rows.filter(row => row.productId === productId && row.familyId === mainFamily).map(row => row.planned));
-  const totalWeight = sumValues(items.map(item => weight(item.productId)));
-  const costed = items.map(item => {
+  const productIds = items.map(item => item.productId);
+  const weights = machineWeights(productIds, rows);
+  const machineShares = allocate(machineCost, weights);
+  const expenseShares = expenses.map(expense => allocate(expense.value, expense.inputId && byInput.has(expense.inputId)
+    ? productIds.map(id => sumValues(rows.filter(row => row.productId === id && row.inputId === expense.inputId).map(row => row.planned)))
+    : weights));
+  const costed = items.map((item, index) => {
     const material = sumValues(allocated.filter(row => row.productId === item.productId).map(row => row.used.times(row.unitCost ?? 0)));
-    const machine = totalWeight.gt(0) ? machineCost.times(weight(item.productId)).div(totalWeight) : machineCost.div(items.length);
-    const totalCost = material.plus(machine).toDecimalPlaces(12);
+    const expenseCost = sumValues(expenseShares.map(shares => shares[index]));
+    const totalCost = material.plus(machineShares[index]).plus(expenseCost).toDecimalPlaces(12);
     const good = item.planned.minus(item.lost);
     const fullUnitCost = totalCost.div(item.planned).toDecimalPlaces(12);
     return {
-      productId: item.productId, planned: item.planned, lost: item.lost, good, totalCost, fullUnitCost,
+      productId: item.productId, planned: item.planned, lost: item.lost, good, totalCost, fullUnitCost, expenseCost,
       lossCost: fullUnitCost.times(item.lost).toDecimalPlaces(12),
       unitCost: good.lte(0) ? null : absorbLoss ? totalCost.div(good).toDecimalPlaces(12) : fullUnitCost,
     };
@@ -97,6 +128,7 @@ export function productionCosting({ items, rows, used, machineCost, absorbLoss }
   return {
     items: costed, rows: allocated,
     totalCost: sumValues(costed.map(item => item.totalCost)), lossCost: sumValues(costed.map(item => item.lossCost)),
+    expenseCost: sumValues(costed.map(item => item.expenseCost)),
     partialCost: allocated.some(row => row.unitCost === null && row.used.gt(0)),
   };
 }
@@ -105,17 +137,18 @@ export function productionCosting({ items, rows, used, machineCost, absorbLoss }
  * Estimate of an order that has not run: planned inputs at their current cost and the estimated machine time.
  * It is never stored, so it follows every change in cost, printer or energy rate until the order finishes.
  */
-export function productionBudget({ items, rows, minutes, hourCost }: {
-  items: Omit<CostingItem, 'lost'>[]; rows: CostingRow[]; minutes: number; hourCost: Prisma.Decimal;
+export function productionBudget({ items, rows, minutes, hourCost, expenses = [] }: {
+  items: Omit<CostingItem, 'lost'>[]; rows: CostingRow[]; minutes: number; hourCost: Prisma.Decimal; expenses?: CostingExpense[];
 }) {
   const used = new Map<string, Prisma.Decimal>();
   for (const row of rows) used.set(row.inputId, (used.get(row.inputId) ?? new Prisma.Decimal(0)).plus(row.planned));
   const machineCost = hourCost.times(minutes).div(60).toDecimalPlaces(12);
   const costing = productionCosting({
-    items: items.map(item => ({ ...item, lost: new Prisma.Decimal(0) })), rows, used, machineCost, absorbLoss: false,
+    items: items.map(item => ({ ...item, lost: new Prisma.Decimal(0) })), rows, used, machineCost, absorbLoss: false, expenses,
   });
   return {
-    machineCost, materialCost: costing.totalCost.minus(machineCost), totalCost: costing.totalCost, partialCost: costing.partialCost,
+    machineCost, expenseCost: costing.expenseCost, materialCost: costing.totalCost.minus(machineCost).minus(costing.expenseCost),
+    totalCost: costing.totalCost, partialCost: costing.partialCost,
     items: costing.items.map(item => ({ productId: item.productId, totalCost: item.totalCost, unitCost: item.fullUnitCost })),
   };
 }

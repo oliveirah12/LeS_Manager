@@ -15,6 +15,10 @@ services:
       AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-365}
       # Master key for the bank credentials saved in the panel. Keep a copy with the database backup.
       CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:?Defina CONFIG_ENCRYPTION_KEY}
+      # Attachments live in their own volume. Back it up together with the database.
+      FILE_STORAGE_DIR: /data/files
+    volumes:
+      - les_files_prod:/data/files
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000"
 
@@ -35,3 +39,4 @@ services:
 
 volumes:
   les_db_prod:
+  les_files_prod:

@@ -1,34 +1,49 @@
 import { useState } from 'react';
-import { CheckCircle2, Eye, Play, Plus, Trash2, X } from 'lucide-react';
-import { suggestedConsumption } from './format';
+import { CheckCircle2, Eye, Pencil, Play, Plus, Wrench, X } from 'lucide-react';
+import { decimal, suggestedConsumption } from './format';
+import { CorrectOrder, RevisionHistory } from './order-correction';
+import { OrderForm } from './order-form';
 import {
   api, Badge, brl, by, dateTime, Field, Form, Loading, message, Modal, ModalForm, notify, PageActions, quantity, Select, sortParam, SortState, Table, Title, useClosePanel, useData,
 } from './ui';
 
 type Status = 'PLANNED' | 'PRINTING' | 'DONE' | 'CANCELED';
-type OrderItem = {
+export type OrderItem = {
   productId: string; sku: string; name: string; symbol: string; planned: string;
   good: string | null; lost: string | null; unitCost?: string | null; totalCost?: string | null; lossCost?: string | null;
+  salePrice: string | null; marginPercent?: string | null;
 };
-type OrderInput = {
-  inputId: string; sku: string; name: string; symbol: string; planned: string; used: string | null;
-  parts: { productId: string; planned: string }[];
+type SaleValues = { gross: string; discount: string; total: string; fee: string; net: string; partial: boolean; profit?: string; marginPercent?: string | null };
+type Sale = { discountPercent: string; paymentMethodId: string | null; paymentName: string | null; feePercent: string; customFee: boolean; values: SaleValues | null };
+export type OrderInput = {
+  inputId: string; sku: string; name: string; symbol: string; familyId: string; planned: string; used: string | null;
+  parts: { productId: string; planned: string }[]; replaces: string[];
 };
-type Order = {
-  id: string; number: number; status: Status; notes: string | null; printer: { id: string; name: string }; user: { name: string };
+export type Order = {
+  id: string; number: number; revision: number; status: Status; notes: string | null; printer: { id: string; name: string }; user: { name: string };
   plannedStart: string; estimatedMinutes: number; expectedEnd: string; startedAt: string | null; finishedAt: string | null; printMinutes: number | null;
+  powerWatts?: string | null; energyRate?: string | null; hourlyCost?: string | null;
   machineCost?: string | null; totalCost?: string | null; lossCost?: string | null; absorbLoss: boolean; items: OrderItem[]; inputs: OrderInput[];
-  budget: Budget | null;
+  budget: Budget | null; sale: Sale; expenses: OrderExpense[]; expenseCost?: string | null;
 };
+export type OrderExpense = { id: string; source: 'INPUT' | 'MANUAL'; inputId: string | null; title: string; value: string; edited: boolean; suggested: string | null };
 type Budget = {
-  machineCost: string; materialCost: string; totalCost: string; partialCost: boolean; missingCost: string[];
-  items: { productId: string; totalCost: string; unitCost: string }[];
+  machineCost: string; expenseCost: string; materialCost: string; totalCost: string; partialCost: boolean; missingCost: string[];
+  items: { productId: string; totalCost: string; unitCost: string; suggestedPrice: string | null; belowTargetMargin: boolean }[];
 };
-type OrdersView = { orders: Order[]; page: number; pageSize: number; total: number; printers: { id: string; name: string }[]; products: { id: string; sku: string; name: string; symbol: string }[] };
+export type OrdersView = {
+  orders: Order[]; page: number; pageSize: number; total: number; printers: { id: string; name: string }[];
+  paymentMethods: { id: string; name: string; feePercent: string | null }[];
+  inputs: { id: string; sku: string; name: string; symbol: string; familyId: string }[];
+  products: { id: string; sku: string; name: string; symbol: string; salePrice?: string | null; marginPercent?: string | null }[];
+};
 /** The values only come with stock:view. */
 type PreviewItem = { productId: string; sku: string; name: string; symbol: string; good: string; lost: string; unitCost?: string | null; fullUnitCost?: string; lossCost?: string };
-type Preview = { printMinutes: number; machineCost?: string; totalCost?: string; lossCost?: string; partialCost?: boolean; items: PreviewItem[] };
-type Dialog = { kind: 'new' } | { kind: 'start' | 'finish' | 'cancel' | 'details'; order: Order };
+type Preview = {
+  printMinutes: number; machineCost?: string; expenseCost?: string; totalCost?: string; lossCost?: string; partialCost?: boolean; items: PreviewItem[];
+  sale: (SaleValues & { feePercent: string; paymentName: string | null }) | null;
+};
+type Dialog = { kind: 'new' } | { kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct'; order: Order };
 
 const statuses: Record<Status, { name: string; tone?: 'ok' | 'warn' | 'brand' }> = {
   PLANNED: { name: 'Planejada' }, PRINTING: { name: 'Em impressão', tone: 'brand' }, DONE: { name: 'Concluída', tone: 'ok' }, CANCELED: { name: 'Cancelada', tone: 'warn' },
@@ -37,7 +52,7 @@ const localValue = (date = new Date()) => new Date(date.getTime() - date.getTime
 const iso = (value: FormDataEntryValue | null) => new Date(String(value)).toISOString();
 const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60 ? (minutes % 60) + ' min' : minutes >= 60 ? '' : '0 min');
 
-export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: boolean }) {
+export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; correct: boolean; seeCosts: boolean }) {
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>(null);
   const query = new URLSearchParams({ page: String(page), ...(sort ? { sort: sortParam(sort)! } : {}) });
@@ -56,7 +71,7 @@ export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: 
     setSort(null);
   }
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
-  const open = (kind: 'start' | 'finish' | 'cancel' | 'details', order: Order) => setDialog({ kind, order });
+  const open = (kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct', order: Order) => setDialog({ kind, order });
   return <>
     {edit && <PageActions><button type="button" className="btn" onClick={() => setDialog({ kind: 'new' })}><Plus size={16} aria-hidden="true" />Nova ordem</button></PageActions>}
     {message(error)}
@@ -80,14 +95,18 @@ export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: 
           <span className="hint" style={{ display: 'block' }}>{order.budget.partialCost ? 'Orçamento parcial' : 'Orçamento'}</span></span> : brl(order.totalCost)] : []),
         <div className="actions">
           <button type="button" className="btn ghost small" aria-label={'Ver ordem ' + order.number} onClick={() => open('details', order)}><Eye size={14} aria-hidden="true" />Ver</button>
+          {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" aria-label={'Editar ordem ' + order.number} onClick={() => open('edit', order)}><Pencil size={14} aria-hidden="true" />Editar</button>}
           {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" onClick={() => open('start', order)}><Play size={14} aria-hidden="true" />Iniciar</button>}
           {edit && order.status === 'PRINTING' && <button type="button" className="btn secondary small" onClick={() => open('finish', order)}><CheckCircle2 size={14} aria-hidden="true" />Concluir</button>}
+          {correct && order.status === 'DONE' && <button type="button" className="btn secondary small" aria-label={'Corrigir ordem ' + order.number} onClick={() => open('correct', order)}><Wrench size={14} aria-hidden="true" />Corrigir</button>}
           {edit && (order.status === 'PLANNED' || order.status === 'PRINTING') &&
             <button type="button" className="btn ghost small" onClick={() => open('cancel', order)}><X size={14} aria-hidden="true" />Cancelar</button>}
         </div>,
       ])} />}
 
-    {data && dialog?.kind === 'new' && <Modal wide title="Nova ordem de produção" close={() => setDialog(undefined)}><NewOrder view={data} done={created} /></Modal>}
+    {data && dialog?.kind === 'new' && <Modal wide title="Nova ordem de produção" close={() => setDialog(undefined)}><OrderForm view={data} seeCosts={seeCosts} done={created} /></Modal>}
+    {data && dialog?.kind === 'edit' && <Modal wide title={'Editar ordem #' + dialog.order.number} subtitle="Nada muda no estoque até a impressão começar." close={() => setDialog(undefined)}>
+      <OrderForm view={data} order={dialog.order} seeCosts={seeCosts} done={done} /></Modal>}
     {dialog?.kind === 'start' && <ModalForm title={'Iniciar ordem #' + dialog.order.number} subtitle="Os insumos ficam reservados até a conclusão." label="Iniciar impressão"
       close={() => setDialog(undefined)} action={async values => {
         await api('production/orders/' + dialog.order.id + '/start', { startedAt: iso(values.get('startedAt')) });
@@ -111,6 +130,8 @@ export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: 
           inputMode="decimal" required={false} placeholder="0" hint={'Reservado: ' + quantity(input.planned) + ' ' + input.symbol} />)}
       </> : <p className="muted">A ordem ainda não iniciou, então nada muda no estoque.</p>}
     </ModalForm>}
+    {data && dialog?.kind === 'correct' && <Modal wide title={'Corrigir ordem #' + dialog.order.number} subtitle="Correção técnica auditada de uma ordem concluída." close={() => setDialog(undefined)}>
+      <CorrectOrder order={dialog.order} view={data} seeCosts={seeCosts} done={done} /></Modal>}
     {dialog?.kind === 'details' && <Modal wide title={'Ordem #' + dialog.order.number} subtitle={statuses[dialog.order.status].name} close={() => setDialog(undefined)}>
       <OrderDetails order={dialog.order} seeCosts={seeCosts} /></Modal>}
   </>;
@@ -119,59 +140,10 @@ export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: 
 function InputsTable({ inputs }: { inputs: OrderInput[] }) {
   return <Table responsive={false} columns={['Insumo', { label: 'Previsto', end: true }, ...(inputs.some(input => input.used !== null) ? [{ label: 'Real', end: true }] : [])]}
     rows={inputs.map(input => [
-      by(input.name, <Title name={input.name} code={input.sku} />), by(input.planned, quantity(input.planned) + ' ' + input.symbol),
+      by(input.name, <><Title name={input.name} code={input.sku} />{input.replaces.length > 0 && <span className="hint" style={{ display: 'block' }}>Substitui {input.replaces.join(', ')}</span>}</>),
+      by(input.planned, quantity(input.planned) + ' ' + input.symbol),
       ...(inputs.some(row => row.used !== null) ? [by(input.used, input.used === null ? '—' : quantity(input.used) + ' ' + input.symbol)] : []),
     ])} />;
-}
-
-function NewOrder({ view, done }: { view: OrdersView; done: (text: string) => Promise<void> }) {
-  const [rows, setRows] = useState([{ key: 0, productId: '' }]);
-  const [plannedStart, setPlannedStart] = useState(() => localValue());
-  const [hours, setHours] = useState('');
-  const [minutes, setMinutes] = useState('');
-  const closePanel = useClosePanel();
-  const estimatedMinutes = Number(hours || 0) * 60 + Number(minutes || 0);
-  const validTime = Number.isInteger(estimatedMinutes) && estimatedMinutes > 0;
-  const startTime = new Date(plannedStart).getTime();
-  const expectedEnd = validTime && Number.isFinite(startTime) ? new Date(startTime + estimatedMinutes * 60000).toISOString() : null;
-  if (!view.printers.length || !view.products.length) return <div className="info">
-    {!view.printers.length ? 'Cadastre uma impressora ativa em Produção → Impressoras.' : 'Monte a ficha técnica de um produto fabricado em Cadastros → Produtos.'}
-  </div>;
-  return <Form label="Criar ordem" cancel="Cancelar" action={async values => {
-    if (!validTime) throw new Error('Informe o tempo de impressão em horas e minutos inteiros.');
-    await api('production/orders', {
-      printerId: values.get('printerId'), plannedStart: iso(plannedStart), estimatedMinutes, notes: String(values.get('notes') ?? ''),
-      items: rows.map(({ key }) => ({ productId: values.get('product' + key), quantity: values.get('quantity' + key) })),
-    });
-    await done('Ordem criada.');
-    closePanel?.();
-  }}>
-    <div className="form-grid">
-      <Select name="printerId" label="Impressora" options={view.printers} />
-      <label>Início previsto<input name="plannedStart" type="datetime-local" required value={plannedStart} onChange={event => setPlannedStart(event.target.value)} /></label>
-    </div>
-    <div className="form-grid">
-      <label>Tempo de impressão (horas)<input name="hours" inputMode="numeric" placeholder="10" value={hours} onChange={event => setHours(event.target.value)} /></label>
-      <label>Minutos<input name="minutes" inputMode="numeric" placeholder="0" value={minutes} onChange={event => setMinutes(event.target.value)} /></label>
-    </div>
-    <p className="hint" role="status">{expectedEnd ? <>Término previsto: <strong>{dateTime(expectedEnd)}</strong></> : 'Informe o início e o tempo para calcular o término.'}</p>
-    <h3>Produtos da impressão</h3>
-    {rows.map(({ key, productId }, index) => {
-      const product = view.products.find(item => item.id === productId);
-      const options = view.products.filter(item => item.id === productId || !rows.some(row => row.productId === item.id));
-      return <div className="component-row" style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr) auto' }} key={key}>
-        <Select name={'product' + key} label={'Produto ' + (index + 1)} options={options.map(item => ({ id: item.id, name: item.sku + ' · ' + item.name }))}
-          onChange={value => setRows(items => items.map(item => item.key === key ? { key, productId: value } : item))} />
-        <Field name={'quantity' + key} label={'Quantidade' + (product ? ' (' + product.symbol + ')' : '')} inputMode="decimal" />
-        <button type="button" className="icon-button" aria-label={'Remover produto ' + (index + 1)} disabled={rows.length === 1}
-          onClick={() => setRows(items => items.filter(item => item.key !== key))}><Trash2 size={18} aria-hidden="true" /></button>
-      </div>;
-    })}
-    <button type="button" className="btn secondary" style={{ alignSelf: 'flex-start' }} disabled={rows.length >= view.products.length}
-      onClick={() => setRows(items => [...items, { key: Math.max(...items.map(item => item.key)) + 1, productId: '' }])}>
-      <Plus size={16} aria-hidden="true" />Adicionar produto</button>
-    <Field name="notes" label="Observação" required={false} placeholder="Pedido, cliente ou lote" />
-  </Form>;
 }
 
 function FinishOrder({ order, seeCosts, done }: { order: Order; seeCosts: boolean; done: (text: string) => Promise<void> }) {
@@ -246,8 +218,9 @@ function FinishOrder({ order, seeCosts, done }: { order: Order; seeCosts: boolea
           by(item.name, <Title name={item.name} code={item.sku} />), by(item.good, quantity(item.good) + ' ' + item.symbol), by(item.lost, quantity(item.lost) + ' ' + item.symbol),
           ...(seeCosts ? [by(item.unitCost, <strong>{brl(item.unitCost)}</strong>), by(item.lossCost, brl(item.lossCost))] : []),
         ])}
-        footer={seeCosts ? <><span>Máquina e energia: {brl(review.preview.machineCost)} · {duration(review.preview.printMinutes)}</span>
+        footer={seeCosts ? <><span>Máquina e energia: {brl(review.preview.machineCost)} · {duration(review.preview.printMinutes)} · Despesas: {brl(review.preview.expenseCost)}</span>
           <span>Custo total: <strong>{brl(review.preview.totalCost)}</strong></span></> : <span>Tempo cobrado: {duration(review.preview.printMinutes)}</span>} />
+      {review.preview.sale && <SaleSummary sale={review.preview.sale} paymentName={review.preview.sale.paymentName} feePercent={review.preview.sale.feePercent} seeCosts={seeCosts} />}
       {review.shipOut && <p className="hint">As peças boas entram e saem do estoque na mesma operação.</p>}
       <Form label="Confirmar conclusão" extra={<button type="button" className="btn secondary" onClick={() => setReview(undefined)}>Voltar</button>} action={async () => {
         await api(path + '/finish', review.payload);
@@ -271,24 +244,49 @@ function OrderDetails({ order, seeCosts }: { order: Order; seeCosts: boolean }) 
       {order.finishedAt && <div><dt>Encerrada em</dt><dd>{dateTime(order.finishedAt)}</dd></div>}
       {order.printMinutes !== null && <div><dt>Tempo cobrado</dt><dd>{duration(order.printMinutes)}</dd></div>}
       {seeCosts && order.machineCost != null && <div><dt>Máquina e energia</dt><dd>{brl(order.machineCost)}</dd></div>}
+      {seeCosts && order.expenseCost != null && <div><dt>Despesas</dt><dd>{brl(order.expenseCost)}</dd></div>}
       {seeCosts && order.totalCost != null && <div><dt>Custo total</dt><dd>{brl(order.totalCost)}</dd></div>}
       {seeCosts && order.lossCost != null && <div><dt>Valor da perda</dt><dd>{brl(order.lossCost)}{order.absorbLoss ? ' (embutida nas peças boas)' : ''}</dd></div>}
       {order.notes && <div><dt>Observação</dt><dd>{order.notes}</dd></div>}
     </dl>
     {order.budget && <BudgetSummary budget={order.budget} minutes={order.estimatedMinutes} />}
+    {order.sale.values && <SaleSummary sale={order.sale.values} paymentName={order.sale.paymentName} feePercent={order.sale.feePercent} seeCosts={seeCosts} />}
     <Table responsive={false} columns={['Produto', { label: 'Ordem', end: true },
       ...(finished ? [{ label: 'Boas', end: true }, { label: 'Perdidas', end: true }, ...(seeCosts ? [{ label: 'Custo por peça', end: true }] : [])] : []),
-      ...(order.budget ? [{ label: 'Total estimado', end: true }, { label: 'Estimado por peça', end: true }] : [])]}
+      { label: 'Preço', end: true },
+      ...(order.budget ? [{ label: 'Total estimado', end: true }, { label: 'Estimado por peça', end: true }, { label: 'Preço sugerido', end: true }] : [])]}
       rows={order.items.map(item => {
         const estimate = order.budget?.items.find(row => row.productId === item.productId);
         return [
           by(item.name, <Title name={item.name} code={item.sku} />), by(item.planned, quantity(item.planned) + ' ' + item.symbol),
           ...(finished ? [by(item.good ?? '0', quantity(item.good ?? '0')), by(item.lost ?? '0', quantity(item.lost ?? '0')), ...(seeCosts ? [by(item.unitCost, brl(item.unitCost))] : [])] : []),
-          ...(order.budget ? [by(estimate?.totalCost, '≈ ' + brl(estimate?.totalCost)), by(estimate?.unitCost, '≈ ' + brl(estimate?.unitCost))] : []),
+          by(item.salePrice, item.salePrice === null ? '—' : brl(item.salePrice)),
+          ...(order.budget ? [by(estimate?.totalCost, '≈ ' + brl(estimate?.totalCost)), by(estimate?.unitCost, '≈ ' + brl(estimate?.unitCost)),
+            by(estimate?.suggestedPrice, <span title={estimate?.belowTargetMargin ? 'O preço confirmado está abaixo da margem desejada.' : undefined}>
+              {estimate?.suggestedPrice ? brl(estimate.suggestedPrice) : '—'}{estimate?.belowTargetMargin ? ' ⚠' : ''}</span>)] : []),
         ];
       })} />
     <InputsTable inputs={order.inputs} />
+    {order.expenses.length > 0 && <Table responsive={false} columns={['Despesa', 'Origem', { label: 'Valor', end: true }]}
+      rows={order.expenses.map(row => [row.title, row.source === 'INPUT' ? (row.edited ? 'Insumo (editada)' : 'Insumo') : 'Manual', by(row.value, brl(row.value))])} />}
+    {order.revision > 0 && <RevisionHistory orderId={order.id} seeCosts={seeCosts} />}
   </div>;
+}
+
+function SaleSummary({ sale, paymentName, feePercent, seeCosts }: { sale: SaleValues; paymentName: string | null; feePercent: string; seeCosts: boolean }) {
+  return <>
+    <h3>Venda</h3>
+    {sale.partial && <div className="info">Há item sem preço, então a venda considera apenas os demais.</div>}
+    <dl className="dl">
+      <div><dt>Bruto</dt><dd>{brl(sale.gross)}</dd></div>
+      <div><dt>Desconto</dt><dd>{brl(sale.discount)}</dd></div>
+      <div><dt>Total da venda</dt><dd>{brl(sale.total)}</dd></div>
+      <div><dt>Pagamento</dt><dd>{paymentName ?? '—'}</dd></div>
+      <div><dt>Taxa ({decimal(feePercent)}%)</dt><dd>{brl(sale.fee)}</dd></div>
+      <div><dt>Líquido</dt><dd><strong>{brl(sale.net)}</strong></dd></div>
+      {seeCosts && sale.profit !== undefined && <div><dt>Resultado</dt><dd>{brl(sale.profit)}{sale.marginPercent != null ? ' · ' + decimal(sale.marginPercent) + '%' : ''}</dd></div>}
+    </dl>
+  </>;
 }
 
 function BudgetSummary({ budget, minutes }: { budget: Budget; minutes: number }) {
@@ -298,6 +296,7 @@ function BudgetSummary({ budget, minutes }: { budget: Budget; minutes: number })
     <dl className="dl">
       <div><dt>Insumos previstos</dt><dd>≈ {brl(budget.materialCost)}</dd></div>
       <div><dt>Máquina e energia ({duration(minutes)})</dt><dd>≈ {brl(budget.machineCost)}</dd></div>
+      <div><dt>Despesas</dt><dd>≈ {brl(budget.expenseCost)}</dd></div>
       <div><dt>Total estimado</dt><dd><strong>≈ {brl(budget.totalCost)}</strong></dd></div>
     </dl>
   </>;

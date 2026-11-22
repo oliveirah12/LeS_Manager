@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
 import { canAccess } from '../access/security';
 import { Audit, auditChange, auditContext } from '../audit/recorder';
+import { FileService } from '../files/files';
 import { Database, idField, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal } from '../shared';
 import { belowMinimum, kitCosting, recipeEstimate, saleMargin, salePricing, stockValue, sumValues } from '../stock/cost';
 
@@ -59,10 +60,11 @@ const technicalProduct = {
   lengthMm: true, widthMm: true, heightMm: true, diameterMm: true, purchaseUrl: true,
   measures: { select: { name: true, value: true, unit: true }, orderBy: { name: 'asc' } },
 } as const;
-const catalogProduct = { ...catalogSummary, ...technicalProduct } as const;
+const catalogProduct = { ...catalogSummary, ...technicalProduct, imageFileId: true } as const;
 /** What stock:view may read. A new product column stays private until it is listed here. */
 const stockProduct = {
-  id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true, marginPercent: true,
+  id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, lastPurchaseAt: true, lastPurchaseExpense: true,
+  lastSupplier: { select: { name: true } }, minStock: true, salePrice: true, marginPercent: true,
   ...productInclude,
 } as const;
 const references = [
@@ -90,17 +92,17 @@ const kitValues = (kit: AuditedKit) => ({
 const kitAudit = { components: { include: { product: { select: { sku: true } } } } } as const;
 const productUsage = {
   _count: { select: {
-    movements: true, kitComponents: true, recipe: true, usedInRecipes: true, productionItems: true, productionInputs: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } },
+    movements: true, kitComponents: true, recipe: true, usedInRecipes: true, productionItems: true, productionInputs: true, replacedInputs: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } },
   } },
 } as const;
 const kitUsage = { _count: { select: { movements: true } } } as const;
 
 /** Why a product is in use. Such a product cannot be deleted or moved to another unit family. */
 function productBlock(usage: {
-  movements: number; kitComponents: number; inventoryRows: number; recipe: number; usedInRecipes: number; productionItems: number; productionInputs: number;
+  movements: number; kitComponents: number; inventoryRows: number; recipe: number; usedInRecipes: number; productionItems: number; productionInputs: number; replacedInputs: number;
 }) {
   if (usage.movements) return 'O produto tem movimentações no histórico.';
-  if (usage.productionItems || usage.productionInputs) return 'O produto consta em ordens de produção.';
+  if (usage.productionItems || usage.productionInputs || usage.replacedInputs) return 'O produto consta em ordens de produção.';
   if (usage.kitComponents) return 'O produto compõe um kit.';
   if (usage.inventoryRows) return 'O produto consta em inventário confirmado.';
   if (usage.recipe) return 'O produto tem ficha técnica.';
@@ -147,7 +149,7 @@ export function inBase(unit: { familyId: string; factor: Prisma.Decimal }, famil
 
 @Injectable()
 export class CatalogService {
-  constructor(@Inject(Database) private db: Database) {}
+  constructor(@Inject(Database) private db: Database, @Inject(FileService) private files: FileService) {}
 
   async registrations() {
     const [families, units, storedReferences, types, usedUnits] = await Promise.all([
@@ -267,7 +269,9 @@ export class CatalogService {
   async overview() {
     const [registrations, products, kits] = await Promise.all([
       this.registrations(),
-      this.db.product.findMany({ select: { ...catalogProduct, ...productUsage }, orderBy: { sku: 'asc' } }),
+      this.db.product.findMany({
+        select: { ...catalogProduct, _count: { select: { ...productUsage._count.select, files: { where: { file: { available: true } } } } } }, orderBy: { sku: 'asc' },
+      }),
       this.db.kit.findMany({
         include: { components: { include: { product: { select: catalogSummary } } }, ...kitUsage },
         orderBy: { sku: 'asc' },
@@ -275,7 +279,7 @@ export class CatalogService {
     ]);
     return {
       ...registrations,
-      products: products.map(({ _count, ...product }) => ({ ...product, hasRecipe: _count.recipe > 0, deleteBlock: productBlock(_count) })),
+      products: products.map(({ _count, ...product }) => ({ ...product, hasRecipe: _count.recipe > 0, fileCount: _count.files, deleteBlock: productBlock(_count) })),
       kits: kits.map(({ _count, ...kit }) => ({ ...kit, deleteBlock: kitBlock(_count) })),
     };
   }
@@ -329,7 +333,7 @@ export class CatalogService {
     const product = await this.db.product.findUnique({
       where: { id },
       select: {
-        id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true, marginPercent: true, wastePercent: true, ...productInclude, ...technicalProduct,
+        id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, lastPurchaseAt: true, lastPurchaseExpense: true, lastSupplier: { select: { name: true } }, minStock: true, salePrice: true, marginPercent: true, wastePercent: true, ...productInclude, ...technicalProduct,
         type: { select: { name: true, isInput: true, isManufactured: true } },
         kitComponents: { select: { quantity: true, kit: { select: { sku: true, name: true, active: true } } }, orderBy: { kitId: 'asc' } },
         usedInRecipes: { select: { quantity: true, product: { select: { sku: true, name: true, active: true } } }, orderBy: { productId: 'asc' } },
@@ -341,11 +345,15 @@ export class CatalogService {
     if (!product) throw new NotFoundException('Produto não encontrado.');
     const symbol = (row: { unit: { symbol: string; family: { units: { symbol: string }[] } } }) => row.unit.family.units[0]?.symbol ?? row.unit.symbol;
     const reserved = seeStock ? await this.reservedById() : null;
-    const [lastMovement, purchases, consumption] = await Promise.all([
+    const [lastMovement, purchases, lastItem, consumption] = await Promise.all([
       seeStock ? this.db.movement.findFirst({ where: { productId: id }, orderBy: { createdAt: 'desc' }, select: { kind: true, quantity: true, createdAt: true } }) : null,
       seeStock ? this.db.movement.findMany({
-        where: { productId: id, kind: 'PURCHASE' }, orderBy: { createdAt: 'desc' }, take: 5, select: { quantity: true, unitCost: true, createdAt: true },
+        where: { productId: id, kind: 'PURCHASE', purchaseItem: { purchase: { reversedAt: null } } }, orderBy: { createdAt: 'desc' }, take: 5, select: { quantity: true, unitCost: true, createdAt: true },
       }) : [],
+      seeStock ? this.db.purchaseItem.findFirst({
+        where: { productId: id, purchase: { reversedAt: null } }, orderBy: { purchase: { number: 'desc' } },
+        select: { quantity: true, purchase: { select: { number: true } }, shares: { select: { amount: true, cost: { select: { title: true } } } } },
+      }) : null,
       seeOrders && product.type.isInput ? this.db.productionConsumption.findMany({
         where: { inputId: id, item: { order: { status: { in: ['PLANNED', 'PRINTING'] } } } },
         select: { planned: true, item: { select: { order: { select: { number: true, status: true } } } } },
@@ -373,6 +381,10 @@ export class CatalogService {
       stock: seeStock ? {
         quantity: product.quantity, reserved: held, available: Prisma.Decimal.max(0, product.quantity.minus(held)),
         currentCost: product.currentCost, value: stockValue(product.quantity, product.currentCost), lastPurchaseCost: product.lastPurchaseCost,
+        lastPurchase: {
+          date: product.lastPurchaseAt, unitExpense: product.lastPurchaseExpense, supplier: product.lastSupplier?.name ?? null, number: lastItem?.purchase.number ?? null,
+          expenses: lastItem?.shares.map(share => ({ title: share.cost.title, amount: share.amount, unit: share.amount.div(lastItem.quantity).toDecimalPlaces(12) })) ?? [],
+        },
         lastMovement, purchases, minStock: product.minStock, belowMinimum: belowMinimum(product.quantity, held, product.minStock),
         salePrice: product.salePrice, margin: saleMargin(product.salePrice, product.currentCost), marginPercent: product.marginPercent,
         ...salePricing(product.salePrice, product.currentCost, product.marginPercent),
@@ -490,17 +502,21 @@ export class CatalogService {
   }
 
   /** Deletes a product that never entered the history. Unconfirmed count previews do not hold it back. */
-  deleteProduct(id: string) {
-    return serial(this.db, async tx => {
+  async deleteProduct(id: string) {
+    const released = await serial(this.db, async tx => {
       const product = await tx.product.findUnique({ where: { id }, select: { ...productAudit, ...productUsage } });
       if (!product) throw new NotFoundException('Produto não encontrado.');
       const block = productBlock(product._count);
       if (block) throw new ConflictException(block + ' Inative o produto em vez de excluir.');
       await tx.inventoryRow.deleteMany({ where: { productId: id } });
+      // Attachments are not history: they leave with the product, and their content only after the commit.
+      const files = await this.files.releaseProductFiles(tx, id);
       await tx.product.delete({ where: { id } });
-      auditChange(productValues(product), null);
-      return { id };
+      auditChange({ ...productValues(product), Arquivos: files.names }, null);
+      return files.ids;
     });
+    await this.files.purge(released);
+    return { id };
   }
 
   deleteKit(id: string) {

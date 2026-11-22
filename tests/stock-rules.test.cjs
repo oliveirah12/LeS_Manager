@@ -22,11 +22,11 @@ function service(isManufactured) {
 }
 const movement = (kind, quantity, extra = {}) => ({
   productId: 'p', unitId: 'un', kind, quantity: d(quantity), reason: 'Teste',
-  ...(kind === 'PURCHASE' ? { totalCost: d('10') } : {}), ...extra,
+  ...extra,
 });
 
 test('a manual entry of a manufactured product needs the acknowledgment', async () => {
-  for (const [kind, quantity] of [['PURCHASE', '5'], ['ADJUSTMENT', '5']]) {
+  for (const [kind, quantity] of [['ADJUSTMENT', '5']]) {
     const { stock, moved } = service(true);
     await assert.rejects(stock.movement(movement(kind, quantity), 'user'), { status: 409 });
     assert.deepEqual(moved, []);
@@ -36,7 +36,7 @@ test('a manual entry of a manufactured product needs the acknowledgment', async 
 });
 
 test('outputs and normal products do not ask for it', async () => {
-  for (const [isManufactured, kind, quantity] of [[true, 'OUT', '1'], [true, 'ADJUSTMENT', '-1'], [false, 'PURCHASE', '5'], [false, 'ADJUSTMENT', '5']]) {
+  for (const [isManufactured, kind, quantity] of [[true, 'OUT', '1'], [true, 'ADJUSTMENT', '-1'], [false, 'ADJUSTMENT', '5']]) {
     const { stock, moved } = service(isManufactured);
     await stock.movement(movement(kind, quantity), 'user');
     assert.deepEqual(moved, [kind]);

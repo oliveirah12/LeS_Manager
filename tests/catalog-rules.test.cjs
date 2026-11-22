@@ -62,7 +62,11 @@ function service(usage, unitFamily = 'mass') {
     product: { findUnique: async () => stored, findUniqueOrThrow: async () => stored, update: record('update'), delete: record('delete') },
     inventoryRow: { deleteMany: record('rows') },
   };
-  return { catalog: new CatalogService({ $transaction: work => work(tx) }), calls };
+  const files = {
+    releaseProductFiles: async () => { calls.push('files'); return { ids: ['f1'], names: ['a.pdf'] }; },
+    purge: async ids => { calls.push('purge ' + ids.join()); },
+  };
+  return { catalog: new CatalogService({ $transaction: work => work(tx) }, files), calls };
 }
 
 const change = { name: 'Produto', unitId: 'new' };
@@ -185,8 +189,8 @@ test('a family is deleted with its units only when it has no products', async ()
   assert.deepEqual(free.calls, ['units', 'family']);
 });
 
-test('an unused product is deleted with its pending count rows', async () => {
+test('an unused product is deleted with its count rows and files, whose content goes after the commit', async () => {
   const { catalog, calls } = service(unused);
   assert.deepEqual(await catalog.deleteProduct('id'), { id: 'id' });
-  assert.deepEqual(calls, ['rows', 'delete']);
+  assert.deepEqual(calls, ['rows', 'files', 'delete', 'purge f1']);
 });

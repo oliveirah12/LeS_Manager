@@ -6,6 +6,7 @@ import {
 } from '../catalog/catalog';
 import { formsCycle } from '../catalog/recipe';
 import { auditChange, auditContext } from '../audit/recorder';
+import { purchaseDateField, storedDate } from '../purchases/rules';
 import { averageCost, costPerBaseUnit } from './cost';
 import {
   DailyTask, Database, decimalField, idField, money, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal,
@@ -14,8 +15,8 @@ import {
 const previewAge = 7 * 24 * 60 * 60 * 1000;
 
 export const movementFields = z.object({
-  productId: idField, unitId: idField, kind: z.enum(['PURCHASE', 'OUT', 'ADJUSTMENT']),
-  quantity: decimalField, totalCost: nonnegative.optional(), reason: nameField, acknowledgeNoInputs: z.boolean().optional(),
+  productId: idField, unitId: idField, kind: z.enum(['OUT', 'ADJUSTMENT']),
+  quantity: decimalField, reason: nameField, acknowledgeNoInputs: z.boolean().optional(),
 });
 export const kitOutFields = z.object({ quantity: positive.refine(value => value.isInteger(), 'Informe a quantidade inteira de kits'), reason: nameField });
 const countRow = z.object({ sku: skuField, quantity: nonnegative, unit: nameField });
@@ -27,10 +28,11 @@ const initialRow = z.object({
   group: nameField.optional(), brand: nameField.optional(), color: nameField.optional(), department: nameField.optional(),
   minStock: nonnegative.optional(), marginPercent: marginField.optional(), salePrice: positive.optional(),
   lengthMm: positive.optional(), widthMm: positive.optional(), heightMm: positive.optional(), diameterMm: positive.optional(),
-  purchaseUrl: purchaseUrlField.optional(),
+  purchaseUrl: purchaseUrlField.optional(), purchaseDate: purchaseDateField.optional(), supplier: nameField.optional(), purchaseExpenses: nonnegative.optional(),
 }).refine(row => row.unitCost === undefined || row.totalCost === undefined, 'Use apenas uma coluna de custo.')
   .refine(row => row.quantity.eq(0) || row.unitCost !== undefined || row.totalCost !== undefined, 'Informe o custo do saldo inicial.')
-  .refine(row => row.totalCost === undefined || row.quantity.gt(0), 'O custo total exige quantidade maior que zero.');
+  .refine(row => row.totalCost === undefined || row.quantity.gt(0), 'O custo total exige quantidade maior que zero.')
+  .refine(row => row.purchaseExpenses === undefined || row.quantity.gt(0), 'As despesas da compra exigem quantidade maior que zero.');
 const initialRecipe = z.object({ product: skuField, input: skuField, quantity: positive, unit: nameField });
 const initialMeasure = z.object({ sku: skuField, name: nameField, value: positive, unit: symbolField });
 export const initialFields = z.object({
@@ -39,7 +41,7 @@ export const initialFields = z.object({
 type Count = z.infer<typeof countFields>;
 type Initial = z.infer<typeof initialFields>;
 const initialDecimals = [
-  'quantity', 'unitCost', 'totalCost', 'wastePercent', 'minStock', 'marginPercent', 'salePrice', 'lengthMm', 'widthMm', 'heightMm', 'diameterMm',
+  'quantity', 'unitCost', 'totalCost', 'wastePercent', 'minStock', 'marginPercent', 'salePrice', 'lengthMm', 'widthMm', 'heightMm', 'diameterMm', 'purchaseExpenses',
 ] as const;
 
 /** Groups the measures by SKU, applying the same limits as the product form. */
@@ -85,7 +87,7 @@ export class StockService {
       throw new ConflictException('O saldo de ' + product.sku + ' está reservado para uma impressão em andamento.');
     }
     // Entries with their own cost update the moving average; other movements keep it.
-    const updatedCost = (kind === 'PURCHASE' || kind === 'INITIAL' || kind === 'PRODUCTION_IN') && unitCost !== null
+    const updatedCost = (kind === 'PURCHASE' || kind === 'INITIAL' || kind === 'PRODUCTION_IN' || kind === 'PRODUCTION_ADJUST_IN') && unitCost !== null
       ? storedDecimal(averageCost(product.quantity, product.currentCost, quantity, unitCost)) : product.currentCost;
     await tx.product.update({
       where: { id: product.id },
@@ -105,13 +107,7 @@ export class StockService {
     if (data.quantity.eq(0) || (data.kind !== 'ADJUSTMENT' && data.quantity.lt(0))) {
       throw new BadRequestException('Informe uma quantidade válida para a operação.');
     }
-    if ((data.kind === 'PURCHASE') !== (data.totalCost !== undefined)) {
-      throw new BadRequestException('Informe o custo total somente em entradas de compra.');
-    }
-    auditContext({
-      Tipo: ({ PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste' } as const)[data.kind], Motivo: data.reason,
-      ...(data.totalCost === undefined ? {} : { 'Custo total': data.totalCost }),
-    });
+    auditContext({ Tipo: ({ OUT: 'Saída', ADJUSTMENT: 'Ajuste' } as const)[data.kind], Motivo: data.reason });
     return serial(this.db, async tx => {
       const product = await tx.product.findUnique({ where: { id: data.productId }, include: { unit: true, type: true } });
       const unit = await tx.unit.findUnique({ where: { id: data.unitId } });
@@ -124,8 +120,7 @@ export class StockService {
         }
         auditContext({ 'Entrada sem baixa de insumos': 'Confirmada' });
       }
-      const cost = data.totalCost === undefined ? product.currentCost : storedDecimal(costPerBaseUnit(data.totalCost, amount));
-      return this.record(tx, product, data.kind === 'OUT' ? amount.neg() : amount, data.kind, userId, data.reason, cost);
+      return this.record(tx, product, data.kind === 'OUT' ? amount.neg() : amount, data.kind, userId, data.reason);
     });
   }
 
@@ -190,12 +185,13 @@ export class StockService {
   }
 
   private async initialLookups(tx: Prisma.TransactionClient, data: Initial) {
-    const [existing, units, references, types, storedInputs] = await Promise.all([
+    const [existing, units, references, types, storedInputs, suppliers] = await Promise.all([
       tx.product.findMany({ where: { sku: { in: data.rows.map(row => row.sku) } }, select: { sku: true } }),
       tx.unit.findMany({ where: { symbol: { in: [...data.rows, ...data.recipes].map(row => row.unit) } } }),
       tx.reference.findMany(),
       tx.productType.findMany(),
       tx.product.findMany({ where: { sku: { in: data.recipes.map(row => row.input) } }, include: { unit: true, type: true } }),
+      tx.supplier.findMany({ where: { active: true, name: { in: data.rows.flatMap(row => row.supplier ? [row.supplier] : []) } }, select: { id: true, name: true } }),
     ]);
     if (existing.length) throw new ConflictException('SKUs já cadastrados: ' + existing.map(product => product.sku).join(', '));
     const measures = measuresBySku(data);
@@ -211,6 +207,8 @@ export class StockService {
         if (!reference) throw new BadRequestException('Classificação desconhecida no SKU ' + row.sku + ': ' + name);
         return reference.id;
       };
+      const supplier = row.supplier ? suppliers.find(item => item.name === row.supplier) : undefined;
+      if (row.supplier && !supplier) throw new BadRequestException('Fornecedor desconhecido ou inativo no SKU ' + row.sku + ': ' + row.supplier);
       const quantity = inBase(unit, unit.familyId, row.quantity);
       const cost = row.totalCost !== undefined ? storedDecimal(costPerBaseUnit(row.totalCost, quantity))
         : row.unitCost !== undefined ? storedDecimal(money(row.unitCost.div(unit.factor))) : null;
@@ -224,6 +222,11 @@ export class StockService {
           purchaseUrl: row.purchaseUrl, measures: measures.get(row.sku),
         },
         quantity, cost, type, familyId: unit.familyId,
+        // The expense is shown with the last purchase and stays out of the average.
+        lastPurchase: row.purchaseDate || supplier || row.purchaseExpenses !== undefined ? {
+          lastPurchaseCost: cost, lastPurchaseAt: row.purchaseDate ? storedDate(row.purchaseDate) : null, lastSupplierId: supplier?.id ?? null,
+          lastPurchaseExpense: row.purchaseExpenses === undefined ? null : storedDecimal(costPerBaseUnit(row.purchaseExpenses, quantity)),
+        } : null,
       };
     });
     const seen = new Set<string>();
@@ -297,6 +300,7 @@ export class StockService {
         if (!item.quantity.eq(0) || item.cost !== null) {
           await this.record(tx, product, item.quantity, 'INITIAL', userId, 'Carga inicial ' + id, item.cost);
         }
+        if (item.lastPurchase) await tx.product.update({ where: { id: product.id }, data: item.lastPurchase });
       }
       if (recipes.length) {
         auditContext({ 'Linhas de ficha técnica': recipes.length });
