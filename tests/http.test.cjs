@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const { test } = require('node:test');
+const { setTimeout: delay } = require('node:timers/promises');
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
@@ -68,6 +69,17 @@ test('API REST com PostgreSQL', {
   assert.match(login.cookie, /^les_session=/);
   const admin = (path, options = {}) => request(path, { ...options, cookie: login.cookie });
   const post = (path, body) => admin(path, { method: 'POST', body });
+  // A refused request never reaches the interceptor, so its event is completed just after the response.
+  async function waitForAuditEvent(filters, matches, timeoutMs = 2_000) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const { events } = expectStatus(await admin('/audit?' + new URLSearchParams(filters)), 200);
+      const event = events.find(matches);
+      if (event) return event;
+      if (Date.now() >= deadline) assert.fail(`Evento de auditoria não concluído em ${timeoutMs} ms: ${JSON.stringify(filters)}`);
+      await delay(25);
+    }
+  }
   async function loadTemplate(path) {
     const bytes = expectStatus(await admin(path), 200);
     const workbook = new Workbook();
@@ -227,8 +239,8 @@ test('API REST com PostgreSQL', {
     assert.equal(JSON.stringify(audit).includes(user.code), false);
     expectStatus(await catalog('/catalog/registrations'), 403);
     expectStatus(await catalog('/catalog/references', { method: 'POST', body: { kind: 'COR', name: sku('COR') } }), 403);
-    const denied = expectStatus(await admin('/audit?' + new URLSearchParams({ result: 'denied', action: 'Criar classificação' })), 200);
-    assert.ok(denied.events.some(event => event.actorId === user.id && event.status === 403 && !event.details?.after));
+    await waitForAuditEvent({ result: 'denied', action: 'Criar classificação' },
+      event => event.actorId === user.id && event.status === 403 && !event.details?.after);
     expectStatus(await catalog('/stock'), 403);
     expectStatus(await catalog('/stock/initial/template'), 403);
     expectStatus(await catalog('/stock/initial/preview', { method: 'POST' }), 403);
