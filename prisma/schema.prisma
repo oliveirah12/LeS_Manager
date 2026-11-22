@@ -24,6 +24,8 @@ enum MovementKind {
   PRODUCTION_IN
   PRODUCTION_OUT
   PURCHASE_REVERSAL
+  PRODUCTION_ADJUST_IN
+  PRODUCTION_ADJUST_OUT
 }
 
 enum PurchaseCostMode {
@@ -75,6 +77,7 @@ model User {
   storedFiles       StoredFile[]
   purchases         Purchase[]       @relation("PurchaseAuthor")
   purchaseReversals Purchase[]       @relation("PurchaseReverser")
+  productionRevisions ProductionRevision[]
 }
 
 model Session {
@@ -270,12 +273,34 @@ model ProductionOrder {
   saleFee          Decimal?         @db.Decimal(30, 12)
   saleNet          Decimal?         @db.Decimal(30, 12)
   expenseCost      Decimal?         @db.Decimal(30, 12)
+  /// Counts the technical corrections, and guards a confirmation against a stale preview.
+  revision         Int              @default(0)
+  revisions        ProductionRevision[]
   expenses         ProductionExpense[]
   items            ProductionItem[]
   movements        Movement[]
   @@index([status])
   @@index([printerId])
   @@index([paymentMethodId])
+}
+
+/// One audited correction of a finished order. Original movements never change: differences become new movements.
+/// costInStock went into the current average, and costIssued belongs to pieces that had already left and stays here.
+model ProductionRevision {
+  id          String          @id @default(uuid())
+  orderId     String
+  order       ProductionOrder @relation(fields: [orderId], references: [id])
+  number      Int
+  reason      String
+  userId      String
+  user        User            @relation(fields: [userId], references: [id])
+  createdAt   DateTime        @default(now())
+  before      Json
+  after       Json
+  costInStock Decimal         @db.Decimal(30, 12)
+  costIssued  Decimal         @db.Decimal(30, 12)
+  @@unique([orderId, number])
+  @@index([userId])
 }
 
 /// How a sale is paid. The optional fee lowers the net value and the margin, never the cost.

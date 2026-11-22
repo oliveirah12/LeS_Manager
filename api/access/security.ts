@@ -39,7 +39,9 @@ export async function verifyPassword(password: string, hash: string | null) {
 }
 
 export const modules = ['catalog', 'registrations', 'stock', 'finance', 'production', 'purchases'] as const;
-export const configurablePermissions = modules.flatMap(module => [module + ':view', module + ':operate']);
+/** production:correct stands alone: operating production never implies it, and only admin has it by default. */
+export const standalonePermissions = ['production:correct'];
+export const configurablePermissions = [...modules.flatMap(module => [module + ':view', module + ':operate']), ...standalonePermissions];
 export const administrator = 'admin';
 
 export function canAccess(permissions: string[], permission: string) {

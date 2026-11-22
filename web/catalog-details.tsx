@@ -31,6 +31,7 @@ export type DetailTarget = { kind: 'products' | 'kits'; id: string; sku: string 
 const movementNames: Record<string, string> = {
   INITIAL: 'Carga inicial', PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário',
   PRODUCTION_IN: 'Entrada de produção', PRODUCTION_OUT: 'Consumo de produção', PURCHASE_REVERSAL: 'Estorno de compra',
+  PRODUCTION_ADJUST_IN: 'Correção de produção (entrada)', PRODUCTION_ADJUST_OUT: 'Correção de produção (saída)',
 };
 const orderNames = { PLANNED: 'Planejada', PRINTING: 'Em impressão' };
 

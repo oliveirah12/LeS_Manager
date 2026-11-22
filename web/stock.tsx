@@ -25,7 +25,7 @@ const dimensions = (row: InitialRegistry) => ([['C', row.lengthMm], ['L', row.wi
   .flatMap(([label, value]) => value ? [label + ' ' + quantity(value)] : []).join(' · ');
 type Dialog = { kind: 'settings'; product: StockProduct } | { kind: 'movement'; product?: Product } | { kind: 'kit'; kit: Kit } | { kind: 'kitDetails'; kit: StockKit } | { kind: 'inventory' } | { kind: 'initial' };
 const kinds = [{ id: 'OUT', name: 'Saída' }, { id: 'ADJUSTMENT', name: 'Ajuste' }] as const;
-const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário', PRODUCTION_IN: 'Entrada de produção', PRODUCTION_OUT: 'Consumo de produção', PURCHASE_REVERSAL: 'Estorno de compra' };
+const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário', PRODUCTION_IN: 'Entrada de produção', PRODUCTION_OUT: 'Consumo de produção', PURCHASE_REVERSAL: 'Estorno de compra', PRODUCTION_ADJUST_IN: 'Correção de produção (entrada)', PRODUCTION_ADJUST_OUT: 'Correção de produção (saída)' };
 
 export function Stock({ edit, importInitial }: { edit: boolean; importInitial: boolean }) {
   const stock = useData<StockView>('stock');

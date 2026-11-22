@@ -87,7 +87,7 @@ export class StockService {
       throw new ConflictException('O saldo de ' + product.sku + ' está reservado para uma impressão em andamento.');
     }
     // Entries with their own cost update the moving average; other movements keep it.
-    const updatedCost = (kind === 'PURCHASE' || kind === 'INITIAL' || kind === 'PRODUCTION_IN') && unitCost !== null
+    const updatedCost = (kind === 'PURCHASE' || kind === 'INITIAL' || kind === 'PRODUCTION_IN' || kind === 'PRODUCTION_ADJUST_IN') && unitCost !== null
       ? storedDecimal(averageCost(product.quantity, product.currentCost, quantity, unitCost)) : product.currentCost;
     await tx.product.update({
       where: { id: product.id },
