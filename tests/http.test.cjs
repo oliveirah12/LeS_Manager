@@ -266,6 +266,56 @@ test('API REST com PostgreSQL', {
     expectStatus(await catalog('/finance/refresh', { method: 'POST' }), 403);
   });
 
+  await t.test('dados técnicos do produto respeitam leitura e operação do catálogo', async () => {
+    async function session(name, permissions) {
+      const profile = expectStatus(await post('/access/profiles', { name: sku(name), permissions }), 201);
+      const email = (run + '-' + name).toLowerCase() + '@example.com';
+      const user = expectStatus(await post('/access/users', { name, email, profileId: profile.id }), 201);
+      const { cookie } = await request('/access/activate', { method: 'POST', body: { email, code: user.code, password, confirmation: password } });
+      return (path, options = {}) => request(path, { ...options, cookie });
+    }
+    const product = expectStatus(await post('/catalog/products', {
+      sku: sku('TECNICO'), name: 'Técnico', unitId: unit.id, lengthMm: '120.5', diameterMm: '1,75',
+      purchaseUrl: 'https://loja.example/item', measures: [{ name: 'Passo', value: '0.4', unit: 'mm' }],
+    }), 201);
+    assert.equal(product.lengthMm, '120.5');
+    assert.equal(product.diameterMm, '1.75');
+    const path = '/catalog/products/' + product.id;
+    const change = { name: 'Técnico', widthMm: '30', measures: [{ name: 'Bico', value: '0.6', unit: 'mm' }] };
+
+    const stranger = await session('TEC-SEM', ['finance:view']);
+    expectStatus(await stranger('/catalog'), 403);
+    expectStatus(await stranger(path + '/details'), 403);
+    expectStatus(await stranger(path, { method: 'PATCH', body: change }), 403);
+
+    const reader = await session('TEC-LEITURA', ['catalog:view']);
+    const listed = expectStatus(await reader('/catalog'), 200).products.find(row => row.id === product.id);
+    assert.equal(listed.purchaseUrl, 'https://loja.example/item');
+    assert.deepEqual(listed.measures, [{ name: 'Passo', value: '0.4', unit: 'mm' }]);
+    assert.equal('currentCost' in listed, false);
+    const details = expectStatus(await reader(path + '/details'), 200);
+    assert.equal(details.technical.lengthMm, '120.5');
+    assert.equal(details.stock, null);
+    expectStatus(await reader(path, { method: 'PATCH', body: change }), 403);
+    assert.equal((await productRow(product.id)).widthMm, null);
+
+    const operator = await session('TEC-OPERA', ['catalog:operate']);
+    expectStatus(await operator(path, { method: 'PATCH', body: { name: 'Técnico', purchaseUrl: 'javascript:alert(1)' } }), 400);
+    assert.equal((await productRow(product.id)).purchaseUrl, 'https://loja.example/item');
+    const saved = expectStatus(await operator(path, { method: 'PATCH', body: change }), 200);
+    assert.equal(saved.widthMm, '30');
+    assert.equal(saved.lengthMm, '120.5');
+    assert.deepEqual(saved.measures, [{ name: 'Bico', value: '0.6', unit: 'mm' }]);
+    const kept = expectStatus(await operator(path, { method: 'PATCH', body: { name: 'Técnico' } }), 200);
+    assert.equal(kept.measures.length, 1);
+    const { events } = expectStatus(await admin('/audit?' + new URLSearchParams({ action: 'Alterar produto' })), 200);
+    const event = events.find(row => row.targetId === product.id && row.details?.after?.['Largura (mm)'] === '30');
+    assert.deepEqual(event.details.after.Medidas, ['Bico: 0.6 mm']);
+
+    expectStatus(await operator(path, { method: 'DELETE' }), 200);
+    assert.equal(await db.productMeasure.count({ where: { productId: product.id } }), 0);
+  });
+
   await t.test('conciliação persiste na reimportação e isola provedores', async () => {
     const { FinanceService } = require('../dist/api/finance/finance.js');
     const finance = app.get(FinanceService);

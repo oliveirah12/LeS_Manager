@@ -17,9 +17,26 @@ const unitField = z.object({
   factor: positive.refine(value => value.lt('1000000000000'), 'Fator fora da precisão permitida'),
 });
 const unitUpdate = unitField.omit({ familyId: true });
+/** Only web links with no embedded login: a stored "javascript:" link would run in the browser of whoever opens it. */
+function isWebUrl(value: string) {
+  if (!/^https?:\/\//i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return !!url.hostname && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+export const purchaseUrlField = z.string().trim().max(2048).refine(isWebUrl, 'Use um endereço http ou https, sem usuário ou senha');
+const measureField = z.object({ name: nameField, value: positive, unit: symbolField });
+export const measuresField = z.array(measureField).max(30).refine(
+  rows => new Set(rows.map(row => row.name.toLocaleLowerCase('pt-BR'))).size === rows.length, 'Não repita o nome de uma medida.',
+);
 export const productFields = z.object({
   sku: skuField, name: nameField, unitId: idField, typeId: idField.optional(),
   groupId: idField.nullish(), brandId: idField.nullish(), colorId: idField.nullish(), departmentId: idField.nullish(),
+  lengthMm: positive.nullish(), widthMm: positive.nullish(), heightMm: positive.nullish(), diameterMm: positive.nullish(),
+  purchaseUrl: purchaseUrlField.nullish(), measures: measuresField.optional(),
 });
 const productUpdate = productFields.partial({ sku: true, unitId: true });
 const productTypeFields = z.object({ name: nameField, isInput: z.boolean(), isManufactured: z.boolean() });
@@ -33,10 +50,15 @@ const kitFields = z.object({
   components: z.array(z.object({ productId: idField, unitId: idField, quantity: positive })).min(1).max(100),
 });
 export const productInclude = { unit: { include: { family: { include: { units: { where: { isBase: true } } } } } } } as const;
-const catalogProduct = {
+const catalogSummary = {
   id: true, sku: true, name: true, active: true, typeId: true, unitId: true, groupId: true, brandId: true, colorId: true, departmentId: true,
   ...productInclude,
 } as const;
+const technicalProduct = {
+  lengthMm: true, widthMm: true, heightMm: true, diameterMm: true, purchaseUrl: true,
+  measures: { select: { name: true, value: true, unit: true }, orderBy: { name: 'asc' } },
+} as const;
+const catalogProduct = { ...catalogSummary, ...technicalProduct } as const;
 /** What stock:view may read. A new product column stays private until it is listed here. */
 const stockProduct = {
   id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true,
@@ -49,12 +71,15 @@ const references = [
 
 const productAudit = {
   sku: true, name: true, type: { select: { name: true } }, unit: { select: { symbol: true } }, group: { select: { name: true } }, brand: { select: { name: true } },
-  color: { select: { name: true } }, department: { select: { name: true } },
+  color: { select: { name: true } }, department: { select: { name: true } }, ...technicalProduct,
 } as const;
 type AuditedProduct = Prisma.ProductGetPayload<{ select: typeof productAudit }>;
 const productValues = (product: AuditedProduct) => ({
   SKU: product.sku, Nome: product.name, Tipo: product.type.name, Unidade: product.unit.symbol, Grupo: product.group?.name ?? null,
   Marca: product.brand?.name ?? null, Cor: product.color?.name ?? null, Departamento: product.department?.name ?? null,
+  'Comprimento (mm)': product.lengthMm?.toFixed() ?? null, 'Largura (mm)': product.widthMm?.toFixed() ?? null,
+  'Altura (mm)': product.heightMm?.toFixed() ?? null, 'Diâmetro (mm)': product.diameterMm?.toFixed() ?? null,
+  'URL de compra': product.purchaseUrl, Medidas: product.measures.map(row => row.name + ': ' + row.value.toFixed() + ' ' + row.unit),
 });
 type AuditedKit = { sku: string; name: string; components: { quantity: Prisma.Decimal; product: { sku: string } }[] };
 const kitValues = (kit: AuditedKit) => ({
@@ -243,7 +268,7 @@ export class CatalogService {
       this.registrations(),
       this.db.product.findMany({ select: { ...catalogProduct, ...productUsage }, orderBy: { sku: 'asc' } }),
       this.db.kit.findMany({
-        include: { components: { include: { product: { select: catalogProduct } } }, ...kitUsage },
+        include: { components: { include: { product: { select: catalogSummary } } }, ...kitUsage },
         orderBy: { sku: 'asc' },
       }),
     ]);
@@ -298,7 +323,7 @@ export class CatalogService {
     const product = await this.db.product.findUnique({
       where: { id },
       select: {
-        id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true, wastePercent: true, ...productInclude,
+        id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true, wastePercent: true, ...productInclude, ...technicalProduct,
         type: { select: { name: true, isInput: true, isManufactured: true } },
         kitComponents: { select: { quantity: true, kit: { select: { sku: true, name: true, active: true } } }, orderBy: { kitId: 'asc' } },
         usedInRecipes: { select: { quantity: true, product: { select: { sku: true, name: true, active: true } } }, orderBy: { productId: 'asc' } },
@@ -328,6 +353,10 @@ export class CatalogService {
     const held = reserved?.(id) ?? new Prisma.Decimal(0);
     return {
       id: product.id, sku: product.sku, name: product.name, active: product.active, symbol: symbol(product), type: product.type,
+      technical: {
+        lengthMm: product.lengthMm, widthMm: product.widthMm, heightMm: product.heightMm, diameterMm: product.diameterMm,
+        purchaseUrl: product.purchaseUrl, measures: product.measures,
+      },
       kits: product.kitComponents.map(row => ({ ...row.kit, quantity: row.quantity })),
       recipe: seeRecipe ? {
         wastePercent: product.wastePercent,
@@ -406,7 +435,10 @@ export class CatalogService {
 
   async createProduct(tx: Prisma.TransactionClient, data: z.infer<typeof productFields> & { wastePercent?: Prisma.Decimal }) {
     await this.assertReferences(tx, data);
-    const product = await tx.product.create({ data, include: productInclude });
+    const { measures, ...fields } = data;
+    const product = await tx.product.create({
+      data: { ...fields, ...(measures?.length ? { measures: { create: measures } } : {}) }, include: productInclude,
+    });
     auditChange(null, productValues(await tx.product.findUniqueOrThrow({ where: { id: product.id }, select: productAudit })));
     return product;
   }
@@ -433,7 +465,14 @@ export class CatalogService {
         if (unit.familyId !== before.unit.familyId && block) throw new ConflictException(block + ' Escolha uma unidade da mesma família.');
       }
       // The revision change invalidates inventory previews counted with the previous unit.
-      await tx.product.update({ where: { id }, data: { ...data, ...(newUnitId ? { revision: { increment: 1 } } : {}) } });
+      const { measures, ...fields } = data;
+      await tx.product.update({
+        where: { id },
+        data: {
+          ...fields, ...(measures ? { measures: { deleteMany: {}, create: measures } } : {}),
+          ...(newUnitId ? { revision: { increment: 1 } } : {}),
+        },
+      });
       auditChange(productValues(before), productValues(await tx.product.findUniqueOrThrow({ where: { id }, select: productAudit })));
       return tx.product.findUniqueOrThrow({ where: { id }, select: catalogProduct });
     });
