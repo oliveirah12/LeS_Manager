@@ -10,6 +10,7 @@ import { Database, idField, nonnegative, parse, positive, serial, storedDecimal 
 import { allocate, averageCost, printerHourCost, productionCosting, sumValues } from '../stock/cost';
 import { StockService } from '../stock/stock';
 import { averageAfterDifference, blendedCost, pieceCostImpact, piecesInStock } from './correction-rules';
+import { suggestedExpense } from './expenses';
 import { LoadedOrder, manualExpenses, minutesField, orderInclude, orderInputs, presentOrder, symbolOf } from './orders';
 import { orderSale, saleFields } from './sale';
 
@@ -150,9 +151,15 @@ export class ProductionCorrectionService {
     const typedExpenses = new Map(data.inputExpenses.map(row => [row.inputId, storedDecimal(row.value)]));
     const inputExpenses = inputs.map(input => {
       const stored = order.expenses.find(row => row.source === 'INPUT' && row.inputId === input.inputId);
+      const before = input.used ?? new Prisma.Decimal(0);
+      const target = used.get(input.inputId)!;
+      // A value nobody typed follows the corrected consumption, at the rate frozen in the order.
+      const followed = !stored ? new Prisma.Decimal(0) : stored.edited || target.eq(before) ? stored.value
+        : before.gt(0) ? stored.value.times(target).div(before).toDecimalPlaces(12)
+        : suggestedExpense({ unitExpense: products.get(input.inputId)!.lastPurchaseExpense, quantity: target });
       return {
         inputId: input.inputId, title: stored?.title ?? 'Despesas de compra · ' + input.sku,
-        value: typedExpenses.get(input.inputId) ?? stored?.value ?? new Prisma.Decimal(0),
+        value: typedExpenses.get(input.inputId) ?? followed,
         edited: typedExpenses.has(input.inputId) ? true : stored?.edited ?? false,
       };
     });

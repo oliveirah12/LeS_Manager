@@ -73,6 +73,8 @@ class AppModule {}
 
 export async function createApp() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: ['error', 'warn'] });
+  // The default of 5 minutes would cut a 100 MB attachment on a slow connection.
+  app.getHttpServer().requestTimeout = 30 * 60 * 1000;
   app.setGlobalPrefix('api');
   app.useGlobalFilters(new DatabaseErrors());
   app.useGlobalInterceptors(new AuditInterceptor());

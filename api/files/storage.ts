@@ -45,7 +45,8 @@ export class DiskFileStorage extends FileStorage {
     let head = Buffer.alloc(0);
     for await (const chunk of createReadStream(temporaryPath)) {
       hash.update(chunk as Buffer);
-      if (head.length < 4) head = Buffer.concat([head, chunk as Buffer]).subarray(0, 4);
+      // Enough to pass a byte order mark and blank lines before the first XML tag.
+      if (head.length < 64) head = Buffer.concat([head, chunk as Buffer]).subarray(0, 64);
     }
     return { sha256: hash.digest('hex'), head };
   }

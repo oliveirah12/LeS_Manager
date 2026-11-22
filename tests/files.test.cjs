@@ -86,7 +86,7 @@ test('the storage saves, reads and removes a file, and only clears old temporari
   await writeFile(temporary, 'conteudo');
   const { sha256, head } = await storage.inspect(temporary);
   assert.equal(sha256, require('node:crypto').createHash('sha256').update('conteudo').digest('hex'));
-  assert.equal(head.toString(), 'cont');
+  assert.equal(head.toString(), 'conteudo');
   const key = newStorageKey();
   await storage.save(temporary, key);
   assert.deepEqual(await readdir(folder), []);

@@ -44,7 +44,8 @@ try {
       Write-Step 'Voltando ao banco anterior'
       Stop-App
       Restore-Database $safety
-      Restore-Files (Get-StoredFileKeys) $filePools
+      # The database is back, so a missing attachment must not keep the site offline.
+      try { Restore-Files (Get-StoredFileKeys) $filePools } catch { Write-Host "Aviso: $($_.Exception.Message)" -ForegroundColor Yellow }
     }
     Start-App
     throw "A restauracao foi desfeita. Motivo: $failure"

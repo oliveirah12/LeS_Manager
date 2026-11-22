@@ -82,8 +82,10 @@ function linkTarget(value: ExcelJS.CellValue) {
 /** A date cell arrives as a Date or as an Excel serial number. Text such as 22/11/2026 is validated later. */
 function dateText(value: ExcelJS.CellValue) {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
-  if (typeof value === 'number') return new Date(Math.round((value - 25569) * 86400000)).toISOString().slice(0, 10);
-  return value;
+  if (typeof value !== 'number') return value;
+  const date = new Date(Math.round((value - 25569) * 86400000));
+  // Out of the calendar range: the row validation refuses it with a clear message.
+  return Number.isNaN(date.getTime()) ? String(value) : date.toISOString().slice(0, 10);
 }
 
 /** Reads a sheet by its headers, so column order does not matter and older templates still work. */
