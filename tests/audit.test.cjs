@@ -12,6 +12,7 @@ const controllers = [
   require('../dist/api/catalog/recipe.js').RecipeController,
   require('../dist/api/files/files.js').ProductFilesController,
   require('../dist/api/finance/finance.js').FinanceController,
+  require('../dist/api/production/corrections.js').ProductionCorrectionController,
   require('../dist/api/production/orders.js').ProductionOrderController,
   require('../dist/api/production/payments.js').PaymentMethodController,
   require('../dist/api/production/production.js').ProductionController,
@@ -48,6 +49,19 @@ test('production routes require the production permission', () => {
       assert.deepEqual(Reflect.getMetadata('permissions', handler), [method === RequestMethod.GET ? 'production:view' : 'production:operate'], name);
     }
   }
+});
+
+test('correcting a finished order needs its own permission, which nothing else grants', () => {
+  const { canAccess, configurablePermissions } = require('../dist/api/access/security.js');
+  const controller = require('../dist/api/production/corrections.js').ProductionCorrectionController;
+  assert.deepEqual(Reflect.getMetadata('permissions', controller.prototype.revisions), ['production:view']);
+  for (const name of ['preview', 'correct']) assert.deepEqual(Reflect.getMetadata('permissions', controller.prototype[name]), ['production:view', 'production:correct'], name);
+  assert.equal(Reflect.getMetadata(AUDIT, controller.prototype.preview), false);
+  assert.equal(typeof Reflect.getMetadata(AUDIT, controller.prototype.correct), 'string');
+  assert.ok(configurablePermissions.includes('production:correct'));
+  assert.equal(canAccess(['production:operate', 'production:view', 'stock:operate'], 'production:correct'), false);
+  assert.equal(canAccess(['production:correct'], 'production:operate'), false);
+  assert.equal(canAccess(['admin'], 'production:correct'), true);
 });
 
 test('product file routes read with catalog:view and write with catalog:operate', () => {

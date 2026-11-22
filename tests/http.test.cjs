@@ -831,6 +831,115 @@ test('API REST com PostgreSQL', {
     expectStatus(await edit({}), 409);
   });
 
+  await t.test('correção técnica compensa por diferença e preserva o histórico', async () => {
+    const typed = async (name, typeId) => {
+      const product = await createProduct(name, unit.id);
+      expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name, typeId: '00000000-0000-4000-8000-00000000000' + typeId } }), 200);
+      return product;
+    };
+    const input = await typed('CORRIGE-INSUMO', 2);
+    const piece = await typed('CORRIGE-PECA', 3);
+    expectStatus(await movement(input.id, unit.id, 'PURCHASE', '120', '1'), 201);
+    expectStatus(await admin(`/catalog/products/${piece.id}/recipe`, { method: 'PUT', body: { wastePercent: '0', inputs: [{ inputId: input.id, unitId: unit.id, quantity: '10' }] } }), 200);
+    const printer = expectStatus(await post('/production/printers', { name: sku('CORRIGE-IMPRESSORA'), powerWatts: '100', hourlyCost: '0' }), 201);
+    await db.productionSettings.update({ where: { id: 'default' }, data: { energyRate: 0 } });
+    const started = '2026-11-21T10:00:00.000Z';
+    const produce = async (quantity, lost, salePrice) => {
+      const order = expectStatus(await post('/production/orders', {
+        printerId: printer.id, plannedStart: started, estimatedMinutes: 60, items: [{ productId: piece.id, quantity, ...(salePrice ? { salePrice } : {}) }],
+      }), 201);
+      expectStatus(await post(`/production/orders/${order.id}/start`, { startedAt: started }), 200);
+      return expectStatus(await post(`/production/orders/${order.id}/finish`, {
+        finishedAt: '2026-11-21T11:00:00.000Z', items: [{ productId: piece.id, lost }], inputs: [{ inputId: input.id, used: String(Number(quantity) * 10) }],
+      }), 200);
+    };
+    const order = await produce('10', '0');
+    assert.equal((await productRow(piece.id)).currentCost.toString(), '10');
+    expectStatus(await movement(piece.id, unit.id, 'OUT', '4'), 201);
+    expectStatus(await movement(input.id, unit.id, 'PURCHASE', '180', '3'), 201);
+    assert.equal((await productRow(input.id)).currentCost.toString(), '2.8');
+    const original = await db.movement.findMany({ where: { OR: [{ productionOrderId: order.id }, { productId: piece.id, kind: 'OUT' }] }, orderBy: { id: 'asc' } });
+
+    const path = `/production/orders/${order.id}/correction`;
+    const more = { reason: 'Pesagem refeita', inputs: [{ inputId: input.id, used: '120' }] };
+    const noCosts = value => assert.doesNotMatch(JSON.stringify(value), /cost|energyRate|powerWatts|balance|averages/i);
+    for (const [name, permissions] of [['COR-SEM', ['stock:operate']], ['COR-LE', ['production:view']], ['COR-OPERA', ['production:operate', 'stock:operate']], ['COR-SO', ['production:correct']]]) {
+      const client = await session(name, permissions);
+      expectStatus(await client(path + '/preview', { method: 'POST', body: more }), 403);
+      expectStatus(await client(path, { method: 'POST', body: { ...more, expectedRevision: 0, stock: [] } }), 403);
+    }
+    const corrector = await session('COR-CORRIGE', ['production:view', 'production:correct']);
+    const hidden = expectStatus(await corrector(path + '/preview', { method: 'POST', body: more }), 200);
+    noCosts(hidden);
+    expectStatus(await corrector(path + '/preview', { method: 'POST', body: { ...more, hourlyCost: '1' } }), 403);
+    expectStatus(await post(path + '/preview', { inputs: more.inputs }), 400);
+    expectStatus(await post(path + '/preview', { reason: 'Sem mudança' }), 400);
+    const planned = expectStatus(await post(`/production/orders`, { printerId: printer.id, plannedStart: started, estimatedMinutes: 60, items: [{ productId: piece.id, quantity: '1' }] }), 201);
+    expectStatus(await post(`/production/orders/${planned.id}/correction/preview`, more), 409);
+
+    // Partial balance: 20 g more at the average of 2.8 raises the piece from 10 to 15.6, and only the 6 still in stock reach the average.
+    const preview = expectStatus(await post(path + '/preview', more), 200);
+    assert.deepEqual([preview.costInStock, preview.costIssued, preview.averages[0].after], ['33.6', '22.4', '15.6']);
+    assert.equal((await productRow(input.id)).quantity.toString(), '200');
+    const confirm = (plan, body, client = admin) => client(path, { method: 'POST', body: { ...body, expectedRevision: plan.revision, stock: plan.stock } });
+    const first = expectStatus(await confirm(preview, more, corrector), 200);
+    noCosts(first);
+    assert.equal(first.revision, 1);
+    expectStatus(await confirm(preview, { ...more, inputs: [{ inputId: input.id, used: '125' }] }), 409);
+    let stockedPiece = await productRow(piece.id);
+    assert.deepEqual([stockedPiece.quantity.toString(), stockedPiece.currentCost.toString()], ['6', '15.6']);
+    const stockedInput = await productRow(input.id);
+    assert.deepEqual([stockedInput.quantity.toString(), stockedInput.currentCost.toString()], ['180', '2.8']);
+    const untouched = await db.movement.findMany({ where: { id: { in: original.map(row => row.id) } }, orderBy: { id: 'asc' } });
+    assert.deepEqual(JSON.parse(JSON.stringify(untouched)), JSON.parse(JSON.stringify(original)));
+    const adjust = await db.movement.findFirst({ where: { productionOrderId: order.id, kind: 'PRODUCTION_ADJUST_OUT' } });
+    assert.deepEqual([adjust.quantity.toString(), adjust.unitCost.toString()], ['-20', '2.8']);
+
+    // Reserved balance cannot pay for extra consumption.
+    const reserving = expectStatus(await post('/production/orders', { printerId: printer.id, plannedStart: started, estimatedMinutes: 60, items: [{ productId: piece.id, quantity: '17' }] }), 201);
+    expectStatus(await post(`/production/orders/${reserving.id}/start`, { startedAt: started }), 200);
+    expectStatus(await post(path + '/preview', { reason: 'Mais insumo', inputs: [{ inputId: input.id, used: '140' }] }), 409);
+    expectStatus(await post(`/production/orders/${reserving.id}/cancel`, {}), 200);
+    expectStatus(await post(path + '/preview', { reason: 'Demais', inputs: [{ inputId: input.id, used: '100000' }] }), 409);
+
+    // Zero balance: the difference stays on the revision and the average does not move.
+    expectStatus(await movement(piece.id, unit.id, 'OUT', '6'), 201);
+    expectStatus(await post(path + '/preview', { reason: 'Peças a menos', items: [{ productId: piece.id, lost: '1' }] }), 409);
+    const machine = { reason: 'Custo da máquina', hourlyCost: '10' };
+    const zero = expectStatus(await post(path + '/preview', machine), 200);
+    assert.deepEqual([zero.costInStock, zero.costIssued, zero.averages], ['0', '10', []]);
+    const second = expectStatus(await confirm(zero, machine), 200);
+    assert.deepEqual([second.revision, second.totalCost, second.machineCost], [2, '166', '10']);
+    stockedPiece = await productRow(piece.id);
+    assert.deepEqual([stockedPiece.quantity.toString(), stockedPiece.currentCost.toString()], ['0', '15.6']);
+
+    // Two simultaneous corrections from the same preview: exactly one goes through.
+    const back = { reason: 'Sobrou filamento', inputs: [{ inputId: input.id, used: '110' }] };
+    const race = expectStatus(await post(path + '/preview', back), 200);
+    const results = await Promise.all([confirm(race, back), confirm(race, back)]);
+    assert.deepEqual(results.map(row => row.status).sort(), [200, 409]);
+    assert.equal((await productRow(input.id)).quantity.toString(), '190');
+    assert.equal(await db.productionRevision.count({ where: { orderId: order.id } }), 3);
+
+    const history = expectStatus(await corrector(`/production/orders/${order.id}/revisions`), 200);
+    assert.deepEqual(history.map(row => row.number), [3, 2, 1]);
+    assert.equal(history[2].reason, 'Pesagem refeita');
+    noCosts(history);
+    const full = expectStatus(await admin(`/production/orders/${order.id}/revisions`), 200);
+    assert.deepEqual([full[2].costInStock, full[2].costIssued, full[2].after['Custo total']], ['33.6', '22.4', '156']);
+    const audit = await waitForAuditEvent({ action: 'Corrigir ordem de produção concluída' }, row => row.details?.context?.Motivo === 'Pesagem refeita');
+    assert.deepEqual([audit.details.before['Custo total'], audit.details.after['Custo total']], ['100', '156']);
+
+    // Recovered pieces enter at the new cost, and the sale follows the good pieces.
+    const lossy = await produce('2', '1', '50');
+    assert.equal(lossy.sale.values.total, '50');
+    const fixed = { reason: 'Peça aproveitada', items: [{ productId: piece.id, lost: '0' }] };
+    const recovered = expectStatus(await admin(`/production/orders/${lossy.id}/correction/preview`, { method: 'POST', body: fixed }), 200);
+    const updated = expectStatus(await admin(`/production/orders/${lossy.id}/correction`, { method: 'POST', body: { ...fixed, expectedRevision: recovered.revision, stock: recovered.stock } }), 200);
+    assert.deepEqual([updated.items[0].good, updated.sale.values.total], ['2', '100']);
+    assert.equal((await productRow(piece.id)).quantity.toString(), '2');
+  });
+
   await t.test('famílias e unidades só mudam o que não afeta o histórico', async () => {
     const id = 'M' + Date.now();
     const patch = (path, body) => admin(path, { method: 'PATCH', body });

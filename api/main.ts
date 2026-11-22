@@ -16,6 +16,7 @@ import { DiskFileStorage, FileStorage } from './files/storage';
 import { BankConnectionService } from './finance/connection';
 import { FinanceController, FinanceService } from './finance/finance';
 import { HealthController } from './health';
+import { ProductionCorrectionController, ProductionCorrectionService } from './production/corrections';
 import { ProductionOrderController, ProductionOrderService } from './production/orders';
 import { PaymentMethodController, PaymentMethodService } from './production/payments';
 import { ProductionController, ProductionService } from './production/production';
@@ -50,8 +51,8 @@ class StockModule {}
 class FinanceModule {}
 
 @Module({
-  imports: [StockModule], controllers: [ProductionController, ProductionOrderController, PaymentMethodController],
-  providers: [ProductionService, ProductionOrderService, PaymentMethodService],
+  imports: [StockModule], controllers: [ProductionController, ProductionCorrectionController, ProductionOrderController, PaymentMethodController],
+  providers: [ProductionService, ProductionOrderService, ProductionCorrectionService, PaymentMethodService],
 })
 class ProductionModule {}
 

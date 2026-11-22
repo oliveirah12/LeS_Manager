@@ -15,9 +15,9 @@ import { PlanRow, planExpenses, setInputTotals, substituteInputs } from './plan'
 import { orderSale, saleFields, saleResult } from './sale';
 
 const dateField = z.iso.datetime().transform(value => new Date(value));
-const minutesField = z.number().int().positive().max(1000000);
+export const minutesField = z.number().int().positive().max(1000000);
 const expenseTitle = z.string().trim().min(1, 'Informe o título da despesa').max(120);
-const manualExpenses = z.array(z.object({ title: expenseTitle, value: nonnegative })).max(50);
+export const manualExpenses = z.array(z.object({ title: expenseTitle, value: nonnegative })).max(50);
 const orderFields = {
   printerId: idField, plannedStart: dateField, estimatedMinutes: minutesField,
   notes: z.string().trim().max(500).optional(),
@@ -44,7 +44,7 @@ export const finishFields = z.object({
 const cancelFields = z.object({ inputs: usedField.default([]) });
 type Finish = z.infer<typeof finishFields>;
 
-const orderInclude = {
+export const orderInclude = {
   printer: true, paymentMethod: true, user: { select: { name: true } },
   expenses: { orderBy: { title: 'asc' } },
   items: {
@@ -61,12 +61,12 @@ const orderInclude = {
     },
   },
 } as const;
-type LoadedOrder = Prisma.ProductionOrderGetPayload<{ include: typeof orderInclude }>;
+export type LoadedOrder = Prisma.ProductionOrderGetPayload<{ include: typeof orderInclude }>;
 const statusNames = { PLANNED: 'Planejada', PRINTING: 'Em impressão', DONE: 'Concluída', CANCELED: 'Cancelada' } as const;
-const symbolOf = (product: { unit: { symbol: string; family: { units: { symbol: string }[] } } }) => product.unit.family.units[0]?.symbol ?? product.unit.symbol;
+export const symbolOf = (product: { unit: { symbol: string; family: { units: { symbol: string }[] } } }) => product.unit.family.units[0]?.symbol ?? product.unit.symbol;
 
 /** One line per input, with the exact sums the panel shows. */
-function orderInputs(order: LoadedOrder) {
+export function orderInputs(order: LoadedOrder) {
   const inputs = new Map<string, {
     inputId: string; sku: string; name: string; symbol: string; familyId: string; planned: Prisma.Decimal; used: Prisma.Decimal | null;
     parts: { productId: string; planned: Prisma.Decimal }[]; replaces: string[];
@@ -121,7 +121,7 @@ function presentSale(order: LoadedOrder, seeCosts: boolean, cost: Prisma.Decimal
 /** Fields are listed one by one, so a new cost column stays private until it is added to the stock:view block. */
 export function presentOrder(order: LoadedOrder, seeCosts: boolean, estimatedCost: Prisma.Decimal | null = null) {
   return {
-    id: order.id, number: order.number, status: order.status, printerId: order.printerId, userId: order.userId, user: order.user, notes: order.notes,
+    id: order.id, number: order.number, revision: order.revision, status: order.status, printerId: order.printerId, userId: order.userId, user: order.user, notes: order.notes,
     createdAt: order.createdAt, plannedStart: order.plannedStart, estimatedMinutes: order.estimatedMinutes, expectedEnd: order.expectedEnd,
     startedAt: order.startedAt, finishedAt: order.finishedAt, printMinutes: order.printMinutes, absorbLoss: order.absorbLoss,
     printer: { id: order.printer.id, name: order.printer.name }, inputs: orderInputs(order),
