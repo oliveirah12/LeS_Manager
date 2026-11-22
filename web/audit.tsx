@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { RefreshCw } from 'lucide-react';
-import { Badge, dateTime, Field, Filters, Loading, message, PageActions, Select, Table, useData } from './ui';
+import { Badge, dateTime, Field, Filters, Loading, message, PageActions, Select, sortParam, SortState, Table, useData } from './ui';
 
 type Values = Record<string, string | number | boolean | null | string[]>;
 type Details = { before?: Values; after?: Values; context?: Values };
@@ -42,8 +42,9 @@ export function Audit() {
   const [filters, setFilters] = useState<Filters>({});
   const [cursors, setCursors] = useState<string[]>([]);
   const cursor = cursors.at(-1);
+  const [sort, setSort] = useState<SortState>(null);
   const options = useData<{ actions: string[]; users: { id: string; name: string }[] }>('audit/filters');
-  const query = new URLSearchParams(Object.entries({ ...filters, cursor }).filter((entry): entry is [string, string] => !!entry[1]));
+  const query = new URLSearchParams(Object.entries({ ...filters, cursor, sort: sortParam(sort) }).filter((entry): entry is [string, string] => !!entry[1]));
   const { data, error, loading, reload } = useData<AuditPage>('audit' + (query.size ? '?' + query : ''));
   const active = Object.values(filters).filter(Boolean).length;
 
@@ -60,7 +61,8 @@ export function Audit() {
     </Filters>
     {message(options.error)}{message(error)}
     {loading && !data ? <Loading label="Carregando auditoria…" /> : data && <Table empty="Nenhum evento encontrado."
-      columns={['Ação', 'Usuário', 'Data', 'Detalhes', 'Resultado']}
+      sort={sort} onSort={next => { setSort(next); setCursors([]); }}
+      columns={[{ label: 'Ação', sortKey: 'action' }, 'Usuário', { label: 'Data', sortKey: 'createdAt' }, 'Detalhes', 'Resultado']}
       rows={data.events.map(event => [
         <span className="cell-title">{event.action}</span>, event.actorName ?? <span className="muted">—</span>, dateTime(event.createdAt),
         <Changes details={event.details} />, <Outcome status={event.status} />,

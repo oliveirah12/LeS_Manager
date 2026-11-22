@@ -44,6 +44,19 @@ export function saleMargin(salePrice: Prisma.Decimal | null, cost: Prisma.Decima
   return { profit, percent: profit.div(salePrice).times(100).toDecimalPlaces(2) };
 }
 
+/**
+ * Price that reaches the desired margin over the sale price, and whether the confirmed price falls short of it.
+ * The suggestion always rounds up, so rounding never takes the price below the margin. Prices under R$ 1,
+ * common per gram of filament, keep 4 places because a whole cent would distort their margin.
+ */
+export function salePricing(salePrice: Prisma.Decimal | null, cost: Prisma.Decimal | null, marginPercent: Prisma.Decimal | null) {
+  if (cost === null || marginPercent === null || cost.lte(0) || marginPercent.gte(100)) return { suggestedPrice: null, belowTargetMargin: false };
+  const exact = cost.div(new Prisma.Decimal(1).minus(marginPercent.div(100)));
+  const suggestedPrice = exact.toDecimalPlaces(exact.gte(1) ? 2 : 4, Prisma.Decimal.ROUND_UP);
+  const belowTargetMargin = salePrice !== null && salePrice.gt(0) && salePrice.minus(cost).div(salePrice).times(100).lt(marginPercent);
+  return { suggestedPrice, belowTargetMargin };
+}
+
 type CostingItem = { productId: string; planned: Prisma.Decimal; lost: Prisma.Decimal };
 type CostingRow = { productId: string; inputId: string; planned: Prisma.Decimal; familyId: string; unitCost: Prisma.Decimal | null };
 

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Pencil, Plus, Power, PowerOff, Trash2, Zap } from 'lucide-react';
-import { api, Badge, brl, decimal, Field, fields, Loading, message, Modal, ModalForm, notify, PageActions, Section, Table, useData } from './ui';
+import { api, Badge, brl, by, decimal, Field, fields, Loading, message, Modal, ModalForm, notify, PageActions, Section, Table, useData } from './ui';
 
 type Printer = { id: string; name: string; powerWatts: string; hourlyCost: string; hourCost: string; active: boolean; deleteBlock: string | null };
 type PrinterView = { energyRate: string; printers: Printer[] };
@@ -28,8 +28,9 @@ export function Printers({ edit }: { edit: boolean }) {
         columns={['Impressora', { label: 'Potência', end: true }, { label: 'Desgaste por hora', end: true }, { label: 'Custo por hora', end: true }, 'Situação',
           ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
         rows={data.printers.map(row => [
-          <span className="cell-title">{row.name}</span>, decimal(row.powerWatts) + ' W', brl(row.hourlyCost), <strong>{brl(row.hourCost)}</strong>,
-          row.active ? <Badge tone="ok"><span className="dot" />Ativa</Badge> : <Badge>Inativa</Badge>,
+          by(row.name, <span className="cell-title">{row.name}</span>), by(row.powerWatts, decimal(row.powerWatts) + ' W'), by(row.hourlyCost, brl(row.hourlyCost)),
+          by(row.hourCost, <strong>{brl(row.hourCost)}</strong>),
+          by(row.active ? 'Ativa' : 'Inativa', row.active ? <Badge tone="ok"><span className="dot" />Ativa</Badge> : <Badge>Inativa</Badge>),
           ...(edit ? [<div className="actions">
             <button type="button" className="btn secondary small" onClick={() => setPrinter(row)}><Pencil size={14} aria-hidden="true" />Editar</button>
             <button type="button" className="btn ghost small" onClick={() => setStatus(row)}>

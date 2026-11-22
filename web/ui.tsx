@@ -1,6 +1,7 @@
-import { createContext, FormEvent, ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createContext, FormEvent, KeyboardEvent, ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CheckCircle2, Eye, EyeOff, Inbox, Search, SlidersHorizontal, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronsUpDown, Eye, EyeOff, Inbox, Search, SlidersHorizontal, X } from 'lucide-react';
+import { nextSort, sortRows, SortState, SortValue } from './format';
 
 /* ---------- Data ---------- */
 
@@ -63,7 +64,8 @@ export function useData<T>(path: string | null) {
 
 // The screens keep importing these from ui; the pure logic lives in format so the tests can load it.
 export { accessible, applyFilters, brl, decimal, displayDate, quantity, yesNo, yesNoOptions } from './format';
-export type { TableFilter } from './format';
+export { sortParam } from './format';
+export type { SortState, TableFilter } from './format';
 export const dateTime = (value: string) => new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
 export const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 export function relativeTime(value: string) {
@@ -264,10 +266,105 @@ export function Select({ name, label, options, defaultValue, onChange, required 
   name: string; label: string; options: { id: string; name: string }[]; defaultValue?: string;
   onChange?: (id: string) => void; required?: boolean; placeholder?: string;
 }) {
-  return <label>{label}<select name={name} defaultValue={defaultValue ?? ''} required={required} onChange={event => onChange?.(event.target.value)}>
-    <option value="">{placeholder ?? (required ? 'Selecione' : 'Nenhum')}</option>
-    {options.map(option => <option value={option.id} key={option.id}>{option.name}</option>)}
-  </select></label>;
+  const id = useId();
+  const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const initial = useRef(defaultValue ?? '');
+  const [value, setValue] = useState(initial.current);
+  const [query, setQuery] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const emptyLabel = placeholder ?? (required ? 'Selecione' : 'Nenhum');
+  // Like a native select, a value without a matching option counts as empty.
+  const selected = options.find(option => option.id === value);
+  const current = selected?.id ?? '';
+  const visible = query?.trim() ? options.filter(option => matches(query, option.name)) : [{ id: '', name: emptyLabel }, ...options];
+  const optionId = (index: number) => id + '-option-' + index;
+
+  // The hidden input carries the value, so the visible one reports the missing choice to the browser's validation.
+  useLayoutEffect(() => { input.current?.setCustomValidity(required && !current ? 'Selecione uma opção.' : ''); }, [required, current]);
+  useEffect(() => {
+    const form = input.current?.form;
+    if (!form) return;
+    const reset = () => { setValue(initial.current); setQuery(null); setOpen(false); };
+    form.addEventListener('reset', reset);
+    return () => form.removeEventListener('reset', reset);
+  }, []);
+  // A popover stays inside the dialog in the DOM but paints in the top layer, free of the panel's scroll clipping.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const popup = list.current!;
+    popup.showPopover?.();
+    const place = () => {
+      const box = input.current!.getBoundingClientRect();
+      const below = (window.visualViewport?.height ?? innerHeight) - box.bottom - 12;
+      const above = box.top - 12;
+      const upward = below < 180 && above > below;
+      popup.style.maxHeight = Math.min(280, upward ? above : below) + 'px';
+      popup.style.left = box.left + 'px';
+      popup.style.width = box.width + 'px';
+      popup.style.top = (upward ? box.top - 4 - popup.offsetHeight : box.bottom + 4) + 'px';
+    };
+    place();
+    addEventListener('scroll', place, true);
+    addEventListener('resize', place);
+    // The panel slides in, so a list opened during the animation is placed again when it ends.
+    addEventListener('animationend', place, true);
+    window.visualViewport?.addEventListener('resize', place);
+    return () => {
+      removeEventListener('scroll', place, true);
+      removeEventListener('resize', place);
+      removeEventListener('animationend', place, true);
+      window.visualViewport?.removeEventListener('resize', place);
+    };
+  }, [open, visible.length]);
+  useEffect(() => {
+    if (open) document.getElementById(optionId(active))?.scrollIntoView({ block: 'nearest' });
+  }, [open, active]);
+
+  function show() {
+    setActive(Math.max(0, visible.findIndex(option => option.id === current)));
+    setOpen(true);
+  }
+  function close() { setOpen(false); setQuery(null); }
+  function choose(option: { id: string }) {
+    setValue(option.id);
+    close();
+    if (option.id !== current) onChange?.(option.id);
+  }
+  function keyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!open) show();
+      else if (visible.length) setActive((active + (event.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length);
+    } else if (open && event.key === 'Enter') {
+      event.preventDefault();
+      if (visible[active]) choose(visible[active]);
+    } else if (open && event.key === 'Escape') {
+      // Closes only the list: the surrounding dialog stays open.
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    }
+  }
+  return <div className="combo">
+    <label htmlFor={id}>{label}</label>
+    <input type="hidden" name={name} value={current} />
+    <input ref={input} id={id} role="combobox" autoComplete="off" spellCheck={false} placeholder={emptyLabel}
+      aria-autocomplete="list" aria-expanded={open} aria-controls={id + '-list'} aria-required={required}
+      aria-activedescendant={open && visible[active] ? optionId(active) : undefined}
+      value={query ?? selected?.name ?? ''} onKeyDown={keyDown} onBlur={close}
+      onFocus={event => event.currentTarget.select()}
+      onClick={event => { if (!open) { show(); event.currentTarget.select(); } }}
+      onChange={event => { setQuery(event.target.value); setActive(0); setOpen(true); }} />
+    <ChevronDown size={16} aria-hidden="true" className="combo-icon" />
+    {open && <ul ref={list} id={id + '-list'} role="listbox" aria-label={label} className="combo-list" popover="manual"
+      onMouseDown={event => event.preventDefault()}>
+      {visible.map((option, index) => <li key={option.id || 'empty'} id={optionId(index)} role="option" aria-selected={option.id === current}
+        data-active={index === active} className={option.id ? undefined : 'muted'} onMouseMove={() => setActive(index)} onClick={() => choose(option)}>{option.name}</li>)}
+      {!visible.length && <li role="presentation" className="combo-none">Nada encontrado</li>}
+    </ul>}
+  </div>;
 }
 
 export function SearchInput({ value, onChange, label = 'Buscar', placeholder = 'Buscar por SKU ou nome' }: {
@@ -335,22 +432,51 @@ export function matches(query: string, ...texts: (string | null | undefined)[]) 
 
 /* ---------- Tables ---------- */
 
-export type Column = string | { label: string; end?: boolean; hideLabel?: boolean; actions?: boolean };
+export type Column = string | { label: string; end?: boolean; hideLabel?: boolean; actions?: boolean; sortKey?: string };
 
-/** A table on wide screens and a list of cards on phones. The first column is each card's title. */
-export function Table({ columns, rows, empty = 'Nenhum registro.', footer, responsive = true }: {
-  columns: Column[]; rows: ReactNode[][]; empty?: string; footer?: ReactNode; responsive?: boolean;
+/** A drawn cell paired with the raw value it sorts by, such as an exact decimal behind "R$ 1.200,00". */
+export class SortCell { constructor(readonly value: SortValue, readonly content: ReactNode) {} }
+export const by = (value: SortValue, content: ReactNode = value) => new SortCell(value, content);
+const rawValue = (cell: unknown): SortValue => cell instanceof SortCell ? cell.value : typeof cell === 'string' || typeof cell === 'number' ? cell : null;
+
+/**
+ * A table on wide screens and a list of cards on phones. The first column is each card's title.
+ * Without onSort it sorts the rows it holds: a column qualifies when its cells carry a raw value, and numeric
+ * (end) columns must use by(), since their text is formatted. With onSort the server sorts the columns with a sortKey.
+ */
+export function Table({ columns, rows, empty = 'Nenhum registro.', footer, responsive = true, sort, onSort }: {
+  columns: Column[]; rows: (ReactNode | SortCell)[][]; empty?: string; footer?: ReactNode; responsive?: boolean;
+  sort?: SortState; onSort?: (sort: SortState) => void;
 }) {
-  const specs = columns.map(column => typeof column === 'string' ? { label: column } : column);
+  const [localSort, setLocalSort] = useState<SortState>(null);
+  const specs = columns.map(column => typeof column === 'string' ? { label: column } as Exclude<Column, string> : column);
+  const active = onSort ? sort ?? null : localSort;
+  const sortKey = (column: Exclude<Column, string>, col: number) => {
+    if (onSort) return column.sortKey;
+    const sortable = !column.actions && rows.every(row => row[col] instanceof SortCell || (!column.end && rawValue(row[col]) !== null));
+    return sortable ? column.label : undefined;
+  };
   if (!rows.length) return <div className="table-card"><Empty>{empty}</Empty></div>;
+  const sortedCol = !onSort && active ? specs.findIndex((column, col) => sortKey(column, col) === active.key) : -1;
+  const indexed = rows.map((row, index) => ({ row, index }));
+  // Each row keeps its original index as key, so React moves the row instead of rewriting it.
+  const ordered = sortedCol < 0 ? indexed : sortRows(indexed, item => rawValue(item.row[sortedCol]), active!.direction, specs[sortedCol].end);
   return <div className={'table-card' + (responsive ? ' responsive' : '')}>
     <div className="table-scroll"><table>
-      <thead><tr>{specs.map(column => <th key={column.label} className={column.end ? 'end' : undefined}>
-        {column.actions ? <span className="sr-only">{column.label}</span> : column.label}</th>)}</tr></thead>
-      <tbody>{rows.map((row, index) => <tr key={index}>{row.map((cell, col) => {
+      <thead><tr>{specs.map((column, col) => {
+        const key = sortKey(column, col);
+        const direction = key && active?.key === key ? active.direction : undefined;
+        const Icon = direction === 'asc' ? ArrowUp : direction === 'desc' ? ArrowDown : ChevronsUpDown;
+        return <th key={column.label} className={column.end ? 'end' : undefined} scope="col"
+          aria-sort={key ? (direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : 'none') : undefined}>
+          {key ? <button type="button" className="sort-button" onClick={() => (onSort ?? setLocalSort)(nextSort(active, key))}>
+            {column.label}<Icon size={13} aria-hidden="true" /></button>
+            : column.actions ? <span className="sr-only">{column.label}</span> : column.label}</th>;
+      })}</tr></thead>
+      <tbody>{ordered.map(({ row, index }) => <tr key={index}>{row.map((cell, col) => {
         const column = specs[col];
         const className = [column?.end && 'end', (column?.hideLabel || column?.actions) && 'no-label', column?.actions && 'actions-cell'].filter(Boolean).join(' ');
-        return <td key={col} data-label={column?.label} className={className || undefined}>{cell}</td>;
+        return <td key={col} data-label={column?.label} className={className || undefined}>{cell instanceof SortCell ? cell.content : cell}</td>;
       })}</tr>)}</tbody>
     </table></div>
     {footer && <div className="table-footer">{footer}</div>}
@@ -370,13 +496,16 @@ export type Unit = { id: string; symbol: string; factor: string; familyId: strin
 export type Product = {
   id: string; sku: string; name: string; active: boolean; unit: Unit & { family: { units: Unit[] } }; quantity: string; currentCost: string | null; lastPurchaseCost: string | null;
   typeId: string; groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null; deleteBlock?: string | null; reserved?: string; type?: { isManufactured: boolean }; hasRecipe?: boolean;
+  lengthMm?: string | null; widthMm?: string | null; heightMm?: string | null; diameterMm?: string | null; purchaseUrl?: string | null;
+  measures?: { name: string; value: string; unit: string }[];
 };
 export type Kit = {
   id: string; sku: string; name: string; active: boolean; available: string; deleteBlock?: string | null;
   components: { productId: string; quantity: string; product: Product }[];
 };
 /** Product in the stock view, with its value at average cost computed by the API with exact decimals. */
-export type StockProduct = Product & { value: string; available: string; minStock: string | null; belowMinimum: boolean; salePrice: string | null; margin: { profit: string; percent: string } | null };
+export type StockProduct = Product & { value: string; available: string; minStock: string | null; belowMinimum: boolean; salePrice: string | null; margin: { profit: string; percent: string } | null;
+  marginPercent: string | null; suggestedPrice: string | null; belowTargetMargin: boolean };
 /** Costs computed by the API from the components' current average. */
 export type StockKit = Omit<Kit, 'components'> & {
   components: (Kit['components'][number] & { cost: string | null; share: string | null; yields: string })[];

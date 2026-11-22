@@ -1,14 +1,19 @@
-import { Badge, brl, dateTime, Loading, message, Modal, quantity, Table, Title, useData } from './ui';
+import { Badge, brl, by, dateTime, Loading, message, Modal, quantity, Table, Title, useData } from './ui';
 
 type Named = { sku: string; name: string; active: boolean; quantity: string };
 type ProductDetails = {
   sku: string; name: string; active: boolean; symbol: string; type: { name: string; isInput: boolean; isManufactured: boolean };
+  technical: {
+    lengthMm: string | null; widthMm: string | null; heightMm: string | null; diameterMm: string | null; purchaseUrl: string | null;
+    measures: { name: string; value: string; unit: string }[];
+  };
   kits: Named[];
   recipe: { wastePercent: string; inputs: { sku: string; name: string; symbol: string; quantity: string }[]; usedIn: Named[] } | null;
   orders: { number: number; status: 'PLANNED' | 'PRINTING'; planned: string }[] | null;
   stock: {
     quantity: string; reserved: string; available: string; currentCost: string | null; value: string; lastPurchaseCost: string | null;
     minStock: string | null; belowMinimum: boolean; salePrice: string | null; margin: { profit: string; percent: string } | null;
+    marginPercent: string | null; suggestedPrice: string | null; belowTargetMargin: boolean;
     lastMovement: { kind: string; quantity: string; createdAt: string } | null;
     purchases: { quantity: string; unitCost: string | null; createdAt: string }[];
     estimate: { unitCost: string; partialCost: boolean; producible: string; limiting: string } | null;
@@ -36,13 +41,18 @@ export function CatalogDetails({ target, close }: { target: DetailTarget; close:
 function ProductPanel({ id }: { id: string }) {
   const { data, error, loading } = useData<ProductDetails>('catalog/products/' + id + '/details');
   if (!data) return <>{message(error)}{loading && <Loading label="Carregando detalhes…" />}</>;
-  const { stock, recipe, symbol } = data;
+  const { stock, recipe, symbol, technical } = data;
   const amount = (value: string) => quantity(value) + ' ' + symbol;
+  const sizes = ([['Comprimento', technical.lengthMm], ['Largura', technical.widthMm], ['Altura', technical.heightMm], ['Diâmetro', technical.diameterMm]] as const)
+    .flatMap(([label, value]) => value === null ? [] : [[label, value] as const]);
   return <div className="stack">
     <dl className="dl">
       <div><dt>Produto</dt><dd>{data.name}</dd></div>
       <div><dt>Tipo</dt><dd>{data.type.name}</dd></div>
       <div><dt>Situação</dt><dd>{data.active ? 'Ativo' : 'Inativo'}</dd></div>
+      {sizes.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{quantity(value)} mm</dd></div>)}
+      {technical.measures.map(row => <div key={row.name}><dt>{row.name}</dt><dd>{quantity(row.value)} {row.unit}</dd></div>)}
+      {technical.purchaseUrl && <div><dt>URL de compra</dt><dd><a href={technical.purchaseUrl} target="_blank" rel="noopener noreferrer">Abrir link</a></dd></div>}
       {stock && <>
         <div><dt>Saldo</dt><dd>{amount(stock.quantity)}</dd></div>
         <div><dt>Reservado</dt><dd>{amount(stock.reserved)}</dd></div>
@@ -52,7 +62,9 @@ function ProductPanel({ id }: { id: string }) {
         <div><dt>Valor em estoque</dt><dd>{brl(stock.value)}</dd></div>
         <div><dt>Última compra</dt><dd>{brl(stock.lastPurchaseCost)}</dd></div>
         <div><dt>Preço de venda</dt><dd>{brl(stock.salePrice)}</dd></div>
-        <div><dt>Margem</dt><dd>{stock.margin ? quantity(stock.margin.percent) + '% · ' + brl(stock.margin.profit) + ' por ' + symbol : '—'}</dd></div>
+        <div><dt>Margem</dt><dd>{stock.margin ? quantity(stock.margin.percent) + '% · ' + brl(stock.margin.profit) + ' por ' + symbol : '—'}{stock.belowTargetMargin && <> <Badge tone="warn">Abaixo da desejada</Badge></>}</dd></div>
+        <div><dt>Margem desejada</dt><dd>{stock.marginPercent === null ? '—' : quantity(stock.marginPercent) + '%'}</dd></div>
+        <div><dt>Preço sugerido</dt><dd>{brl(stock.suggestedPrice)}</dd></div>
         <div><dt>Última movimentação</dt><dd>{stock.lastMovement
           ? (movementNames[stock.lastMovement.kind] ?? stock.lastMovement.kind) + ' · ' + dateTime(stock.lastMovement.createdAt) : '—'}</dd></div>
       </>}
@@ -70,27 +82,28 @@ function ProductPanel({ id }: { id: string }) {
     {recipe && recipe.inputs.length > 0 && <>
       <h3>Ficha técnica · perda de {quantity(recipe.wastePercent)}%</h3>
       <Table responsive={false} columns={['Insumo', { label: 'Por peça', end: true }]}
-        rows={recipe.inputs.map(row => [<Title name={row.name} code={row.sku} />, quantity(row.quantity) + ' ' + row.symbol])} />
+        rows={recipe.inputs.map(row => [by(row.name, <Title name={row.name} code={row.sku} />), by(row.quantity, quantity(row.quantity) + ' ' + row.symbol)])} />
     </>}
     {recipe && recipe.usedIn.length > 0 && <>
       <h3>Produtos que consomem</h3>
       <Table responsive={false} columns={['Produto', { label: 'Por peça', end: true }]}
-        rows={recipe.usedIn.map(row => [<Title name={row.name} code={row.sku} />, amount(row.quantity)])} />
+        rows={recipe.usedIn.map(row => [by(row.name, <Title name={row.name} code={row.sku} />), by(row.quantity, amount(row.quantity))])} />
     </>}
     {data.kits.length > 0 && <>
       <h3>Kits que usam</h3>
       <Table responsive={false} columns={['Kit', { label: 'Quantidade', end: true }]}
-        rows={data.kits.map(row => [<Title name={row.name} code={row.sku} />, amount(row.quantity)])} />
+        rows={data.kits.map(row => [by(row.name, <Title name={row.name} code={row.sku} />), by(row.quantity, amount(row.quantity))])} />
     </>}
     {!!data.orders?.length && <>
       <h3>Ordens em andamento</h3>
       <Table responsive={false} columns={['Ordem', 'Situação', { label: 'Previsto', end: true }]}
-        rows={data.orders.map(row => ['#' + row.number, <Badge tone={row.status === 'PRINTING' ? 'brand' : undefined}>{orderNames[row.status]}</Badge>, amount(row.planned)])} />
+        rows={data.orders.map(row => [by(row.number, '#' + row.number),
+          by(orderNames[row.status], <Badge tone={row.status === 'PRINTING' ? 'brand' : undefined}>{orderNames[row.status]}</Badge>), by(row.planned, amount(row.planned))])} />
     </>}
     {!!stock?.purchases.length && <>
       <h3>Últimas compras</h3>
       <Table responsive={false} columns={['Data', { label: 'Quantidade', end: true }, { label: 'Custo unitário', end: true }]}
-        rows={stock.purchases.map(row => [dateTime(row.createdAt), amount(row.quantity), brl(row.unitCost)])} />
+        rows={stock.purchases.map(row => [by(Date.parse(row.createdAt), dateTime(row.createdAt)), by(row.quantity, amount(row.quantity)), by(row.unitCost, brl(row.unitCost))])} />
     </>}
   </div>;
 }
@@ -113,8 +126,8 @@ function KitPanel({ id }: { id: string }) {
     <Table responsive={false} columns={['Componente', { label: 'Quantidade', end: true },
       ...(stock ? [{ label: 'Custo', end: true }, { label: 'Rende', end: true }] : [])]}
       rows={data.components.map(row => [
-        <Title name={row.name} code={row.sku} />, quantity(row.quantity) + ' ' + row.symbol,
-        ...(stock ? [brl(row.cost), quantity(row.yields ?? '0')] : []),
+        by(row.name, <Title name={row.name} code={row.sku} />), by(row.quantity, quantity(row.quantity) + ' ' + row.symbol),
+        ...(stock ? [by(row.cost, brl(row.cost)), by(row.yields ?? '0', quantity(row.yields ?? '0'))] : []),
       ])} />
   </div>;
 }

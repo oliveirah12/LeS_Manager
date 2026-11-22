@@ -7,34 +7,62 @@ import { Authenticated, Require } from '../access/access';
 import { canAccess } from '../access/security';
 import { Audit, auditChange, auditContext } from '../audit/recorder';
 import { Database, idField, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal } from '../shared';
-import { belowMinimum, kitCosting, recipeEstimate, saleMargin, stockValue, sumValues } from '../stock/cost';
+import { belowMinimum, kitCosting, recipeEstimate, saleMargin, salePricing, stockValue, sumValues } from '../stock/cost';
 
 const referenceField = z.object({ kind: z.enum(ReferenceKind), name: nameField });
-const symbolField = z.string().trim().min(1).max(24);
+export const symbolField = z.string().trim().min(1).max(24);
 const familyField = z.object({ name: nameField, baseSymbol: symbolField });
 const unitField = z.object({
   familyId: idField, symbol: symbolField,
   factor: positive.refine(value => value.lt('1000000000000'), 'Fator fora da precisão permitida'),
 });
 const unitUpdate = unitField.omit({ familyId: true });
+/** Only web links with no embedded login: a stored "javascript:" link would run in the browser of whoever opens it. */
+function isWebUrl(value: string) {
+  if (!/^https?:\/\//i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return !!url.hostname && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+export const purchaseUrlField = z.string().trim().max(2048).refine(isWebUrl, 'Use um endereço http ou https, sem usuário ou senha');
+const measureField = z.object({ name: nameField, value: positive, unit: symbolField });
+export const maxMeasures = 30;
+export const repeatedMeasure = (rows: { name: string }[]) => new Set(rows.map(row => row.name.toLocaleLowerCase('pt-BR'))).size !== rows.length;
+export const measuresField = z.array(measureField).max(maxMeasures).refine(rows => !repeatedMeasure(rows), 'Não repita o nome de uma medida.');
 export const productFields = z.object({
   sku: skuField, name: nameField, unitId: idField, typeId: idField.optional(),
   groupId: idField.nullish(), brandId: idField.nullish(), colorId: idField.nullish(), departmentId: idField.nullish(),
+  lengthMm: positive.nullish(), widthMm: positive.nullish(), heightMm: positive.nullish(), diameterMm: positive.nullish(),
+  purchaseUrl: purchaseUrlField.nullish(), measures: measuresField.optional(),
 });
 const productUpdate = productFields.partial({ sku: true, unitId: true });
 const productTypeFields = z.object({ name: nameField, isInput: z.boolean(), isManufactured: z.boolean() });
 /** Default type of every product, created by the migration. */
 export const defaultProductType = '00000000-0000-4000-8000-000000000001';
 const statusFields = z.strictObject({ active: z.boolean() });
-export const stockSettingsFields = z.strictObject({ minStock: nonnegative.nullable(), salePrice: positive.nullable() });
+export const marginField = nonnegative.refine(value => value.lt(100) && value.decimalPlaces() <= 2, 'Informe a margem abaixo de 100, com até 2 casas');
+export const stockSettingsFields = z.strictObject({ minStock: nonnegative.nullable(), salePrice: positive.nullable(), marginPercent: marginField.nullish() });
 const situation = (active: boolean) => active ? 'Ativo' : 'Inativo';
 const kitFields = z.object({
   sku: skuField, name: nameField,
   components: z.array(z.object({ productId: idField, unitId: idField, quantity: positive })).min(1).max(100),
 });
 export const productInclude = { unit: { include: { family: { include: { units: { where: { isBase: true } } } } } } } as const;
-const catalogProduct = {
+const catalogSummary = {
   id: true, sku: true, name: true, active: true, typeId: true, unitId: true, groupId: true, brandId: true, colorId: true, departmentId: true,
+  ...productInclude,
+} as const;
+const technicalProduct = {
+  lengthMm: true, widthMm: true, heightMm: true, diameterMm: true, purchaseUrl: true,
+  measures: { select: { name: true, value: true, unit: true }, orderBy: { name: 'asc' } },
+} as const;
+const catalogProduct = { ...catalogSummary, ...technicalProduct } as const;
+/** What stock:view may read. A new product column stays private until it is listed here. */
+const stockProduct = {
+  id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true, marginPercent: true,
   ...productInclude,
 } as const;
 const references = [
@@ -44,12 +72,15 @@ const references = [
 
 const productAudit = {
   sku: true, name: true, type: { select: { name: true } }, unit: { select: { symbol: true } }, group: { select: { name: true } }, brand: { select: { name: true } },
-  color: { select: { name: true } }, department: { select: { name: true } },
+  color: { select: { name: true } }, department: { select: { name: true } }, ...technicalProduct,
 } as const;
 type AuditedProduct = Prisma.ProductGetPayload<{ select: typeof productAudit }>;
 const productValues = (product: AuditedProduct) => ({
   SKU: product.sku, Nome: product.name, Tipo: product.type.name, Unidade: product.unit.symbol, Grupo: product.group?.name ?? null,
   Marca: product.brand?.name ?? null, Cor: product.color?.name ?? null, Departamento: product.department?.name ?? null,
+  'Comprimento (mm)': product.lengthMm?.toFixed() ?? null, 'Largura (mm)': product.widthMm?.toFixed() ?? null,
+  'Altura (mm)': product.heightMm?.toFixed() ?? null, 'Diâmetro (mm)': product.diameterMm?.toFixed() ?? null,
+  'URL de compra': product.purchaseUrl, Medidas: product.measures.map(row => row.name + ': ' + row.value.toFixed() + ' ' + row.unit),
 });
 type AuditedKit = { sku: string; name: string; components: { quantity: Prisma.Decimal; product: { sku: string } }[] };
 const kitValues = (kit: AuditedKit) => ({
@@ -238,7 +269,7 @@ export class CatalogService {
       this.registrations(),
       this.db.product.findMany({ select: { ...catalogProduct, ...productUsage }, orderBy: { sku: 'asc' } }),
       this.db.kit.findMany({
-        include: { components: { include: { product: { select: catalogProduct } } }, ...kitUsage },
+        include: { components: { include: { product: { select: catalogSummary } } }, ...kitUsage },
         orderBy: { sku: 'asc' },
       }),
     ]);
@@ -267,15 +298,20 @@ export class CatalogService {
   saveStockSettings(id: string, data: z.infer<typeof stockSettingsFields>) {
     const minStock = data.minStock && storedDecimal(data.minStock);
     const salePrice = data.salePrice && storedDecimal(data.salePrice);
-    const values = (row: { minStock: Prisma.Decimal | null; salePrice: Prisma.Decimal | null }) => ({
+    const values = (row: { minStock: Prisma.Decimal | null; salePrice: Prisma.Decimal | null; marginPercent: Prisma.Decimal | null }) => ({
       'Estoque mínimo': row.minStock?.toFixed() ?? null, 'Preço de venda': row.salePrice?.toFixed() ?? null,
+      'Margem desejada (%)': row.marginPercent?.toFixed() ?? null,
     });
     return serial(this.db, async tx => {
-      const before = await tx.product.findUnique({ where: { id }, select: { sku: true, minStock: true, salePrice: true } });
+      const before = await tx.product.findUnique({ where: { id }, select: { sku: true, minStock: true, salePrice: true, marginPercent: true } });
       if (!before) throw new NotFoundException('Produto não encontrado.');
+      // A client that does not send the margin keeps the stored one.
+      const marginPercent = data.marginPercent === undefined ? before.marginPercent : data.marginPercent;
       auditContext({ Produto: before.sku });
-      auditChange(values(before), values({ minStock, salePrice }));
-      return tx.product.update({ where: { id }, data: { minStock, salePrice }, select: { id: true, minStock: true, salePrice: true } });
+      auditChange(values(before), values({ minStock, salePrice, marginPercent }));
+      return tx.product.update({
+        where: { id }, data: { minStock, salePrice, marginPercent }, select: { id: true, minStock: true, salePrice: true, marginPercent: true },
+      });
     });
   }
 
@@ -293,7 +329,7 @@ export class CatalogService {
     const product = await this.db.product.findUnique({
       where: { id },
       select: {
-        id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true, wastePercent: true, ...productInclude,
+        id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true, marginPercent: true, wastePercent: true, ...productInclude, ...technicalProduct,
         type: { select: { name: true, isInput: true, isManufactured: true } },
         kitComponents: { select: { quantity: true, kit: { select: { sku: true, name: true, active: true } } }, orderBy: { kitId: 'asc' } },
         usedInRecipes: { select: { quantity: true, product: { select: { sku: true, name: true, active: true } } }, orderBy: { productId: 'asc' } },
@@ -323,6 +359,10 @@ export class CatalogService {
     const held = reserved?.(id) ?? new Prisma.Decimal(0);
     return {
       id: product.id, sku: product.sku, name: product.name, active: product.active, symbol: symbol(product), type: product.type,
+      technical: {
+        lengthMm: product.lengthMm, widthMm: product.widthMm, heightMm: product.heightMm, diameterMm: product.diameterMm,
+        purchaseUrl: product.purchaseUrl, measures: product.measures,
+      },
       kits: product.kitComponents.map(row => ({ ...row.kit, quantity: row.quantity })),
       recipe: seeRecipe ? {
         wastePercent: product.wastePercent,
@@ -334,7 +374,8 @@ export class CatalogService {
         quantity: product.quantity, reserved: held, available: Prisma.Decimal.max(0, product.quantity.minus(held)),
         currentCost: product.currentCost, value: stockValue(product.quantity, product.currentCost), lastPurchaseCost: product.lastPurchaseCost,
         lastMovement, purchases, minStock: product.minStock, belowMinimum: belowMinimum(product.quantity, held, product.minStock),
-        salePrice: product.salePrice, margin: saleMargin(product.salePrice, product.currentCost),
+        salePrice: product.salePrice, margin: saleMargin(product.salePrice, product.currentCost), marginPercent: product.marginPercent,
+        ...salePricing(product.salePrice, product.currentCost, product.marginPercent),
         estimate: product.type.isManufactured && product.recipe.length ? recipeEstimate(product.wastePercent, product.recipe.map(row => ({
           sku: row.input.sku, quantity: row.quantity, active: row.input.active, balance: row.input.quantity,
           reserved: reserved!(row.inputId), unitCost: row.input.currentCost,
@@ -365,10 +406,10 @@ export class CatalogService {
   async stockView() {
     const [products, kits, reservations] = await Promise.all([
       this.db.product.findMany({
-        where: { active: true }, include: { ...productInclude, type: { select: { isManufactured: true } } }, orderBy: { sku: 'asc' },
+        where: { active: true }, select: { ...stockProduct, type: { select: { isManufactured: true } } }, orderBy: { sku: 'asc' },
       }),
       this.db.kit.findMany({
-        where: { active: true }, include: { components: { include: { product: { include: productInclude } } } }, orderBy: { sku: 'asc' },
+        where: { active: true }, include: { components: { include: { product: { select: stockProduct } } } }, orderBy: { sku: 'asc' },
       }),
       this.db.productionConsumption.groupBy({ by: ['inputId'], where: { item: { order: { status: 'PRINTING' } } }, _sum: { planned: true } }),
     ]);
@@ -379,6 +420,7 @@ export class CatalogService {
       available: Prisma.Decimal.max(0, product.quantity.minus(reserved(product.id))),
       belowMinimum: belowMinimum(product.quantity, reserved(product.id), product.minStock),
       margin: saleMargin(product.salePrice, product.currentCost),
+      ...salePricing(product.salePrice, product.currentCost, product.marginPercent),
     }));
     return {
       products: valued,
@@ -399,9 +441,15 @@ export class CatalogService {
     }
   }
 
-  async createProduct(tx: Prisma.TransactionClient, data: z.infer<typeof productFields> & { wastePercent?: Prisma.Decimal }) {
+  /** The commercial fields come only from the initial load, whose route also requires stock:operate. */
+  async createProduct(tx: Prisma.TransactionClient, data: z.infer<typeof productFields> & {
+    wastePercent?: Prisma.Decimal; minStock?: Prisma.Decimal; salePrice?: Prisma.Decimal; marginPercent?: Prisma.Decimal;
+  }) {
     await this.assertReferences(tx, data);
-    const product = await tx.product.create({ data, include: productInclude });
+    const { measures, ...fields } = data;
+    const product = await tx.product.create({
+      data: { ...fields, ...(measures?.length ? { measures: { create: measures } } : {}) }, include: productInclude,
+    });
     auditChange(null, productValues(await tx.product.findUniqueOrThrow({ where: { id: product.id }, select: productAudit })));
     return product;
   }
@@ -428,7 +476,14 @@ export class CatalogService {
         if (unit.familyId !== before.unit.familyId && block) throw new ConflictException(block + ' Escolha uma unidade da mesma família.');
       }
       // The revision change invalidates inventory previews counted with the previous unit.
-      await tx.product.update({ where: { id }, data: { ...data, ...(newUnitId ? { revision: { increment: 1 } } : {}) } });
+      const { measures, ...fields } = data;
+      await tx.product.update({
+        where: { id },
+        data: {
+          ...fields, ...(measures ? { measures: { deleteMany: {}, create: measures } } : {}),
+          ...(newUnitId ? { revision: { increment: 1 } } : {}),
+        },
+      });
       auditChange(productValues(before), productValues(await tx.product.findUniqueOrThrow({ where: { id }, select: productAudit })));
       return tx.product.findUniqueOrThrow({ where: { id }, select: catalogProduct });
     });
@@ -656,7 +711,10 @@ export class CatalogController {
   @Post('products')
   addProduct(@Body() body: unknown) {
     const data = parse(productFields, body);
-    return serial(this.db, tx => this.catalog.createProduct(tx, data));
+    return serial(this.db, async tx => {
+      const { id } = await this.catalog.createProduct(tx, data);
+      return tx.product.findUniqueOrThrow({ where: { id }, select: catalogProduct });
+    });
   }
 
   @Require('catalog:operate')

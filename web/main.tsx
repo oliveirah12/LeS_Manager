@@ -261,14 +261,14 @@ function App() {
     {page === 'home' && <Home identity={identity} can={can} navigate={navigate} />}
     {(page === 'products' || page === 'inputs' || page === 'kits') && <Catalog key={page} page={page} edit={false} seeStock={can('stock:view')} />}
     {(page === 'register-products' || page === 'register-kits') &&
-      <Catalog key={page} page={page === 'register-products' ? 'products' : 'kits'} edit={can('catalog:operate')} />}
+      <Catalog key={page} page={page === 'register-products' ? 'products' : 'kits'} edit={can('catalog:operate')} editStock={can('stock:operate')} />}
     {(page === 'product-types' || page === 'GRUPO' || page === 'MARCA' || page === 'COR' || page === 'DEPARTAMENTO' || page === 'families' || page === 'units') &&
       <Registrations key={page} page={page} edit={can('registrations:operate')} admin={admin} />}
     {page === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}
     {(page === 'balance' || page === 'statement' || page === 'reconciliation' || page === 'integration') &&
       <Finance key={page} page={page} edit={can('finance:operate')} admin={admin} openStatement={() => navigate('statement')}
         openIntegration={() => navigate('integration')} />}
-    {page === 'production-orders' && <ProductionOrders edit={can('production:operate')} />}
+    {page === 'production-orders' && <ProductionOrders edit={can('production:operate')} seeCosts={can('stock:view')} />}
     {page === 'printers' && <Printers edit={can('production:operate')} />}
     {page === 'admin' && <Administration onUserChanged={async id => { if (id === identity.id) await signIn(); }} />}
     {page === 'audit' && <Audit />}

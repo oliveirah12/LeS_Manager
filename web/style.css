@@ -145,6 +145,17 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .file-field input::file-selector-button {
   margin-right: 10px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font-weight: 600; cursor: pointer;
 }
+.combo { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.combo input[role=combobox]:not([type=checkbox]):not([type=radio]):not([type=file]) { padding-right: 34px; text-overflow: ellipsis; }
+.combo-icon { position: absolute; right: 10px; bottom: 12px; color: var(--muted); pointer-events: none; }
+.combo-list {
+  position: fixed; inset: auto; margin: 0; padding: 4px; list-style: none; overflow-y: auto; font-size: .9rem; font-weight: 400;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg);
+}
+.combo-list li { padding: 8px 10px; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere; }
+.combo-list li[data-active='true'] { background: var(--hover); }
+.combo-list li[aria-selected='true'] { color: var(--brand-text); font-weight: 600; }
+.combo-list .combo-none { color: var(--muted); cursor: default; }
 .password-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .password-input { position: relative; }
 .password-input input:not([type=checkbox]):not([type=radio]):not([type=file]) { padding-right: 44px; }
@@ -257,6 +268,11 @@ tbody tr:first-child td { border-top: 0; }
 tbody tr { transition: background-color var(--fast); }
 tbody tr:hover { background: color-mix(in srgb, var(--hover) 55%, transparent); }
 th.end, td.end { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sort-button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; margin: -2px -4px; border: 0; border-radius: 4px; background: none; color: inherit; font: inherit; white-space: nowrap; }
+.sort-button:hover { color: var(--text); background: var(--hover); }
+.sort-button svg { opacity: .45; flex: none; }
+th[aria-sort='ascending'] .sort-button, th[aria-sort='descending'] .sort-button { color: var(--text); }
+th[aria-sort='ascending'] svg, th[aria-sort='descending'] svg { opacity: 1; color: var(--brand); }
 td .cell-title { display: block; font-weight: 600; }
 td .cell-title.with-badge { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 td .cell-sub { display: block; font-size: .8rem; color: var(--muted); }
@@ -458,7 +474,12 @@ dialog.panel.closing::backdrop { animation: fade-out var(--fast) ease-in both; }
   .table-card.responsive { background: transparent; border: 0; border-radius: 0; overflow: visible; }
   .responsive .table-scroll { overflow: visible; }
   .responsive table, .responsive tbody, .responsive tr, .responsive td { display: block; }
-  .responsive thead { display: none; }
+  /* On phones the header becomes a scrolling row with only the sort buttons. */
+  .responsive thead { display: block; margin-bottom: 8px; contain: inline-size; }
+  .responsive thead tr { display: flex; gap: 6px; padding: 0 0 2px; overflow-x: auto; background: transparent; border: 0; border-radius: 0; }
+  .responsive th { display: none; padding: 0; background: transparent; border: 0; }
+  .responsive th[aria-sort] { display: block; flex: none; }
+  .responsive .sort-button { margin: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
   .responsive tbody { display: flex; flex-direction: column; gap: 10px; }
   .responsive tr { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
   .responsive tbody tr:hover { background: var(--surface); }

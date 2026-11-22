@@ -1,9 +1,39 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost, belowMinimum, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, recipeEstimate, saleMargin } = require('../dist/api/stock/cost.js');
+const { averageCost, belowMinimum, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, recipeEstimate, saleMargin, salePricing } = require('../dist/api/stock/cost.js');
 
 const d = value => new Prisma.Decimal(value);
+const pricing = (price, cost, margin) => {
+  const result = salePricing(price === null ? null : d(price), cost === null ? null : d(cost), margin === null ? null : d(margin));
+  return [result.suggestedPrice?.toFixed() ?? null, result.belowTargetMargin];
+};
+
+test('suggests the price that reaches the margin over the sale price', () => {
+  assert.deepEqual(pricing(null, '60', '40'), ['100', false]);
+  assert.deepEqual(pricing(null, '10', '0'), ['10', false]);
+});
+
+test('the suggested price rounds up and keeps the desired margin', () => {
+  assert.deepEqual(pricing(null, '10', '33.33'), ['15', false]);
+  assert.deepEqual(pricing(null, '20', '30'), ['28.58', false]);
+  assert.deepEqual(pricing(null, '0.0853', '40'), ['0.1422', false]);
+  for (const [cost, margin] of [['20', '30'], ['0.0853', '40'], ['7.77', '12.34']]) {
+    const [suggested] = pricing(null, cost, margin);
+    assert.equal(pricing(suggested, cost, margin)[1], false, cost + ' / ' + margin);
+  }
+});
+
+test('warns only when the confirmed price is below the desired margin', () => {
+  assert.equal(pricing('90', '60', '40')[1], true);
+  assert.equal(pricing('100', '60', '40')[1], false);
+  assert.equal(pricing('120', '60', '40')[1], false);
+  assert.equal(pricing('99.99', '60', '40')[1], true);
+});
+
+test('there is no suggestion without a known cost or a margin', () => {
+  for (const args of [['90', null, '40'], ['90', '0', '40'], ['90', '60', null]]) assert.deepEqual(pricing(...args), [null, false]);
+});
 const average = (balance, current, quantity, cost) =>
   averageCost(d(balance), current === null ? null : d(current), d(quantity), d(cost)).toString();
 

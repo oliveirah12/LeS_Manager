@@ -206,6 +206,14 @@ test('API REST com PostgreSQL', {
       sku: sku('KIT-RESTRITO'), name: 'Kit sem exposição de saldo',
       components: [{ productId: product.id, quantity: '2', unitId: unit.id }],
     }), 201);
+    assert.equal('currentCost' in product, false);
+    assert.equal('quantity' in product, false);
+    const stockView = expectStatus(await admin('/stock'), 200);
+    const stockRows = [stockView.products.find(row => row.id === product.id), stockView.kits.find(row => row.id === kit.id).components[0].product];
+    for (const row of stockRows) {
+      assert.equal(row.currentCost, '3');
+      for (const field of ['wastePercent', 'revision', 'typeId', 'groupId']) assert.equal(field in row, false, field);
+    }
     const profile = expectStatus(await post('/access/profiles', {
       name: sku('CATALOGO'), permissions: ['catalog:operate'],
     }), 201);
@@ -256,6 +264,100 @@ test('API REST com PostgreSQL', {
     expectStatus(await catalog('/catalog/families', { method: 'POST', body: { name: sku('OUTRA'), baseSymbol: sku('X') } }), 403);
     assert.equal('balance' in expectStatus(await catalog('/finance/balance'), 200), true);
     expectStatus(await catalog('/finance/refresh', { method: 'POST' }), 403);
+  });
+
+  let sessions = 0;
+  // Each profile activates from its own address, so the suite does not use up the limit of 20 attempts per minute.
+  async function session(name, permissions) {
+    const profile = expectStatus(await post('/access/profiles', { name: sku(name), permissions }), 201);
+    const email = (run + '-' + name).toLowerCase() + '@example.com';
+    const user = expectStatus(await post('/access/users', { name, email, profileId: profile.id }), 201);
+    const activation = await request('/access/activate', {
+      method: 'POST', headers: { 'x-forwarded-for': '198.51.100.' + ++sessions }, body: { email, code: user.code, password, confirmation: password },
+    });
+    expectStatus(activation, 200);
+    return (path, options = {}) => request(path, { ...options, cookie: activation.cookie });
+  }
+
+  await t.test('mínimo, margem e preço exigem as permissões de estoque', async () => {
+    const product = await createProduct('COMERCIAL', unit.id);
+    expectStatus(await movement(product.id, unit.id, 'PURCHASE', '1', '60'), 201);
+    const settings = '/stock/products/' + product.id + '/settings';
+    const details = '/catalog/products/' + product.id + '/details';
+    const body = { minStock: '2', salePrice: '90', marginPercent: '40' };
+
+    const stranger = await session('COM-SEM', ['finance:view']);
+    expectStatus(await stranger('/stock'), 403);
+    expectStatus(await stranger(settings, { method: 'PATCH', body }), 403);
+
+    const cataloger = await session('COM-CATALOGO', ['catalog:operate']);
+    expectStatus(await cataloger(settings, { method: 'PATCH', body }), 403);
+    expectStatus(await cataloger('/catalog/products/' + product.id, { method: 'PATCH', body: { name: 'COMERCIAL', ...body } }), 200);
+    const untouched = await productRow(product.id);
+    assert.deepEqual([untouched.minStock, untouched.salePrice, untouched.marginPercent], [null, null, null]);
+    const hidden = expectStatus(await cataloger(details), 200);
+    assert.equal(hidden.stock, null);
+    assert.equal(JSON.stringify(hidden).includes('marginPercent'), false);
+    assert.equal('marginPercent' in expectStatus(await cataloger('/catalog'), 200).products.find(row => row.id === product.id), false);
+
+    const operator = await session('COM-OPERA', ['stock:operate']);
+    expectStatus(await operator(settings, { method: 'PATCH', body: { ...body, marginPercent: '100' } }), 400);
+    expectStatus(await operator(settings, { method: 'PATCH', body }), 200);
+    const reader = await session('COM-LEITURA', ['stock:view', 'catalog:view']);
+    expectStatus(await reader(settings, { method: 'PATCH', body }), 403);
+    const low = expectStatus(await reader('/stock'), 200).products.find(row => row.id === product.id);
+    assert.deepEqual([low.marginPercent, low.suggestedPrice, low.belowTargetMargin, low.salePrice], ['40', '100', true, '90']);
+    assert.equal(expectStatus(await reader(details), 200).stock.suggestedPrice, '100');
+
+    // The suggestion never changes the price by itself, and a client without the margin keeps it.
+    expectStatus(await operator(settings, { method: 'PATCH', body: { minStock: '2', salePrice: '100' } }), 200);
+    const confirmed = expectStatus(await reader('/stock'), 200).products.find(row => row.id === product.id);
+    assert.deepEqual([confirmed.marginPercent, confirmed.belowTargetMargin], ['40', false]);
+    const { events } = expectStatus(await admin('/audit?' + new URLSearchParams({ action: 'Alterar parâmetros de estoque' })), 200);
+    assert.ok(events.some(row => row.targetId === product.id && row.details?.after?.['Margem desejada (%)'] === '40'));
+  });
+
+  await t.test('dados técnicos do produto respeitam leitura e operação do catálogo', async () => {
+    const product = expectStatus(await post('/catalog/products', {
+      sku: sku('TECNICO'), name: 'Técnico', unitId: unit.id, lengthMm: '120.5', diameterMm: '1,75',
+      purchaseUrl: 'https://loja.example/item', measures: [{ name: 'Passo', value: '0.4', unit: 'mm' }],
+    }), 201);
+    assert.equal(product.lengthMm, '120.5');
+    assert.equal(product.diameterMm, '1.75');
+    const path = '/catalog/products/' + product.id;
+    const change = { name: 'Técnico', widthMm: '30', measures: [{ name: 'Bico', value: '0.6', unit: 'mm' }] };
+
+    const stranger = await session('TEC-SEM', ['finance:view']);
+    expectStatus(await stranger('/catalog'), 403);
+    expectStatus(await stranger(path + '/details'), 403);
+    expectStatus(await stranger(path, { method: 'PATCH', body: change }), 403);
+
+    const reader = await session('TEC-LEITURA', ['catalog:view']);
+    const listed = expectStatus(await reader('/catalog'), 200).products.find(row => row.id === product.id);
+    assert.equal(listed.purchaseUrl, 'https://loja.example/item');
+    assert.deepEqual(listed.measures, [{ name: 'Passo', value: '0.4', unit: 'mm' }]);
+    assert.equal('currentCost' in listed, false);
+    const details = expectStatus(await reader(path + '/details'), 200);
+    assert.equal(details.technical.lengthMm, '120.5');
+    assert.equal(details.stock, null);
+    expectStatus(await reader(path, { method: 'PATCH', body: change }), 403);
+    assert.equal((await productRow(product.id)).widthMm, null);
+
+    const operator = await session('TEC-OPERA', ['catalog:operate']);
+    expectStatus(await operator(path, { method: 'PATCH', body: { name: 'Técnico', purchaseUrl: 'javascript:alert(1)' } }), 400);
+    assert.equal((await productRow(product.id)).purchaseUrl, 'https://loja.example/item');
+    const saved = expectStatus(await operator(path, { method: 'PATCH', body: change }), 200);
+    assert.equal(saved.widthMm, '30');
+    assert.equal(saved.lengthMm, '120.5');
+    assert.deepEqual(saved.measures, [{ name: 'Bico', value: '0.6', unit: 'mm' }]);
+    const kept = expectStatus(await operator(path, { method: 'PATCH', body: { name: 'Técnico' } }), 200);
+    assert.equal(kept.measures.length, 1);
+    const { events } = expectStatus(await admin('/audit?' + new URLSearchParams({ action: 'Alterar produto' })), 200);
+    const event = events.find(row => row.targetId === product.id && row.details?.after?.['Largura (mm)'] === '30');
+    assert.deepEqual(event.details.after.Medidas, ['Bico: 0.6 mm']);
+
+    expectStatus(await operator(path, { method: 'DELETE' }), 200);
+    assert.equal(await db.productMeasure.count({ where: { productId: product.id } }), 0);
   });
 
   await t.test('conciliação persiste na reimportação e isola provedores', async () => {
@@ -310,6 +412,17 @@ test('API REST com PostgreSQL', {
     const future = expectStatus(await admin('/stock/movements?' + new URLSearchParams({ productId: product.id, from: tomorrow })), 200);
     assert.equal(future.movements.length, 0);
     expectStatus(await admin('/stock/movements?kind=INVALIDO'), 400);
+    const sortedOuts = async sort => expectStatus(await admin('/stock/movements?' + new URLSearchParams({ productId: product.id, kind: 'OUT', sort })), 200).movements.map(row => row.quantity);
+    assert.deepEqual(await sortedOuts('quantity:asc'), ['-500', '-250']);
+    assert.deepEqual(await sortedOuts('quantity:desc'), ['-250', '-500']);
+    expectStatus(await admin('/stock/movements?sort=unitCost:asc'), 400);
+    expectStatus(await admin('/audit?sort=actorName:asc'), 400);
+    expectStatus(await admin('/audit?sort=action:asc'), 200);
+    const orderPage = expectStatus(await admin('/production/orders?page=1&sort=printer:asc'), 200);
+    assert.equal(orderPage.page, 1);
+    assert.equal(typeof orderPage.total, 'number');
+    expectStatus(await admin('/production/orders?sort=notes:asc'), 400);
+    expectStatus(await admin('/production/orders?page=0'), 400);
 
     const precise = await createProduct('PRECISAO', gram.id);
     expectStatus(await movement(precise.id, gram.id, 'PURCHASE', '123456789012345678.123456789012', '1'), 201);
@@ -556,6 +669,33 @@ test('API REST com PostgreSQL', {
     assert.equal(closed.lossCost, '10');
     assert.equal((await productRow(filament.id)).quantity.toString(), '900');
     assert.equal(expectStatus(await admin('/stock'), 200).products.find(row => row.id === filament.id).reserved, '0');
+
+    // Costs of an order need stock:view on every route, reads and writes alike.
+    const noCosts = value => assert.doesNotMatch(JSON.stringify(value), /cost|energyRate|powerWatts/i);
+    const listedOrder = async (client, id) => expectStatus(await client('/production/orders'), 200).orders.find(row => row.id === id);
+    const stranger = await session('ORDEM-SEM', ['finance:view']);
+    expectStatus(await stranger('/production/orders'), 403);
+    const reader = await session('ORDEM-LEITURA', ['production:view']);
+    noCosts(await listedOrder(reader, order.id));
+    expectStatus(await reader('/production/orders', { method: 'POST', body: {} }), 403);
+    expectStatus(await reader(`/production/orders/${order.id}/preview`, { method: 'POST', body: closing }), 403);
+
+    const operator = await session('ORDEM-OPERA', ['production:operate']);
+    const send = (path, body) => operator('/production/orders' + path, { method: 'POST', body });
+    const operated = expectStatus(await send('', {
+      printerId: printer.id, plannedStart: started, estimatedMinutes: 60, items: [{ productId: printed.id, quantity: '1' }],
+    }), 201);
+    noCosts(operated);
+    noCosts(await listedOrder(operator, operated.id));
+    noCosts(expectStatus(await send(`/${operated.id}/start`, { startedAt: started }), 200));
+    const ending = { finishedAt: '2026-11-21T11:00:00.000Z', items: [{ productId: printed.id, lost: '0' }], inputs: [{ inputId: filament.id, used: '126' }] };
+    const reviewed = expectStatus(await send(`/${operated.id}/preview`, ending), 200);
+    noCosts(reviewed);
+    assert.equal(reviewed.items[0].good, '1');
+    noCosts(expectStatus(await send(`/${operated.id}/finish`, ending), 200));
+
+    const costs = await session('ORDEM-CUSTOS', ['production:view', 'stock:view']);
+    assert.ok(Number((await listedOrder(costs, operated.id)).totalCost) > 0);
   });
 
   await t.test('famílias e unidades só mudam o que não afeta o histórico', async () => {
@@ -725,6 +865,49 @@ test('API REST com PostgreSQL', {
       [first, '4', '15'], [second, '2500', '0.012'],
     ]);
     assert.equal(await db.movement.count({ where: { kind: 'INITIAL', productId: { in: imported.map(product => product.id) } } }), 2);
+  });
+
+  await t.test('a carga grava cadastro e medidas de forma atômica e aceita o arquivo antigo', async () => {
+    const fill = (sheet, line, values) => sheet.getRow(1).eachCell((cell, column) => {
+      if (cell.text in values) sheet.getCell(line, column).value = values[cell.text];
+    });
+    const workbook = await loadTemplate('/stock/initial/template');
+    const sheet = workbook.getWorksheet('Carga inicial');
+    const [first, second] = [sku('CADASTRO-1'), sku('CADASTRO-2')];
+    fill(sheet, 2, {
+      SKU: first, Nome: 'Com cadastro', Unidade: unit.symbol, Quantidade: '2', 'Custo total': '120', 'Estoque mínimo': '1', 'Margem (%)': '40',
+      'Preço de venda': '100', 'Comprimento (mm)': '12.5', 'URL de compra': 'https://loja.example/a',
+    });
+    fill(sheet, 3, { SKU: second, Nome: 'Com erro', Unidade: unit.symbol, Quantidade: '0', 'Margem (%)': '100' });
+    fill(workbook.getWorksheet('Medidas'), 2, { SKU: first, Nome: 'Passo', Valor: '0.4', Unidade: 'mm' });
+    const stored = () => db.product.count({ where: { sku: { in: [first, second] } } });
+    expectStatus(await uploadWorkbook('/stock/initial/preview', workbook), 400);
+    assert.equal(await stored(), 0);
+
+    fill(sheet, 3, { 'Margem (%)': '10' });
+    const batch = expectStatus(await uploadWorkbook('/stock/initial/preview', workbook), 201);
+    assert.equal(batch.rows[0].marginPercent, '40');
+    assert.deepEqual(batch.measures.map(row => [row.sku, row.value]), [[first, '0.4']]);
+
+    // A conflict in the second row at confirmation also keeps the first one out.
+    const blocker = expectStatus(await post('/catalog/products', { sku: second, name: 'Bloqueio', unitId: unit.id }), 201);
+    expectStatus(await post(`/stock/initial/${batch.id}/confirm`), 409);
+    assert.equal(await db.product.count({ where: { sku: first } }), 0);
+    expectStatus(await admin('/catalog/products/' + blocker.id, { method: 'DELETE' }), 200);
+
+    expectStatus(await post(`/stock/initial/${batch.id}/confirm`), [200, 201]);
+    const product = await db.product.findUniqueOrThrow({ where: { sku: first }, include: { measures: true } });
+    assert.deepEqual([product.minStock, product.marginPercent, product.salePrice, product.lengthMm, product.currentCost].map(value => value.toString()), ['1', '40', '100', '12.5', '60']);
+    assert.equal(product.purchaseUrl, 'https://loja.example/a');
+    assert.deepEqual(product.measures.map(row => [row.name, row.value.toString(), row.unit]), [['Passo', '0.4', 'mm']]);
+
+    const legacy = new Workbook();
+    const legacySku = sku('CADASTRO-ANTIGO');
+    legacy.addWorksheet('Carga inicial').addRows([['SKU', 'Nome', 'Unidade', 'Quantidade', 'Custo'], [legacySku, 'Antigo', unit.symbol, '2', '15']]);
+    const oldBatch = expectStatus(await uploadWorkbook('/stock/initial/preview', legacy), 201);
+    expectStatus(await post(`/stock/initial/${oldBatch.id}/confirm`), [200, 201]);
+    const old = await db.product.findUniqueOrThrow({ where: { sku: legacySku } });
+    assert.deepEqual([old.quantity.toString(), old.currentCost.toString(), old.marginPercent, old.purchaseUrl], ['2', '15', null, null]);
   });
 
   await t.test('a carga inicial cadastra tipos, perda e ficha técnica de forma atômica', async () => {

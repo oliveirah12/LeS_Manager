@@ -23,6 +23,14 @@ export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 
 export const nameField = z.string().trim().min(1, 'Informe um valor').max(160);
 export const idField = z.uuid();
+/** Reads "column:asc" or "column:desc", accepting only the listed columns. */
+export function sortField<K extends string>(keys: readonly K[]) {
+  const allowed = new Set(keys.flatMap(key => [key + ':asc', key + ':desc']));
+  return z.string().refine(value => allowed.has(value), 'Ordenação inválida').transform(value => {
+    const [key, direction] = value.split(':') as [K, 'asc' | 'desc'];
+    return { key, direction };
+  });
+}
 export const skuField = z.string().trim().min(1).max(64).transform(value => value.toUpperCase());
 export const decimalField = z.string().trim().regex(/^[+-]?\d{1,18}(?:[.,]\d{1,12})?$/, 'Use um decimal com até 12 casas')
   .transform(value => new Prisma.Decimal(value.replace(',', '.')));

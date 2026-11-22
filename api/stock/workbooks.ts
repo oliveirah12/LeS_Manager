@@ -8,6 +8,8 @@ const formats = {
   initial: [
     ['SKU', 'sku'], ['Nome', 'name'], ['Tipo', 'type'], ['Unidade', 'unit'], ['Quantidade', 'quantity'], ['Custo total', 'totalCost'], ['Perda (%)', 'wastePercent'],
     ['Grupo', 'group'], ['Marca', 'brand'], ['Cor', 'color'], ['Departamento', 'department'],
+    ['Estoque mínimo', 'minStock'], ['Margem (%)', 'marginPercent'], ['Preço de venda', 'salePrice'],
+    ['Comprimento (mm)', 'lengthMm'], ['Largura (mm)', 'widthMm'], ['Altura (mm)', 'heightMm'], ['Diâmetro (mm)', 'diameterMm'], ['URL de compra', 'purchaseUrl'],
   ],
   inventory: [['SKU', 'sku'], ['Quantidade', 'quantity'], ['Unidade', 'unit']],
 } as const satisfies Record<string, readonly Column[]>;
@@ -16,8 +18,12 @@ export type WorkbookKind = keyof typeof formats;
 const legacyCost: Column = ['Custo', 'unitCost'];
 const recipeSheet = 'Ficha técnica';
 const recipeColumns: readonly Column[] = [['SKU do produto', 'product'], ['SKU do insumo', 'input'], ['Quantidade', 'quantity'], ['Unidade', 'unit']];
+const measureSheet = 'Medidas';
+const measureColumns: readonly Column[] = [['SKU', 'sku'], ['Nome', 'name'], ['Valor', 'value'], ['Unidade', 'unit']];
 const requiredInitial = ['SKU', 'Nome', 'Unidade', 'Quantidade'];
-const decimalKeys = new Set(['quantity', 'unitCost', 'totalCost', 'wastePercent']);
+const decimalKeys = new Set([
+  'quantity', 'unitCost', 'totalCost', 'wastePercent', 'minStock', 'marginPercent', 'salePrice', 'lengthMm', 'widthMm', 'heightMm', 'diameterMm', 'value',
+]);
 const lastRow = 501;
 /** Current registrations offered as dropdowns, by column header. */
 export type WorkbookLists = Record<string, string[]>;
@@ -51,6 +57,7 @@ export async function workbookTemplate(kind: WorkbookKind, lists: WorkbookLists 
   }
   const sheet = addSheet(workbook, 'Carga inicial', formats.initial);
   const recipes = addSheet(workbook, recipeSheet, recipeColumns);
+  addSheet(workbook, measureSheet, measureColumns);
   const listSheet = workbook.addWorksheet('Listas');
   const ranges = new Map<string, string>();
   Object.entries(lists).forEach(([header, values], index) => {
@@ -64,6 +71,11 @@ export async function workbookTemplate(kind: WorkbookKind, lists: WorkbookLists 
   addDropdowns(sheet, formats.initial, ranges);
   addDropdowns(recipes, recipeColumns, ranges);
   return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+/** Excel turns a typed address into a link object, so the link cell is read by its target. */
+function linkTarget(value: ExcelJS.CellValue) {
+  return value && typeof value === 'object' && 'hyperlink' in value ? value.hyperlink : value;
 }
 
 /** Reads a sheet by its headers, so column order does not matter and older templates still work. */
@@ -87,7 +99,8 @@ function readSheet(sheet: ExcelJS.Worksheet, known: readonly Column[], required:
     const row = sheet.getRow(line);
     const values: Record<string, string> = {};
     for (const [index, key] of columns) {
-      const value = row.getCell(index).value;
+      const cell = row.getCell(index).value;
+      const value = key === 'purchaseUrl' ? linkTarget(cell) : cell;
       if (value == null || value === '') continue;
       if (!key) throw new BadRequestException('Há valor em uma coluna sem título na linha ' + line + '.');
       if (typeof value !== 'string' && typeof value !== 'number') {
@@ -116,9 +129,12 @@ export async function workbookRows(kind: WorkbookKind, file?: Express.Multer.Fil
   if (!sheet) throw new BadRequestException('Use o modelo e preencha até 500 linhas.');
   if (kind === 'inventory') return { rows: readSheet(sheet, formats.inventory, formats.inventory.map(([header]) => header)) };
   const recipes = workbook.getWorksheet(recipeSheet);
+  const measureTab = workbook.getWorksheet(measureSheet);
+  const measures = measureTab ? readSheet(measureTab, measureColumns, measureColumns.map(([header]) => header)) : [];
   return {
     rows: readSheet(sheet, [...formats.initial, legacyCost], requiredInitial),
     recipes: recipes ? readSheet(recipes, recipeColumns, recipeColumns.map(([header]) => header)) : [],
+    ...(measures.length ? { measures } : {}),
   };
 }
 

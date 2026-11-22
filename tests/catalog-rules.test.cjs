@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 require('reflect-metadata');
 const { Prisma } = require('@prisma/client');
-const { CatalogService } = require('../dist/api/catalog/catalog.js');
+const { CatalogService, measuresField, purchaseUrlField } = require('../dist/api/catalog/catalog.js');
 const { formsCycle } = require('../dist/api/catalog/recipe.js');
 
 const unused = { movements: 0, kitComponents: 0, inventoryRows: 0, recipe: 0, usedInRecipes: 0, productionItems: 0, productionInputs: 0 };
@@ -18,11 +18,43 @@ test('accepts shared inputs and replaces the previous recipe of the product', ()
   assert.equal(formsCycle('a', ['b'], [{ productId: 'a', inputId: 'a' }]), false);
 });
 
+test('a purchase link must be a plain http or https address', () => {
+  for (const url of ['https://loja.example/item?id=1', 'http://loja.example']) assert.equal(purchaseUrlField.safeParse(url).success, true, url);
+  for (const url of ['javascript:alert(1)', 'data:text/html,x', 'ftp://loja.example', 'loja.example', 'https://', 'https://user:senha@loja.example']) {
+    assert.equal(purchaseUrlField.safeParse(url).success, false, url);
+  }
+});
+
+test('extra measures are exact, positive and not repeated', () => {
+  const row = (name, value = '1.5') => ({ name, value, unit: 'mm' });
+  assert.equal(measuresField.parse([row('Passo', '0.123456789012')])[0].value.toFixed(), '0.123456789012');
+  assert.equal(measuresField.safeParse([row('Passo'), row('Bico')]).success, true);
+  assert.equal(measuresField.safeParse([row('Passo'), row('passo')]).success, false);
+  assert.equal(measuresField.safeParse([row('Passo', '0')]).success, false);
+});
+
+test('the stock view reads products through an explicit field list', async () => {
+  const queries = {};
+  const capture = name => async args => { queries[name] = args; return []; };
+  const db = {
+    product: { findMany: capture('product') }, kit: { findMany: capture('kit') },
+    productionConsumption: { groupBy: async () => [] },
+  };
+  await new CatalogService(db).stockView();
+  const componentQuery = queries.kit.include.components.include.product;
+  for (const query of [queries.product, componentQuery]) {
+    assert.equal(query.include, undefined);
+    assert.equal(query.select.currentCost, true);
+    assert.equal(query.select.wastePercent, undefined);
+    assert.equal(query.select.revision, undefined);
+  }
+});
+
 function service(usage, unitFamily = 'mass') {
   const calls = [];
   const record = name => async args => { calls.push(name); return args; };
   const stored = {
-    sku: 'P-1', name: 'Produto', type: { name: 'Produto normal' }, unitId: 'g', unit: { symbol: 'g', familyId: 'mass' }, group: null, brand: null, color: null, department: null, _count: usage,
+    sku: 'P-1', name: 'Produto', type: { name: 'Produto normal' }, unitId: 'g', unit: { symbol: 'g', familyId: 'mass' }, group: null, brand: null, color: null, department: null, purchaseUrl: null, measures: [], _count: usage,
   };
   const tx = {
     reference: { findMany: async () => [] },

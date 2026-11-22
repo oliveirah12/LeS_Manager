@@ -1,7 +1,9 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { MovementKind, Prisma, Product } from '@prisma/client';
 import { z } from 'zod';
-import { CatalogService, defaultProductType, inBase, productInclude } from '../catalog/catalog';
+import {
+  CatalogService, defaultProductType, inBase, marginField, maxMeasures, productInclude, purchaseUrlField, repeatedMeasure, symbolField,
+} from '../catalog/catalog';
 import { formsCycle } from '../catalog/recipe';
 import { auditChange, auditContext } from '../audit/recorder';
 import { averageCost, costPerBaseUnit } from './cost';
@@ -23,13 +25,36 @@ const initialRow = z.object({
   unitCost: nonnegative.optional(), totalCost: nonnegative.optional(),
   wastePercent: nonnegative.refine(value => value.lte(100) && value.decimalPlaces() <= 2, 'Informe a perda entre 0 e 100, com até 2 casas').optional(),
   group: nameField.optional(), brand: nameField.optional(), color: nameField.optional(), department: nameField.optional(),
+  minStock: nonnegative.optional(), marginPercent: marginField.optional(), salePrice: positive.optional(),
+  lengthMm: positive.optional(), widthMm: positive.optional(), heightMm: positive.optional(), diameterMm: positive.optional(),
+  purchaseUrl: purchaseUrlField.optional(),
 }).refine(row => row.unitCost === undefined || row.totalCost === undefined, 'Use apenas uma coluna de custo.')
   .refine(row => row.quantity.eq(0) || row.unitCost !== undefined || row.totalCost !== undefined, 'Informe o custo do saldo inicial.')
   .refine(row => row.totalCost === undefined || row.quantity.gt(0), 'O custo total exige quantidade maior que zero.');
 const initialRecipe = z.object({ product: skuField, input: skuField, quantity: positive, unit: nameField });
-export const initialFields = z.object({ rows: z.array(initialRow).min(1).max(500), recipes: z.array(initialRecipe).max(500).default([]) });
+const initialMeasure = z.object({ sku: skuField, name: nameField, value: positive, unit: symbolField });
+export const initialFields = z.object({
+  rows: z.array(initialRow).min(1).max(500), recipes: z.array(initialRecipe).max(500).default([]), measures: z.array(initialMeasure).max(500).default([]),
+});
 type Count = z.infer<typeof countFields>;
 type Initial = z.infer<typeof initialFields>;
+const initialDecimals = [
+  'quantity', 'unitCost', 'totalCost', 'wastePercent', 'minStock', 'marginPercent', 'salePrice', 'lengthMm', 'widthMm', 'heightMm', 'diameterMm',
+] as const;
+
+/** Groups the measures by SKU, applying the same limits as the product form. */
+function measuresBySku(data: Initial) {
+  const grouped = new Map<string, { name: string; value: Prisma.Decimal; unit: string }[]>();
+  for (const { sku, ...measure } of data.measures) {
+    if (!data.rows.some(row => row.sku === sku)) throw new BadRequestException('A medida precisa ser de um SKU desta carga: ' + sku + '.');
+    grouped.set(sku, [...(grouped.get(sku) ?? []), measure]);
+  }
+  for (const [sku, rows] of grouped) {
+    if (rows.length > maxMeasures) throw new BadRequestException('Use até ' + maxMeasures + ' medidas no SKU ' + sku + '.');
+    if (repeatedMeasure(rows)) throw new BadRequestException('Medida repetida no SKU ' + sku + '.');
+  }
+  return grouped;
+}
 
 function distinctSkus(rows: { sku: string }[]) {
   if (new Set(rows.map(row => row.sku)).size !== rows.length) throw new BadRequestException('Há SKUs repetidos no lote.');
@@ -173,6 +198,7 @@ export class StockService {
       tx.product.findMany({ where: { sku: { in: data.recipes.map(row => row.input) } }, include: { unit: true, type: true } }),
     ]);
     if (existing.length) throw new ConflictException('SKUs já cadastrados: ' + existing.map(product => product.sku).join(', '));
+    const measures = measuresBySku(data);
     const items = data.rows.map(row => {
       const unit = units.find(item => item.symbol === row.unit);
       if (!unit) throw new BadRequestException('Unidade desconhecida no SKU ' + row.sku + ': ' + row.unit);
@@ -193,6 +219,9 @@ export class StockService {
           sku: row.sku, name: row.name, typeId: type.id, wastePercent: row.wastePercent, unitId: unit.id,
           groupId: find('GRUPO', row.group), brandId: find('MARCA', row.brand),
           colorId: find('COR', row.color), departmentId: find('DEPARTAMENTO', row.department),
+          minStock: row.minStock, marginPercent: row.marginPercent, salePrice: row.salePrice,
+          lengthMm: row.lengthMm, widthMm: row.widthMm, heightMm: row.heightMm, diameterMm: row.diameterMm,
+          purchaseUrl: row.purchaseUrl, measures: measures.get(row.sku),
         },
         quantity, cost, type, familyId: unit.familyId,
       };
@@ -230,15 +259,13 @@ export class StockService {
     return serial(this.db, async tx => {
       const { items } = await this.initialLookups(tx, data);
       const rows = data.rows.map(row => ({
-        ...row, quantity: row.quantity.toFixed(),
-        ...(row.unitCost === undefined ? {} : { unitCost: row.unitCost.toFixed() }),
-        ...(row.totalCost === undefined ? {} : { totalCost: row.totalCost.toFixed() }),
-        ...(row.wastePercent === undefined ? {} : { wastePercent: row.wastePercent.toFixed() }),
+        ...row, ...Object.fromEntries(initialDecimals.flatMap(key => row[key] === undefined ? [] : [[key, row[key].toFixed()]])),
       }));
       const recipes = data.recipes.map(row => ({ ...row, quantity: row.quantity.toFixed() }));
-      const batch = await tx.initialImport.create({ data: { userId, data: { rows, recipes } as Prisma.InputJsonValue } });
+      const measures = data.measures.map(row => ({ ...row, value: row.value.toFixed() }));
+      const batch = await tx.initialImport.create({ data: { userId, data: { rows, recipes, measures } as unknown as Prisma.InputJsonValue } });
       return {
-        id: batch.id, recipes,
+        id: batch.id, recipes, measures,
         rows: rows.map((row, index) => {
           const { unitCost, totalCost, quantity } = data.rows[index];
           // Cost per declared unit, shown before confirming. The stored value is per base unit.
@@ -261,6 +288,12 @@ export class StockService {
       for (const item of items) {
         const product = await this.catalog.createProduct(tx, item.product);
         ids.set(product.sku, product.id);
+        const { minStock, marginPercent, salePrice } = item.product;
+        auditChange(null, {
+          ...(minStock ? { [product.sku + ' · estoque mínimo']: minStock } : {}),
+          ...(marginPercent ? { [product.sku + ' · margem desejada (%)']: marginPercent } : {}),
+          ...(salePrice ? { [product.sku + ' · preço de venda']: salePrice } : {}),
+        });
         if (!item.quantity.eq(0) || item.cost !== null) {
           await this.record(tx, product, item.quantity, 'INITIAL', userId, 'Carga inicial ' + id, item.cost);
         }
@@ -271,6 +304,7 @@ export class StockService {
           data: recipes.map(row => ({ productId: ids.get(row.product)!, inputId: row.inputId ?? ids.get(row.input)!, quantity: row.quantity })),
         });
       }
+      if (data.measures.length) auditContext({ 'Linhas de medidas': data.measures.length });
       const confirmedAt = new Date();
       await tx.initialImport.update({ where: { id }, data: { confirmedAt } });
       return { id, confirmedAt };

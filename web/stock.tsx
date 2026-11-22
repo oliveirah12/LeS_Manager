@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { ArrowLeftRight, ClipboardList, Download, Eye, FileSpreadsheet, PackageMinus, Plus, SlidersHorizontal } from 'lucide-react';
+import { CommercialForm } from './product-form';
 import {
-  api, Badge, baseUnit, brl, dateTime, Field, fields, FileField, Filters, Form, Kit, Loading, matches, message, Modal, ModalForm, PageActions,
-  Product, productOptions, quantity, SearchInput, Segmented, Select, StockKit, StockProduct, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
+  api, Badge, baseUnit, brl, by, dateTime, Field, fields, FileField, Filters, Form, Kit, Loading, matches, message, Modal, ModalForm, PageActions,
+  Product, productOptions, quantity, SearchInput, Segmented, Select, sortParam, SortState, StockKit, StockProduct, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
   useData, notify,
 } from './ui';
 
@@ -12,9 +13,15 @@ type HistoryFilters = { productId?: string; kind?: string; from?: string; to?: s
 type CountPreview = { id: string; rows: { product: { sku: string; name: string; unit: Product['unit'] }; expected: string; counted: string; difference: string }[] };
 type InitialPreview = {
   id: string;
-  rows: { sku: string; name: string; unit: string; quantity: string; typeName: string; totalCost?: string; declaredCost: string | null; wastePercent?: string }[];
+  rows: ({ sku: string; name: string; unit: string; quantity: string; typeName: string; totalCost?: string; declaredCost: string | null; wastePercent?: string } & InitialRegistry)[];
   recipes: { product: string; input: string; quantity: string; unit: string }[];
+  measures: { sku: string; name: string; value: string; unit: string }[];
 };
+type InitialRegistry = {
+  minStock?: string; marginPercent?: string; salePrice?: string; lengthMm?: string; widthMm?: string; heightMm?: string; diameterMm?: string; purchaseUrl?: string;
+};
+const dimensions = (row: InitialRegistry) => ([['C', row.lengthMm], ['L', row.widthMm], ['A', row.heightMm], ['Ø', row.diameterMm]] as const)
+  .flatMap(([label, value]) => value ? [label + ' ' + quantity(value)] : []).join(' · ');
 type Dialog = { kind: 'settings'; product: StockProduct } | { kind: 'movement'; product?: Product } | { kind: 'kit'; kit: Kit } | { kind: 'kitDetails'; kit: StockKit } | { kind: 'inventory' } | { kind: 'initial' };
 const kinds = [{ id: 'PURCHASE', name: 'Compra' }, { id: 'OUT', name: 'Saída' }, { id: 'ADJUSTMENT', name: 'Ajuste' }] as const;
 const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário', PRODUCTION_IN: 'Entrada de produção', PRODUCTION_OUT: 'Consumo de produção' };
@@ -47,17 +54,9 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
       {tab === 'history' && <HistoryTab key={version} products={data.products} />}
     </>}
 
-    {dialog?.kind === 'settings' && <ModalForm title={'Parâmetros de ' + dialog.product.sku} subtitle={dialog.product.name} label="Salvar"
-      close={() => setDialog(undefined)} action={async values => {
-        const { minStock, salePrice } = fields(values);
-        await api('stock/products/' + dialog.product.id + '/settings', { minStock: minStock || null, salePrice: salePrice || null }, 'PATCH');
-        await saved('Parâmetros salvos.');
-      }}>
-      <Field name="minStock" label={'Estoque mínimo (' + baseUnit(dialog.product).symbol + ')'} inputMode="decimal" required={false}
-        defaultValue={dialog.product.minStock ?? undefined} hint="Vazio: sem alerta. O aviso compara com o saldo livre, sem o que está reservado." />
-      <Field name="salePrice" label={'Preço de venda por ' + baseUnit(dialog.product).symbol + ' (R$)'} inputMode="decimal" required={false}
-        defaultValue={dialog.product.salePrice ?? undefined} hint={'Vazio: sem margem. Custo médio atual: ' + brl(dialog.product.currentCost)} />
-    </ModalForm>}
+    {dialog?.kind === 'settings' && <Modal title={'Estoque e venda de ' + dialog.product.sku} subtitle={dialog.product.name} close={() => setDialog(undefined)}>
+      <CommercialForm closeOnSave product={{ ...dialog.product, symbol: baseUnit(dialog.product).symbol }} saved={() => saved('Estoque e venda salvos.')} />
+    </Modal>}
     {data && dialog?.kind === 'movement' && <Modal title="Registrar movimentação" close={() => setDialog(undefined)}>
       <MovementForm data={data} initial={dialog.product} saved={saved} /></Modal>}
     {data && dialog?.kind === 'kit' && <ModalForm title={'Saída do kit ' + dialog.kit.sku} subtitle={dialog.kit.name + ' · ' + quantity(dialog.kit.available) + ' disponíveis'}
@@ -95,15 +94,16 @@ function Balances({ data, edit, move, configure }: {
       columns={['Produto', { label: 'Saldo', end: true }, { label: 'Custo médio', end: true }, { label: 'Última compra', end: true },
         { label: 'Valor em estoque', end: true }, { label: 'Margem', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
       rows={rows.map(product => [
-        <Title name={product.name} code={product.sku} />,
-        Number(product.quantity) === 0 ? <Badge tone="warn">Sem saldo</Badge> :
+        by(product.name, <Title name={product.name} code={product.sku} />),
+        by(product.quantity, Number(product.quantity) === 0 ? <Badge tone="warn">Sem saldo</Badge> :
           <span><strong>{quantity(product.quantity)}</strong> <span className="muted">{baseUnit(product).symbol}</span>
             {Number(product.reserved) > 0 && <span className="hint" style={{ display: 'block' }}>{quantity(product.reserved!)} reservado</span>}
-            {product.belowMinimum && <span style={{ display: 'block', marginTop: 4 }}><Badge tone="warn">Abaixo do mínimo</Badge></span>}</span>,
-        brl(product.currentCost), <span className="muted">{brl(product.lastPurchaseCost)}</span>,
-        <strong>{brl(product.value)}</strong>,
-        product.margin ? <span>{product.margin.percent.startsWith('-') ? <Badge tone="warn">{quantity(product.margin.percent)}%</Badge> : <strong>{quantity(product.margin.percent)}%</strong>}
-          <span className="hint" style={{ display: 'block' }}>Venda {brl(product.salePrice)}</span></span> : <span className="muted">—</span>,
+            {product.belowMinimum && <span style={{ display: 'block', marginTop: 4 }}><Badge tone="warn">Abaixo do mínimo</Badge></span>}</span>),
+        by(product.currentCost, brl(product.currentCost)), by(product.lastPurchaseCost, <span className="muted">{brl(product.lastPurchaseCost)}</span>),
+        by(product.value, <strong>{brl(product.value)}</strong>),
+        by(product.margin?.percent, product.margin ? <span>{product.margin.percent.startsWith('-') ? <Badge tone="warn">{quantity(product.margin.percent)}%</Badge> : <strong>{quantity(product.margin.percent)}%</strong>}
+          <span className="hint" style={{ display: 'block' }}>Venda {brl(product.salePrice)}</span>
+          {product.belowTargetMargin && <span style={{ display: 'block', marginTop: 4 }}><Badge tone="warn">Abaixo de {quantity(product.marginPercent)}%</Badge></span>}</span> : <span className="muted">—</span>),
         ...(edit ? [<div className="actions">
           <button type="button" className="btn secondary small" onClick={() => move(product)}><ArrowLeftRight size={14} aria-hidden="true" />Movimentar</button>
           <button type="button" className="btn ghost small" aria-label={'Parâmetros de ' + product.sku} onClick={() => configure(product)}>
@@ -126,10 +126,10 @@ function KitDetails({ kit }: { kit: StockKit }) {
       rows={kit.components.map(item => {
         const unit = baseUnit(item.product).symbol;
         return [
-          <Title name={item.product.name} code={item.product.sku} />,
-          quantity(item.quantity) + ' ' + unit, quantity(item.product.quantity) + ' ' + unit,
-          <span>{quantity(item.yields)} {Number(item.yields) === 1 ? 'kit' : 'kits'}{Number(item.yields) === Number(kit.available) && <> <Badge tone="warn">Limita</Badge></>}</span>,
-          brl(item.product.currentCost), <strong>{brl(item.cost)}</strong>, percent(item.share),
+          by(item.product.name, <Title name={item.product.name} code={item.product.sku} />),
+          by(item.quantity, quantity(item.quantity) + ' ' + unit), by(item.product.quantity, quantity(item.product.quantity) + ' ' + unit),
+          by(item.yields, <span>{quantity(item.yields)} {Number(item.yields) === 1 ? 'kit' : 'kits'}{Number(item.yields) === Number(kit.available) && <> <Badge tone="warn">Limita</Badge></>}</span>),
+          by(item.product.currentCost, brl(item.product.currentCost)), by(item.cost, <strong>{brl(item.cost)}</strong>), by(item.share, percent(item.share)),
         ];
       })}
       footer={<>
@@ -147,11 +147,11 @@ function Kits({ data, edit, out, details }: { data: StockView; edit: boolean; ou
     <Table empty="Nenhum kit ativo."
       columns={['Kit', 'Componentes', { label: 'Custo total', end: true }, { label: 'Disponível', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
       rows={rows.map(kit => [
-        <Title name={kit.name} code={kit.sku} />,
-        <button type="button" className="btn ghost small" aria-label={'Ver componentes de ' + kit.sku} onClick={() => details(kit)}>
-          <Eye size={14} aria-hidden="true" />{kit.components.length} {kit.components.length === 1 ? 'componente' : 'componentes'}</button>,
-        <KitCost kit={kit} />,
-        Number(kit.available) > 0 ? <strong>{quantity(kit.available)}</strong> : <Badge tone="warn">Indisponível</Badge>,
+        by(kit.name, <Title name={kit.name} code={kit.sku} />),
+        by(kit.components.length, <button type="button" className="btn ghost small" aria-label={'Ver componentes de ' + kit.sku} onClick={() => details(kit)}>
+          <Eye size={14} aria-hidden="true" />{kit.components.length} {kit.components.length === 1 ? 'componente' : 'componentes'}</button>),
+        by(kit.totalCost, <KitCost kit={kit} />),
+        by(kit.available, Number(kit.available) > 0 ? <strong>{quantity(kit.available)}</strong> : <Badge tone="warn">Indisponível</Badge>),
         ...(edit ? [<button type="button" className="btn secondary small" disabled={Number(kit.available) <= 0} onClick={() => out(kit)}>
           <PackageMinus size={14} aria-hidden="true" />Dar saída</button>] : []),
       ])} />
@@ -162,7 +162,8 @@ function HistoryTab({ products }: { products: Product[] }) {
   const [filters, setFilters] = useState<HistoryFilters>({});
   const [cursors, setCursors] = useState<string[]>([]);
   const cursor = cursors.at(-1);
-  const query = new URLSearchParams(Object.entries({ ...filters, cursor }).filter((entry): entry is [string, string] => !!entry[1]));
+  const [sort, setSort] = useState<SortState>(null);
+  const query = new URLSearchParams(Object.entries({ ...filters, cursor, sort: sortParam(sort) }).filter((entry): entry is [string, string] => !!entry[1]));
   const history = useData<HistoryPage>('stock/movements' + (query.size ? '?' + query : ''));
   const active = Object.values(filters).filter(Boolean).length;
   return <div className="tab-panel" role="tabpanel">
@@ -174,7 +175,9 @@ function HistoryTab({ products }: { products: Product[] }) {
     </Filters>
     {message(history.error)}
     {history.loading && !history.data ? <Loading label="Carregando movimentações…" /> : history.data && <Table empty="Nenhuma movimentação encontrada."
-      columns={['Produto', 'Movimento', { label: 'Quantidade', end: true }, { label: 'Custo', end: true }, 'Usuário', 'Data', 'Motivo']}
+      sort={sort} onSort={next => { setSort(next); setCursors([]); }}
+      columns={['Produto', { label: 'Movimento', sortKey: 'kind' }, { label: 'Quantidade', end: true, sortKey: 'quantity' }, { label: 'Custo', end: true }, 'Usuário',
+        { label: 'Data', sortKey: 'createdAt' }, { label: 'Motivo', sortKey: 'reason' }]}
       rows={history.data.movements.map(item => [
         <Title name={item.product.name} code={item.product.sku} />,
         labels[item.kind] + (item.kit ? ' · ' + item.kit.sku : ''),
@@ -238,10 +241,7 @@ function MovementForm({ data, initial, saved }: { data: StockView; initial?: Pro
     <div className="form-grid">
       <label>{kind === 'ADJUSTMENT' ? 'Variação (+ entrada / − saída)' : 'Quantidade'}
         <input name="quantity" inputMode="decimal" required value={amount} onChange={event => setAmount(event.target.value)} /></label>
-      <label>Unidade<select key={productId} name="unitId" required value={unitId} onChange={event => setUnit(event.target.value)}>
-        <option value="">Selecione</option>
-        {unitOptions(units).map(option => <option key={option.id} value={option.id}>{option.name}</option>)}
-      </select></label>
+      <Select key={productId} name="unitId" label="Unidade" defaultValue={unitId} options={unitOptions(units)} onChange={setUnit} />
     </div>
     {kind === 'PURCHASE' && <label>Custo total da compra (R$)
       <input name="totalCost" inputMode="decimal" required placeholder="0,00" value={total} onChange={event => setTotal(event.target.value)} />
@@ -279,9 +279,9 @@ function Inventory({ data, saved }: { data: StockView; saved: (text: string) => 
       rows={preview.rows.map(row => {
         const unit = baseUnit(row.product).symbol;
         const difference = Number(row.difference);
-        return [<Title name={row.product.name} code={row.product.sku} />, quantity(row.expected) + ' ' + unit, quantity(row.counted) + ' ' + unit,
-          <strong style={{ color: difference > 0 ? 'var(--ok)' : difference < 0 ? 'var(--danger)' : 'var(--muted)' }}>
-            {difference > 0 ? '+ ' : ''}{quantity(row.difference)} {unit}</strong>];
+        return [by(row.product.name, <Title name={row.product.name} code={row.product.sku} />), by(row.expected, quantity(row.expected) + ' ' + unit), by(row.counted, quantity(row.counted) + ' ' + unit),
+          by(row.difference, <strong style={{ color: difference > 0 ? 'var(--ok)' : difference < 0 ? 'var(--danger)' : 'var(--muted)' }}>
+            {difference > 0 ? '+ ' : ''}{quantity(row.difference)} {unit}</strong>)];
       })} />
     <Form key={preview.id} label="Aplicar inventário" extra={<button type="button" className="btn secondary" onClick={() => setPreview(undefined)}>Voltar</button>}
       action={async () => {
@@ -330,13 +330,26 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
     <div className="section-head"><div><h3>Prévia da carga inicial</h3><p>{preview.rows.length} produtos novos serão cadastrados.</p></div></div>
     <Table columns={['Produto', 'Tipo', { label: 'Saldo informado', end: true }, { label: 'Custo total', end: true }, { label: 'Custo por unidade', end: true }, { label: 'Perda', end: true }]}
       rows={preview.rows.map(row => [
-        <Title name={row.name} code={row.sku} />, row.typeName, quantity(row.quantity) + ' ' + row.unit, brl(row.totalCost),
-        row.declaredCost === null ? '—' : brl(row.declaredCost) + ' / ' + row.unit, row.wastePercent ? quantity(row.wastePercent) + '%' : '—',
+        by(row.name, <Title name={row.name} code={row.sku} />), row.typeName, by(row.quantity, quantity(row.quantity) + ' ' + row.unit), by(row.totalCost, brl(row.totalCost)),
+        by(row.declaredCost, row.declaredCost === null ? '—' : brl(row.declaredCost) + ' / ' + row.unit), by(row.wastePercent, row.wastePercent ? quantity(row.wastePercent) + '%' : '—'),
       ])} />
     {preview.recipes.length > 0 && <>
       <h3>Fichas técnicas</h3>
       <Table columns={['Produto', 'Insumo', { label: 'Consumo por unidade', end: true }]}
-        rows={preview.recipes.map(row => [row.product, row.input, quantity(row.quantity) + ' ' + row.unit])} />
+        rows={preview.recipes.map(row => [row.product, row.input, by(row.quantity, quantity(row.quantity) + ' ' + row.unit)])} />
+    </>}
+    {preview.rows.some(row => row.minStock || row.marginPercent || row.salePrice || dimensions(row) || row.purchaseUrl) && <>
+      <h3>Dados do cadastro</h3>
+      <Table columns={['SKU', { label: 'Mínimo', end: true }, { label: 'Margem', end: true }, { label: 'Preço de venda', end: true }, 'Dimensões (mm)', 'URL de compra']}
+        rows={preview.rows.filter(row => row.minStock || row.marginPercent || row.salePrice || dimensions(row) || row.purchaseUrl).map(row => [
+          row.sku, by(row.minStock, row.minStock ? quantity(row.minStock) + ' ' + row.unit : '—'), by(row.marginPercent, row.marginPercent ? quantity(row.marginPercent) + '%' : '—'),
+          by(row.salePrice, row.salePrice ? brl(row.salePrice) : '—'), dimensions(row) || '—', row.purchaseUrl ?? '—',
+        ])} />
+    </>}
+    {preview.measures.length > 0 && <>
+      <h3>Medidas extras</h3>
+      <Table columns={['SKU', 'Medida', { label: 'Valor', end: true }]}
+        rows={preview.measures.map(row => [row.sku, row.name, by(row.value, quantity(row.value) + ' ' + row.unit)])} />
     </>}
     <Form key={preview.id} label="Confirmar carga inicial" extra={<button type="button" className="btn secondary" onClick={() => setPreview(undefined)}>Voltar</button>}
       action={async () => {
@@ -347,7 +360,7 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
   </div>;
   return <div className="stack">
     <div className="info">Use SKUs novos e os tipos, unidades e classificações da aba Listas. Informe o custo total da linha, e o sistema calcula o valor por unidade.
-      Para produtos fabricados, preencha a aba Ficha técnica com o consumo de uma unidade.</div>
+      Para produtos fabricados, preencha a aba Ficha técnica com o consumo de uma unidade. Mínimo, margem, preço, dimensões, URL e a aba Medidas são opcionais.</div>
     <a className="btn secondary" style={{ alignSelf: 'flex-start' }} href="/api/stock/initial/template"><Download size={16} aria-hidden="true" />Baixar modelo</a>
     <Upload action={async file => { setPreview(undefined); setPreview(await api<InitialPreview>('stock/initial/preview', file)); }} />
   </div>;
