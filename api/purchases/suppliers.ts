@@ -13,6 +13,8 @@ export const supplierFields = z.object({
   contact: z.preprocess(blankToNull, z.string().trim().max(160).nullable()).default(null),
   active: z.boolean().default(true),
 });
+// Saving an edit states the situation, so a partial request never reactivates an inactive supplier.
+export const supplierUpdateFields = supplierFields.extend({ active: z.boolean() });
 type SupplierData = z.infer<typeof supplierFields>;
 
 const usage = { _count: { select: { purchases: true, lastProducts: true, undoItems: true } } } as const;
@@ -77,7 +79,7 @@ export class SupplierController {
   @Require('registrations:operate')
   @Audit('Alterar fornecedor')
   @Patch(':id')
-  update(@Param('id') id: string, @Body() body: unknown) { return this.suppliers.update(parse(idField, id), parse(supplierFields, body)); }
+  update(@Param('id') id: string, @Body() body: unknown) { return this.suppliers.update(parse(idField, id), parse(supplierUpdateFields, body)); }
 
   @Require('registrations:operate')
   @Audit('Excluir fornecedor')
