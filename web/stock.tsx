@@ -241,10 +241,7 @@ function MovementForm({ data, initial, saved }: { data: StockView; initial?: Pro
     <div className="form-grid">
       <label>{kind === 'ADJUSTMENT' ? 'Variação (+ entrada / − saída)' : 'Quantidade'}
         <input name="quantity" inputMode="decimal" required value={amount} onChange={event => setAmount(event.target.value)} /></label>
-      <label>Unidade<select key={productId} name="unitId" required value={unitId} onChange={event => setUnit(event.target.value)}>
-        <option value="">Selecione</option>
-        {unitOptions(units).map(option => <option key={option.id} value={option.id}>{option.name}</option>)}
-      </select></label>
+      <Select key={productId} name="unitId" label="Unidade" defaultValue={unitId} options={unitOptions(units)} onChange={setUnit} />
     </div>
     {kind === 'PURCHASE' && <label>Custo total da compra (R$)
       <input name="totalCost" inputMode="decimal" required placeholder="0,00" value={total} onChange={event => setTotal(event.target.value)} />

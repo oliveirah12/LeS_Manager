@@ -1,6 +1,6 @@
-import { createContext, FormEvent, ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createContext, FormEvent, KeyboardEvent, ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowDown, ArrowUp, CheckCircle2, ChevronsUpDown, Eye, EyeOff, Inbox, Search, SlidersHorizontal, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronsUpDown, Eye, EyeOff, Inbox, Search, SlidersHorizontal, X } from 'lucide-react';
 import { nextSort, sortRows, SortState, SortValue } from './format';
 
 /* ---------- Data ---------- */
@@ -266,10 +266,105 @@ export function Select({ name, label, options, defaultValue, onChange, required 
   name: string; label: string; options: { id: string; name: string }[]; defaultValue?: string;
   onChange?: (id: string) => void; required?: boolean; placeholder?: string;
 }) {
-  return <label>{label}<select name={name} defaultValue={defaultValue ?? ''} required={required} onChange={event => onChange?.(event.target.value)}>
-    <option value="">{placeholder ?? (required ? 'Selecione' : 'Nenhum')}</option>
-    {options.map(option => <option value={option.id} key={option.id}>{option.name}</option>)}
-  </select></label>;
+  const id = useId();
+  const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const initial = useRef(defaultValue ?? '');
+  const [value, setValue] = useState(initial.current);
+  const [query, setQuery] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const emptyLabel = placeholder ?? (required ? 'Selecione' : 'Nenhum');
+  // Like a native select, a value without a matching option counts as empty.
+  const selected = options.find(option => option.id === value);
+  const current = selected?.id ?? '';
+  const visible = query?.trim() ? options.filter(option => matches(query, option.name)) : [{ id: '', name: emptyLabel }, ...options];
+  const optionId = (index: number) => id + '-option-' + index;
+
+  // The hidden input carries the value, so the visible one reports the missing choice to the browser's validation.
+  useLayoutEffect(() => { input.current?.setCustomValidity(required && !current ? 'Selecione uma opção.' : ''); }, [required, current]);
+  useEffect(() => {
+    const form = input.current?.form;
+    if (!form) return;
+    const reset = () => { setValue(initial.current); setQuery(null); setOpen(false); };
+    form.addEventListener('reset', reset);
+    return () => form.removeEventListener('reset', reset);
+  }, []);
+  // A popover stays inside the dialog in the DOM but paints in the top layer, free of the panel's scroll clipping.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const popup = list.current!;
+    popup.showPopover?.();
+    const place = () => {
+      const box = input.current!.getBoundingClientRect();
+      const below = (window.visualViewport?.height ?? innerHeight) - box.bottom - 12;
+      const above = box.top - 12;
+      const upward = below < 180 && above > below;
+      popup.style.maxHeight = Math.min(280, upward ? above : below) + 'px';
+      popup.style.left = box.left + 'px';
+      popup.style.width = box.width + 'px';
+      popup.style.top = (upward ? box.top - 4 - popup.offsetHeight : box.bottom + 4) + 'px';
+    };
+    place();
+    addEventListener('scroll', place, true);
+    addEventListener('resize', place);
+    // The panel slides in, so a list opened during the animation is placed again when it ends.
+    addEventListener('animationend', place, true);
+    window.visualViewport?.addEventListener('resize', place);
+    return () => {
+      removeEventListener('scroll', place, true);
+      removeEventListener('resize', place);
+      removeEventListener('animationend', place, true);
+      window.visualViewport?.removeEventListener('resize', place);
+    };
+  }, [open, visible.length]);
+  useEffect(() => {
+    if (open) document.getElementById(optionId(active))?.scrollIntoView({ block: 'nearest' });
+  }, [open, active]);
+
+  function show() {
+    setActive(Math.max(0, visible.findIndex(option => option.id === current)));
+    setOpen(true);
+  }
+  function close() { setOpen(false); setQuery(null); }
+  function choose(option: { id: string }) {
+    setValue(option.id);
+    close();
+    if (option.id !== current) onChange?.(option.id);
+  }
+  function keyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!open) show();
+      else if (visible.length) setActive((active + (event.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length);
+    } else if (open && event.key === 'Enter') {
+      event.preventDefault();
+      if (visible[active]) choose(visible[active]);
+    } else if (open && event.key === 'Escape') {
+      // Closes only the list: the surrounding dialog stays open.
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    }
+  }
+  return <div className="combo">
+    <label htmlFor={id}>{label}</label>
+    <input type="hidden" name={name} value={current} />
+    <input ref={input} id={id} role="combobox" autoComplete="off" spellCheck={false} placeholder={emptyLabel}
+      aria-autocomplete="list" aria-expanded={open} aria-controls={id + '-list'} aria-required={required}
+      aria-activedescendant={open && visible[active] ? optionId(active) : undefined}
+      value={query ?? selected?.name ?? ''} onKeyDown={keyDown} onBlur={close}
+      onFocus={event => event.currentTarget.select()}
+      onClick={event => { if (!open) { show(); event.currentTarget.select(); } }}
+      onChange={event => { setQuery(event.target.value); setActive(0); setOpen(true); }} />
+    <ChevronDown size={16} aria-hidden="true" className="combo-icon" />
+    {open && <ul ref={list} id={id + '-list'} role="listbox" aria-label={label} className="combo-list" popover="manual"
+      onMouseDown={event => event.preventDefault()}>
+      {visible.map((option, index) => <li key={option.id || 'empty'} id={optionId(index)} role="option" aria-selected={option.id === current}
+        data-active={index === active} className={option.id ? undefined : 'muted'} onMouseMove={() => setActive(index)} onClick={() => choose(option)}>{option.name}</li>)}
+      {!visible.length && <li role="presentation" className="combo-none">Nada encontrado</li>}
+    </ul>}
+  </div>;
 }
 
 export function SearchInput({ value, onChange, label = 'Buscar', placeholder = 'Buscar por SKU ou nome' }: {
