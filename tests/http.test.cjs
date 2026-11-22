@@ -266,12 +266,17 @@ test('API REST com PostgreSQL', {
     expectStatus(await catalog('/finance/refresh', { method: 'POST' }), 403);
   });
 
+  let sessions = 0;
+  // Each profile activates from its own address, so the suite does not use up the limit of 20 attempts per minute.
   async function session(name, permissions) {
     const profile = expectStatus(await post('/access/profiles', { name: sku(name), permissions }), 201);
     const email = (run + '-' + name).toLowerCase() + '@example.com';
     const user = expectStatus(await post('/access/users', { name, email, profileId: profile.id }), 201);
-    const { cookie } = await request('/access/activate', { method: 'POST', body: { email, code: user.code, password, confirmation: password } });
-    return (path, options = {}) => request(path, { ...options, cookie });
+    const activation = await request('/access/activate', {
+      method: 'POST', headers: { 'x-forwarded-for': '198.51.100.' + ++sessions }, body: { email, code: user.code, password, confirmation: password },
+    });
+    expectStatus(activation, 200);
+    return (path, options = {}) => request(path, { ...options, cookie: activation.cookie });
   }
 
   await t.test('mínimo, margem e preço exigem as permissões de estoque', async () => {
