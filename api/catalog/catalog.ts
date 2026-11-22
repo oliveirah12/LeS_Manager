@@ -37,6 +37,11 @@ const catalogProduct = {
   id: true, sku: true, name: true, active: true, typeId: true, unitId: true, groupId: true, brandId: true, colorId: true, departmentId: true,
   ...productInclude,
 } as const;
+/** What stock:view may read. A new product column stays private until it is listed here. */
+const stockProduct = {
+  id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true,
+  ...productInclude,
+} as const;
 const references = [
   ['groupId', ReferenceKind.GRUPO], ['brandId', ReferenceKind.MARCA],
   ['colorId', ReferenceKind.COR], ['departmentId', ReferenceKind.DEPARTAMENTO],
@@ -365,10 +370,10 @@ export class CatalogService {
   async stockView() {
     const [products, kits, reservations] = await Promise.all([
       this.db.product.findMany({
-        where: { active: true }, include: { ...productInclude, type: { select: { isManufactured: true } } }, orderBy: { sku: 'asc' },
+        where: { active: true }, select: { ...stockProduct, type: { select: { isManufactured: true } } }, orderBy: { sku: 'asc' },
       }),
       this.db.kit.findMany({
-        where: { active: true }, include: { components: { include: { product: { include: productInclude } } } }, orderBy: { sku: 'asc' },
+        where: { active: true }, include: { components: { include: { product: { select: stockProduct } } } }, orderBy: { sku: 'asc' },
       }),
       this.db.productionConsumption.groupBy({ by: ['inputId'], where: { item: { order: { status: 'PRINTING' } } }, _sum: { planned: true } }),
     ]);
@@ -656,7 +661,10 @@ export class CatalogController {
   @Post('products')
   addProduct(@Body() body: unknown) {
     const data = parse(productFields, body);
-    return serial(this.db, tx => this.catalog.createProduct(tx, data));
+    return serial(this.db, async tx => {
+      const { id } = await this.catalog.createProduct(tx, data);
+      return tx.product.findUniqueOrThrow({ where: { id }, select: catalogProduct });
+    });
   }
 
   @Require('catalog:operate')

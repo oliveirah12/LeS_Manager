@@ -18,6 +18,23 @@ test('accepts shared inputs and replaces the previous recipe of the product', ()
   assert.equal(formsCycle('a', ['b'], [{ productId: 'a', inputId: 'a' }]), false);
 });
 
+test('the stock view reads products through an explicit field list', async () => {
+  const queries = {};
+  const capture = name => async args => { queries[name] = args; return []; };
+  const db = {
+    product: { findMany: capture('product') }, kit: { findMany: capture('kit') },
+    productionConsumption: { groupBy: async () => [] },
+  };
+  await new CatalogService(db).stockView();
+  const componentQuery = queries.kit.include.components.include.product;
+  for (const query of [queries.product, componentQuery]) {
+    assert.equal(query.include, undefined);
+    assert.equal(query.select.currentCost, true);
+    assert.equal(query.select.wastePercent, undefined);
+    assert.equal(query.select.revision, undefined);
+  }
+});
+
 function service(usage, unitFamily = 'mass') {
   const calls = [];
   const record = name => async args => { calls.push(name); return args; };

@@ -206,6 +206,14 @@ test('API REST com PostgreSQL', {
       sku: sku('KIT-RESTRITO'), name: 'Kit sem exposição de saldo',
       components: [{ productId: product.id, quantity: '2', unitId: unit.id }],
     }), 201);
+    assert.equal('currentCost' in product, false);
+    assert.equal('quantity' in product, false);
+    const stockView = expectStatus(await admin('/stock'), 200);
+    const stockRows = [stockView.products.find(row => row.id === product.id), stockView.kits.find(row => row.id === kit.id).components[0].product];
+    for (const row of stockRows) {
+      assert.equal(row.currentCost, '3');
+      for (const field of ['wastePercent', 'revision', 'typeId', 'groupId']) assert.equal(field in row, false, field);
+    }
     const profile = expectStatus(await post('/access/profiles', {
       name: sku('CATALOGO'), permissions: ['catalog:operate'],
     }), 201);
