@@ -14,6 +14,7 @@ const controllers = [
   require('../dist/api/finance/finance.js').FinanceController,
   require('../dist/api/production/orders.js').ProductionOrderController,
   require('../dist/api/production/production.js').ProductionController,
+  require('../dist/api/purchases/purchases.js').PurchaseController,
   require('../dist/api/purchases/suppliers.js').SupplierController,
   require('../dist/api/stock/controller.js').StockController,
 ];
@@ -52,6 +53,17 @@ test('supplier routes read with registrations:view and write with registrations:
     assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'registrations:view' : 'registrations:operate'], name);
     if (!reads) assert.equal(typeof Reflect.getMetadata(AUDIT, handler), 'string', name);
   }
+});
+
+test('purchase routes read with purchases:view and write with purchases:operate', () => {
+  const controller = require('../dist/api/purchases/purchases.js').PurchaseController;
+  for (const name of ['list', 'details', 'create', 'update', 'reverse']) {
+    const handler = controller.prototype[name];
+    const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
+    assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'purchases:view' : 'purchases:operate'], name);
+    if (!reads) assert.equal(typeof Reflect.getMetadata(AUDIT, handler), 'string', name);
+  }
+  assert.deepEqual(Reflect.getMetadata('permissions', controller.prototype.options), ['purchases:operate']);
 });
 
 test('every route that writes declares whether it is audited', () => {

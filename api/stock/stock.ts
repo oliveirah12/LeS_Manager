@@ -14,8 +14,8 @@ import {
 const previewAge = 7 * 24 * 60 * 60 * 1000;
 
 export const movementFields = z.object({
-  productId: idField, unitId: idField, kind: z.enum(['PURCHASE', 'OUT', 'ADJUSTMENT']),
-  quantity: decimalField, totalCost: nonnegative.optional(), reason: nameField, acknowledgeNoInputs: z.boolean().optional(),
+  productId: idField, unitId: idField, kind: z.enum(['OUT', 'ADJUSTMENT']),
+  quantity: decimalField, reason: nameField, acknowledgeNoInputs: z.boolean().optional(),
 });
 export const kitOutFields = z.object({ quantity: positive.refine(value => value.isInteger(), 'Informe a quantidade inteira de kits'), reason: nameField });
 const countRow = z.object({ sku: skuField, quantity: nonnegative, unit: nameField });
@@ -105,13 +105,7 @@ export class StockService {
     if (data.quantity.eq(0) || (data.kind !== 'ADJUSTMENT' && data.quantity.lt(0))) {
       throw new BadRequestException('Informe uma quantidade válida para a operação.');
     }
-    if ((data.kind === 'PURCHASE') !== (data.totalCost !== undefined)) {
-      throw new BadRequestException('Informe o custo total somente em entradas de compra.');
-    }
-    auditContext({
-      Tipo: ({ PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste' } as const)[data.kind], Motivo: data.reason,
-      ...(data.totalCost === undefined ? {} : { 'Custo total': data.totalCost }),
-    });
+    auditContext({ Tipo: ({ OUT: 'Saída', ADJUSTMENT: 'Ajuste' } as const)[data.kind], Motivo: data.reason });
     return serial(this.db, async tx => {
       const product = await tx.product.findUnique({ where: { id: data.productId }, include: { unit: true, type: true } });
       const unit = await tx.unit.findUnique({ where: { id: data.unitId } });
@@ -124,8 +118,7 @@ export class StockService {
         }
         auditContext({ 'Entrada sem baixa de insumos': 'Confirmada' });
       }
-      const cost = data.totalCost === undefined ? product.currentCost : storedDecimal(costPerBaseUnit(data.totalCost, amount));
-      return this.record(tx, product, data.kind === 'OUT' ? amount.neg() : amount, data.kind, userId, data.reason, cost);
+      return this.record(tx, product, data.kind === 'OUT' ? amount.neg() : amount, data.kind, userId, data.reason);
     });
   }
 

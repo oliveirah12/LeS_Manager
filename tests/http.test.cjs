@@ -103,9 +103,12 @@ test('API REST com PostgreSQL', {
   const createProduct = (name, unitId) => post('/catalog/products', {
     sku: sku(name), name, unitId,
   }).then(response => expectStatus(response, 201));
-  const movement = (productId, unitId, kind, quantity, unitCost) => post('/stock/movements', {
+  // Entries with a cost are purchases, which live in their own module.
+  const movement = (productId, unitId, kind, quantity, unitCost) => kind === 'PURCHASE' ? post('/purchases', {
+    purchaseDate: new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date()),
+    items: [{ productId, unitId, quantity, totalCost: new (require('@prisma/client').Prisma.Decimal)(quantity).times(unitCost).toFixed() }],
+  }) : post('/stock/movements', {
     productId, unitId, kind, quantity, reason: 'Movimentação de teste',
-    totalCost: unitCost === undefined ? undefined : new (require('@prisma/client').Prisma.Decimal)(quantity).times(unitCost).toFixed(),
   });
   const productRow = id => db.product.findUniqueOrThrow({ where: { id } });
   const productMovements = (productId, kind) => db.movement.findMany({
@@ -741,7 +744,7 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/catalog/products/' + product.id, {
       method: 'PATCH', body: { name: 'Fabricado', typeId: '00000000-0000-4000-8000-000000000003' },
     }), 200);
-    const entry = extra => post('/stock/movements', { productId: product.id, unitId: unit.id, kind: 'PURCHASE', quantity: '2', totalCost: '10', reason: 'Peças antigas', ...extra });
+    const entry = extra => post('/purchases', { purchaseDate: '2026-01-01', items: [{ productId: product.id, unitId: unit.id, quantity: '2', totalCost: '10' }], ...extra });
     expectStatus(await entry(), 409);
     assert.equal((await productRow(product.id)).quantity.toString(), '0');
     expectStatus(await entry({ acknowledgeNoInputs: true }), 201);
@@ -1022,5 +1025,114 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/catalog/products/' + product.id, { method: 'DELETE' }), 200);
     assert.equal(await db.storedFile.count({ where: { id: attached.id } }), 0);
     assert.deepEqual(stored(), [], 'excluir o produto não deixa arquivo órfão');
+  });
+
+  await t.test('compras: permissões, produto repetido, rateio, atomicidade e estorno', async () => {
+    const day = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+    const purchase = (items, extra = {}) => ({ purchaseDate: day, items, ...extra });
+    const line = (product, quantity, totalCost, unitId = unit.id) => ({ productId: product.id, unitId, quantity, totalCost });
+    const none = await session('COMPRA-NADA', ['catalog:view']);
+    const viewer = await session('COMPRA-VER', ['purchases:view']);
+    const operator = await session('COMPRA-OPERA', ['purchases:operate']);
+    const registrar = await session('COMPRA-CAD', ['registrations:operate']);
+    const first = await createProduct('COMPRA-A', unit.id);
+    const second = await createProduct('COMPRA-B', unit.id);
+    const body = purchase([line(first, '1', '10')]);
+
+    expectStatus(await none('/purchases'), 403);
+    expectStatus(await none('/purchases', { method: 'POST', body }), 403);
+    expectStatus(await viewer('/purchases'), 200);
+    expectStatus(await viewer('/purchases/options'), 403);
+    expectStatus(await viewer('/purchases', { method: 'POST', body }), 403);
+    expectStatus(await none('/suppliers'), 403);
+    expectStatus(await operator('/suppliers', { method: 'POST', body: { name: sku('FORN-X') } }), 403);
+    const supplier = expectStatus(await registrar('/suppliers', { method: 'POST', body: { name: sku('FORN'), document: '12.345.678/0001-95' } }), 201);
+    assert.equal(supplier.document, '12345678000195');
+    const options = expectStatus(await operator('/purchases/options'), 200);
+    assert.ok(options.suppliers.some(row => row.id === supplier.id));
+    assert.equal(JSON.stringify(options.products).includes('currentCost'), false);
+
+    // Repeated lines become one entry with the combined cost, and the extra cost stays out of the average.
+    const posted = expectStatus(await operator('/purchases', { method: 'POST', body: purchase(
+      [line(first, '2', '10'), line(second, '1', '30'), line(first, '2', '30')],
+      { supplierId: supplier.id, documentNumber: 'NF-1', purchaseDate: '2026-01-15', costs: [{ title: 'Frete', mode: 'VALUE', value: '10', split: 'QUANTITY' }, { title: 'Taxa', mode: 'PERCENT', value: '10', split: 'VALUE' }] },
+    ) }), 201);
+    let row = await productRow(first.id);
+    // Freight 10 over 5 pieces gives 8 to this item; the 7 of the fee follow the value, 40 of 70, so 4. Together 12 over 4 pieces.
+    assert.deepEqual([row.quantity.toString(), row.currentCost.toString(), row.lastPurchaseCost.toString(), row.lastPurchaseExpense.toString()], ['4', '10', '10', '3']);
+    assert.equal(row.lastSupplierId, supplier.id);
+    assert.equal(row.lastPurchaseAt.toISOString().slice(0, 10), '2026-01-15');
+    assert.equal((await productMovements(first.id, 'PURCHASE')).length, 1);
+    const details = expectStatus(await viewer('/purchases/' + posted.id), 200);
+    assert.deepEqual([details.goodsTotal, details.costsTotal, details.reversalBlock], ['70', '17', null]);
+    assert.equal(details.items.reduce((total, item) => total + Number(item.expenseTotal), 0), 17);
+    assert.equal(JSON.stringify(details).includes('previousCost'), false);
+
+    // A failure on the last line leaves nothing behind.
+    const inactive = await createProduct('COMPRA-INATIVO', unit.id);
+    await db.product.update({ where: { id: inactive.id }, data: { active: false } });
+    const before = await db.purchase.count();
+    expectStatus(await operator('/purchases', { method: 'POST', body: purchase([line(first, '1', '99'), line(inactive, '1', '1')]) }), 409);
+    assert.equal(await db.purchase.count(), before);
+    assert.equal((await productRow(first.id)).quantity.toString(), '4');
+    expectStatus(await operator('/purchases', { method: 'POST', body: purchase([line(first, '1', '1')], { purchaseDate: '2999-01-01' }) }), 400);
+
+    // Informative data changes without touching stock, and reaches the product summary.
+    expectStatus(await viewer('/purchases/' + posted.id, { method: 'PATCH', body: { purchaseDate: '2026-01-20' } }), 403);
+    expectStatus(await operator('/purchases/' + posted.id, { method: 'PATCH', body: { purchaseDate: '2026-01-20', documentNumber: 'NF-2', supplierId: supplier.id } }), 200);
+    row = await productRow(first.id);
+    assert.equal(row.lastPurchaseAt.toISOString().slice(0, 10), '2026-01-20');
+    assert.equal(row.quantity.toString(), '4');
+
+    // A later purchase blocks the older one; reversing the newest restores the state before it.
+    const later = expectStatus(await operator('/purchases', { method: 'POST', body: purchase([line(first, '4', '80')]) }), 201);
+    assert.equal((await productRow(first.id)).currentCost.toString(), '15');
+    expectStatus(await operator('/purchases/' + posted.id + '/reversal', { method: 'POST', body: { reason: 'Erro' } }), 409);
+    expectStatus(await viewer('/purchases/' + later.id + '/reversal', { method: 'POST', body: { reason: 'Erro' } }), 403);
+    expectStatus(await operator('/purchases/' + later.id + '/reversal', { method: 'POST', body: {} }), 400);
+    expectStatus(await operator('/purchases/' + later.id + '/reversal', { method: 'POST', body: { reason: 'Nota errada' } }), 201);
+    row = await productRow(first.id);
+    assert.deepEqual([row.quantity.toString(), row.currentCost.toString(), row.lastPurchaseCost.toString(), row.lastPurchaseExpense.toString()], ['4', '10', '10', '3']);
+    assert.equal(row.lastPurchaseAt.toISOString().slice(0, 10), '2026-01-20');
+    assert.equal(row.lastSupplierId, supplier.id);
+    assert.equal((await productMovements(first.id, 'PURCHASE_REVERSAL')).length, 1);
+    expectStatus(await operator('/purchases/' + later.id + '/reversal', { method: 'POST', body: { reason: 'De novo' } }), 409);
+    expectStatus(await operator('/purchases/' + later.id, { method: 'PATCH', body: { purchaseDate: day } }), 409);
+
+    // Any later movement blocks the reversal.
+    expectStatus(await movement(first.id, unit.id, 'OUT', '1'), 201);
+    assert.match(expectStatus(await viewer('/purchases/' + posted.id), 200).reversalBlock, /movimentação posterior/);
+    expectStatus(await operator('/purchases/' + posted.id + '/reversal', { method: 'POST', body: { reason: 'Tarde' } }), 409);
+    assert.equal((await productRow(second.id)).quantity.toString(), '1', 'o bloqueio de um item barra a compra inteira');
+
+    // The free balance must cover the reversal when a running print holds the input.
+    const held = await createProduct('COMPRA-RESERVA', unit.id);
+    const heldPurchase = expectStatus(await operator('/purchases', { method: 'POST', body: purchase([line(held, '5', '5')]) }), 201);
+    const printer = await db.printer.create({ data: { name: sku('COMPRA-IMP'), powerWatts: '100', hourlyCost: '1' } });
+    const piece = await createProduct('COMPRA-PECA', unit.id);
+    const adminUser = await db.user.findUniqueOrThrow({ where: { email: adminEmail } });
+    const order = await db.productionOrder.create({ data: {
+      status: 'PRINTING', printerId: printer.id, userId: adminUser.id, plannedStart: new Date(), estimatedMinutes: 10, expectedEnd: new Date(),
+      items: { create: { productId: piece.id, planned: '1', consumption: { create: { inputId: held.id, planned: '2' } } } },
+    } });
+    assert.match(expectStatus(await viewer('/purchases/' + heldPurchase.id), 200).reversalBlock, /reservado/);
+    expectStatus(await operator('/purchases/' + heldPurchase.id + '/reversal', { method: 'POST', body: { reason: 'Reservado' } }), 409);
+    assert.equal((await productRow(held.id)).quantity.toString(), '5');
+    await db.productionOrder.update({ where: { id: order.id }, data: { status: 'CANCELED' } });
+
+    // A converted purchase keeps its data editable, without a reversal.
+    const convertedMovement = await db.movement.create({ data: { kind: 'PURCHASE', quantity: '1', unitCost: '1', reason: 'Antiga', productId: second.id, userId: adminUser.id } });
+    const converted = await db.purchase.create({ data: {
+      purchaseDate: new Date('2025-01-01'), goodsTotal: '1', converted: true, userId: adminUser.id,
+      items: { create: { productId: second.id, movementId: convertedMovement.id, declaredQuantity: '1', declaredUnit: unit.symbol, quantity: '1', goodsTotal: '1', unitCost: '1' } },
+    } });
+    expectStatus(await operator('/purchases/' + converted.id + '/reversal', { method: 'POST', body: { reason: 'Antiga' } }), 409);
+    expectStatus(await operator('/purchases/' + converted.id, { method: 'PATCH', body: { purchaseDate: '2025-01-02', documentNumber: 'ANTIGA' } }), 200);
+
+    // A supplier with history is inactivated, not removed, and leaves the purchase form.
+    expectStatus(await registrar('/suppliers/' + supplier.id, { method: 'DELETE' }), 409);
+    expectStatus(await registrar('/suppliers/' + supplier.id, { method: 'PATCH', body: { name: supplier.name, active: false } }), 200);
+    expectStatus(await operator('/purchases', { method: 'POST', body: purchase([line(first, '1', '1')], { supplierId: supplier.id }) }), 409);
+    await waitForAuditEvent({ action: 'Estornar compra' }, item => item.targetId === later.id && item.status === 201);
   });
 });
