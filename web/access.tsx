@@ -10,7 +10,7 @@ type User = { id: string; name: string; email: string; active: boolean; pending:
 type Code = { code: string; expiresAt: string; name: string };
 const modules = [
   { id: 'catalog', name: 'Catálogo' }, { id: 'registrations', name: 'Cadastros' },
-  { id: 'stock', name: 'Estoque' }, { id: 'finance', name: 'Financeiro' }, { id: 'production', name: 'Produção' },
+  { id: 'stock', name: 'Estoque' }, { id: 'finance', name: 'Financeiro' }, { id: 'production', name: 'Produção' }, { id: 'purchases', name: 'Compras' },
 ];
 
 export function SignIn({ signedIn, notice }: { signedIn: () => Promise<void>; notice?: string }) {

@@ -23,6 +23,17 @@ enum MovementKind {
   INVENTORY
   PRODUCTION_IN
   PRODUCTION_OUT
+  PURCHASE_REVERSAL
+}
+
+enum PurchaseCostMode {
+  VALUE
+  PERCENT
+}
+
+enum PurchaseCostSplit {
+  VALUE
+  QUANTITY
 }
 
 enum ProductionStatus {
@@ -57,6 +68,8 @@ model User {
   bankConnections   BankConnection[]
   productionOrders  ProductionOrder[]
   storedFiles       StoredFile[]
+  purchases         Purchase[]       @relation("PurchaseAuthor")
+  purchaseReversals Purchase[]       @relation("PurchaseReverser")
 }
 
 model Session {
@@ -122,6 +135,10 @@ model Product {
   quantity      Decimal         @default(0) @db.Decimal(30, 12)
   currentCost   Decimal?        @db.Decimal(30, 12)
   lastPurchaseCost Decimal?     @db.Decimal(30, 12)
+  lastPurchaseAt   DateTime?    @db.Date
+  lastPurchaseExpense Decimal?  @db.Decimal(30, 12)
+  lastSupplierId   String?
+  lastSupplier     Supplier?    @relation("ProductLastSupplier", fields: [lastSupplierId], references: [id])
   minStock      Decimal?        @db.Decimal(30, 12)
   salePrice     Decimal?        @db.Decimal(30, 12)
   marginPercent Decimal?        @db.Decimal(5, 2)
@@ -142,6 +159,7 @@ model Product {
   productionItems  ProductionItem[]
   productionInputs ProductionConsumption[]
   files         ProductFile[]
+  purchaseItems PurchaseItem[]
 }
 
 /// Extra measure of a product, such as thread pitch or nozzle size. It has no meaning without the product.
@@ -283,8 +301,101 @@ model Movement {
   kit       Kit?         @relation(fields: [kitId], references: [id])
   productionOrderId String?
   productionOrder   ProductionOrder? @relation(fields: [productionOrderId], references: [id])
+  purchaseItem      PurchaseItem?
   @@index([productId, createdAt])
   @@index([productionOrderId])
+}
+
+/// Who a purchase came from. A supplier with history is inactivated instead of removed.
+model Supplier {
+  id           String         @id @default(uuid())
+  name         String         @unique
+  document     String?        @unique
+  contact      String?
+  active       Boolean        @default(true)
+  purchases    Purchase[]
+  lastProducts Product[]      @relation("ProductLastSupplier")
+  undoItems    PurchaseItem[] @relation("PurchaseItemPreviousSupplier")
+}
+
+/// A purchase document. The date is informative: stock and average change when it is posted.
+model Purchase {
+  id             String         @id @default(uuid())
+  number         Int            @unique @default(autoincrement())
+  supplierId     String?
+  supplier       Supplier?      @relation(fields: [supplierId], references: [id])
+  documentNumber String?
+  purchaseDate   DateTime       @db.Date
+  notes          String?
+  goodsTotal     Decimal        @db.Decimal(30, 12)
+  costsTotal     Decimal        @default(0) @db.Decimal(30, 12)
+  /// Converted from a movement older than this module. It has no stored previous state, so it cannot be reversed.
+  converted      Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  userId         String
+  user           User           @relation("PurchaseAuthor", fields: [userId], references: [id])
+  reversedAt     DateTime?
+  reversalReason String?
+  reversedById   String?
+  reversedBy     User?          @relation("PurchaseReverser", fields: [reversedById], references: [id])
+  items          PurchaseItem[]
+  costs          PurchaseCost[]
+  @@index([createdAt])
+  @@index([supplierId])
+}
+
+/// One product of a purchase. Repeated lines are merged, so each product has one movement and one undo state.
+model PurchaseItem {
+  id                  String             @id @default(uuid())
+  purchaseId          String
+  purchase            Purchase           @relation(fields: [purchaseId], references: [id])
+  productId           String
+  product             Product            @relation(fields: [productId], references: [id])
+  movementId          String             @unique
+  movement            Movement           @relation(fields: [movementId], references: [id])
+  declaredQuantity    Decimal            @db.Decimal(30, 12)
+  declaredUnit        String
+  quantity            Decimal            @db.Decimal(30, 12)
+  goodsTotal          Decimal            @db.Decimal(30, 12)
+  unitCost            Decimal?           @db.Decimal(30, 12)
+  expenseTotal        Decimal            @default(0) @db.Decimal(30, 12)
+  unitExpense         Decimal            @default(0) @db.Decimal(30, 12)
+  /// Product revision right after this entry. A different value means something happened later.
+  revisionAfter       Int?
+  previousCost        Decimal?           @db.Decimal(30, 12)
+  previousLastCost    Decimal?           @db.Decimal(30, 12)
+  previousLastAt      DateTime?          @db.Date
+  previousLastExpense Decimal?           @db.Decimal(30, 12)
+  previousSupplierId  String?
+  previousSupplier    Supplier?          @relation("PurchaseItemPreviousSupplier", fields: [previousSupplierId], references: [id])
+  shares              PurchaseItemCost[]
+  @@unique([purchaseId, productId])
+  @@index([productId])
+}
+
+/// Extra cost of a purchase, such as freight. It never enters the moving average.
+model PurchaseCost {
+  id         String             @id @default(uuid())
+  purchaseId String
+  purchase   Purchase           @relation(fields: [purchaseId], references: [id])
+  title      String
+  mode       PurchaseCostMode
+  value      Decimal            @db.Decimal(30, 12)
+  split      PurchaseCostSplit
+  amount     Decimal            @db.Decimal(30, 12)
+  shares     PurchaseItemCost[]
+  @@index([purchaseId])
+}
+
+/// How much of one extra cost fell on one item.
+model PurchaseItemCost {
+  itemId String
+  item   PurchaseItem @relation(fields: [itemId], references: [id])
+  costId String
+  cost   PurchaseCost @relation(fields: [costId], references: [id])
+  amount Decimal      @db.Decimal(30, 12)
+  @@id([itemId, costId])
+  @@index([costId])
 }
 
 model Kit {

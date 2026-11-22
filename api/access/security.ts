@@ -38,7 +38,7 @@ export async function verifyPassword(password: string, hash: string | null) {
   return timingSafeEqual(Buffer.from(candidate), Buffer.from(hash ?? dummy)) && hash !== null;
 }
 
-export const modules = ['catalog', 'registrations', 'stock', 'finance', 'production'] as const;
+export const modules = ['catalog', 'registrations', 'stock', 'finance', 'production', 'purchases'] as const;
 export const configurablePermissions = modules.flatMap(module => [module + ':view', module + ':operate']);
 export const administrator = 'admin';
 
