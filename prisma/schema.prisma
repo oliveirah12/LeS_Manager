@@ -123,6 +123,7 @@ model Product {
   lastPurchaseCost Decimal?     @db.Decimal(30, 12)
   minStock      Decimal?        @db.Decimal(30, 12)
   salePrice     Decimal?        @db.Decimal(30, 12)
+  marginPercent Decimal?        @db.Decimal(5, 2)
   active        Boolean         @default(true)
   revision      Int             @default(0)
   wastePercent  Decimal         @default(0) @db.Decimal(5, 2)

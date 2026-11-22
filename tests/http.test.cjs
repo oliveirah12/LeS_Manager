@@ -266,14 +266,53 @@ test('API REST com PostgreSQL', {
     expectStatus(await catalog('/finance/refresh', { method: 'POST' }), 403);
   });
 
+  async function session(name, permissions) {
+    const profile = expectStatus(await post('/access/profiles', { name: sku(name), permissions }), 201);
+    const email = (run + '-' + name).toLowerCase() + '@example.com';
+    const user = expectStatus(await post('/access/users', { name, email, profileId: profile.id }), 201);
+    const { cookie } = await request('/access/activate', { method: 'POST', body: { email, code: user.code, password, confirmation: password } });
+    return (path, options = {}) => request(path, { ...options, cookie });
+  }
+
+  await t.test('mínimo, margem e preço exigem as permissões de estoque', async () => {
+    const product = await createProduct('COMERCIAL', unit.id);
+    expectStatus(await movement(product.id, unit.id, 'PURCHASE', '1', '60'), 201);
+    const settings = '/stock/products/' + product.id + '/settings';
+    const details = '/catalog/products/' + product.id + '/details';
+    const body = { minStock: '2', salePrice: '90', marginPercent: '40' };
+
+    const stranger = await session('COM-SEM', ['finance:view']);
+    expectStatus(await stranger('/stock'), 403);
+    expectStatus(await stranger(settings, { method: 'PATCH', body }), 403);
+
+    const cataloger = await session('COM-CATALOGO', ['catalog:operate']);
+    expectStatus(await cataloger(settings, { method: 'PATCH', body }), 403);
+    expectStatus(await cataloger('/catalog/products/' + product.id, { method: 'PATCH', body: { name: 'COMERCIAL', ...body } }), 200);
+    const untouched = await productRow(product.id);
+    assert.deepEqual([untouched.minStock, untouched.salePrice, untouched.marginPercent], [null, null, null]);
+    const hidden = expectStatus(await cataloger(details), 200);
+    assert.equal(hidden.stock, null);
+    assert.equal(JSON.stringify(hidden).includes('marginPercent'), false);
+    assert.equal('marginPercent' in expectStatus(await cataloger('/catalog'), 200).products.find(row => row.id === product.id), false);
+
+    const operator = await session('COM-OPERA', ['stock:operate']);
+    expectStatus(await operator(settings, { method: 'PATCH', body: { ...body, marginPercent: '100' } }), 400);
+    expectStatus(await operator(settings, { method: 'PATCH', body }), 200);
+    const reader = await session('COM-LEITURA', ['stock:view', 'catalog:view']);
+    expectStatus(await reader(settings, { method: 'PATCH', body }), 403);
+    const low = expectStatus(await reader('/stock'), 200).products.find(row => row.id === product.id);
+    assert.deepEqual([low.marginPercent, low.suggestedPrice, low.belowTargetMargin, low.salePrice], ['40', '100', true, '90']);
+    assert.equal(expectStatus(await reader(details), 200).stock.suggestedPrice, '100');
+
+    // The suggestion never changes the price by itself, and a client without the margin keeps it.
+    expectStatus(await operator(settings, { method: 'PATCH', body: { minStock: '2', salePrice: '100' } }), 200);
+    const confirmed = expectStatus(await reader('/stock'), 200).products.find(row => row.id === product.id);
+    assert.deepEqual([confirmed.marginPercent, confirmed.belowTargetMargin], ['40', false]);
+    const { events } = expectStatus(await admin('/audit?' + new URLSearchParams({ action: 'Alterar parâmetros de estoque' })), 200);
+    assert.ok(events.some(row => row.targetId === product.id && row.details?.after?.['Margem desejada (%)'] === '40'));
+  });
+
   await t.test('dados técnicos do produto respeitam leitura e operação do catálogo', async () => {
-    async function session(name, permissions) {
-      const profile = expectStatus(await post('/access/profiles', { name: sku(name), permissions }), 201);
-      const email = (run + '-' + name).toLowerCase() + '@example.com';
-      const user = expectStatus(await post('/access/users', { name, email, profileId: profile.id }), 201);
-      const { cookie } = await request('/access/activate', { method: 'POST', body: { email, code: user.code, password, confirmation: password } });
-      return (path, options = {}) => request(path, { ...options, cookie });
-    }
     const product = expectStatus(await post('/catalog/products', {
       sku: sku('TECNICO'), name: 'Técnico', unitId: unit.id, lengthMm: '120.5', diameterMm: '1,75',
       purchaseUrl: 'https://loja.example/item', measures: [{ name: 'Passo', value: '0.4', unit: 'mm' }],
