@@ -1,14 +1,15 @@
 import {
-  BadRequestException, Body, Controller, Delete, Get, Header, Inject, Injectable, NotFoundException, Param, Post, Req, StreamableFile, UploadedFile,
+  BadRequestException, Body, Controller, Delete, Get, Header, Inject, Injectable, NotFoundException, Param, Post, Query, Req, StreamableFile, UploadedFile,
 } from '@nestjs/common';
-import { PurchaseDocumentType } from '@prisma/client';
+import { Prisma, PurchaseDocumentType } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
 import { Audit, auditContext } from '../audit/recorder';
 import { FileService } from '../files/files';
 import { attachmentHeader, hasDocumentExtension, matchesDocumentContent, purchaseDocumentLimit, purchaseDocumentMessage } from '../files/rules';
 import { FileUpload } from '../files/upload';
-import { Database, idField, parse } from '../shared';
+import { Database, idField, parse, sortField } from '../shared';
+import { storedDate } from './rules';
 
 export const documentTypeLabels: Record<PurchaseDocumentType, string> = {
   INVOICE: 'Nota fiscal', RECEIPT: 'Recibo', PAYMENT_PROOF: 'Comprovante de pagamento', QUOTE: 'Orçamento', OTHER: 'Outro',
@@ -57,6 +58,86 @@ export class PurchaseDocumentService {
 
   /** The temporary file is gone after a successful save; on any failure this clears it. */
   discard(upload: Express.Multer.File) { return this.files.discard(upload); }
+}
+
+const searchSort = {
+  uploadedAt: direction => ({ file: { createdAt: direction } }),
+  name: direction => ({ file: { originalName: direction } }),
+  size: direction => ({ file: { sizeBytes: direction } }),
+  type: direction => ({ type: direction }),
+  purchaseNumber: direction => ({ purchase: { number: direction } }),
+  purchaseDate: direction => ({ purchase: { purchaseDate: direction } }),
+  documentNumber: direction => ({ purchase: { documentNumber: { sort: direction, nulls: 'last' } } }),
+  supplier: direction => ({ purchase: { supplier: { name: direction } } }),
+} satisfies Record<string, (direction: Prisma.SortOrder) => Prisma.PurchaseDocumentOrderByWithRelationInput>;
+const sortKeys = Object.keys(searchSort) as (keyof typeof searchSort)[];
+const blankToUndefined = (value: unknown) => typeof value === 'string' && !value.trim() ? undefined : value;
+const optional = <T extends z.ZodType>(field: T) => z.preprocess(blankToUndefined, field.optional());
+export const searchFields = z.object({
+  supplierId: optional(idField), productId: optional(idField), type: optional(documentTypeField),
+  number: optional(z.string().trim().max(60)), from: optional(z.iso.date()), to: optional(z.iso.date()),
+  sort: optional(sortField(sortKeys)), page: z.coerce.number().int().min(1).max(1_000_000).default(1),
+}).refine(({ from, to }) => !from || !to || from <= to, 'O início do período não pode ser depois do fim');
+export const searchPageSize = 25;
+
+/** `contains` treats these characters as wildcards, and a document number is literal text. */
+const literal = (value: string) => value.replace(/[\\%_]/g, '\\$&');
+
+/** Only files that exist. The number matches the supplier's document or, when numeric, the purchase itself. */
+export function searchWhere({ supplierId, productId, type, number, from, to }: z.infer<typeof searchFields>): Prisma.PurchaseDocumentWhereInput {
+  const purchase: Prisma.PurchaseWhereInput = {
+    ...(supplierId ? { supplierId } : {}),
+    ...(productId ? { items: { some: { productId } } } : {}),
+    ...(from || to ? { purchaseDate: { ...(from ? { gte: storedDate(from) } : {}), ...(to ? { lte: storedDate(to) } : {}) } } : {}),
+    ...(number ? { OR: [
+      { documentNumber: { contains: literal(number), mode: 'insensitive' as const } },
+      ...(/^\d{1,9}$/.test(number) ? [{ number: Number(number) }] : []),
+    ] } : {}),
+  };
+  return { file: { available: true }, ...(type ? { type } : {}), purchase };
+}
+
+@Injectable()
+export class PurchaseDocumentSearch {
+  constructor(@Inject(Database) private db: Database) {}
+
+  async search(filters: z.infer<typeof searchFields>) {
+    const where = searchWhere(filters);
+    const { key, direction } = filters.sort ?? { key: 'uploadedAt' as const, direction: 'desc' as const };
+    const [total, rows] = await Promise.all([
+      this.db.purchaseDocument.count({ where }),
+      this.db.purchaseDocument.findMany({
+        where, orderBy: [searchSort[key](direction), { fileId: direction }], skip: (filters.page - 1) * searchPageSize, take: searchPageSize,
+        select: {
+          ...documentSelect,
+          purchase: { select: { id: true, number: true, purchaseDate: true, documentNumber: true, converted: true, reversedAt: true, supplier: { select: { name: true } } } },
+        },
+      }),
+    ]);
+    return { documents: rows.map(({ purchase, ...row }) => ({ ...publicDocument(row), purchase })), total, page: filters.page, pageSize: searchPageSize };
+  }
+
+  /** Inactive suppliers and products stay listed, because their old documents are still searched. It carries no costs. */
+  async filters() {
+    const [suppliers, products] = await Promise.all([
+      this.db.supplier.findMany({ where: { purchases: { some: {} } }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+      this.db.product.findMany({ where: { purchaseItems: { some: {} } }, select: { id: true, sku: true, name: true }, orderBy: { sku: 'asc' } }),
+    ]);
+    return { suppliers, products: products.map(({ id, sku, name }) => ({ id, name: sku + ' · ' + name })) };
+  }
+}
+
+@Controller('purchase-documents')
+export class PurchaseDocumentSearchController {
+  constructor(@Inject(PurchaseDocumentSearch) private documents: PurchaseDocumentSearch) {}
+
+  @Require('purchases:view')
+  @Get()
+  search(@Query() query: unknown) { return this.documents.search(parse(searchFields, query)); }
+
+  @Require('purchases:view')
+  @Get('filters')
+  filters() { return this.documents.filters(); }
 }
 
 @Controller('purchases/:id/documents')

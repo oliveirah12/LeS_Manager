@@ -1136,6 +1136,111 @@ test('API REST com PostgreSQL', {
     await waitForAuditEvent({ action: 'Estornar compra' }, item => item.targetId === later.id && item.status === 201);
   });
 
+  await t.test('documentos de compra: permissões, limite, tipos, filtros e nenhum arquivo órfão', async () => {
+    const fileRootFiles = () => readdirSync(process.env.FILE_STORAGE_DIR, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile()).length;
+    const pdf = Buffer.from('%PDF-1.7 nota');
+    const form = (bytes, name, type = 'INVOICE') => {
+      const body = new FormData();
+      if (type) body.append('type', type);
+      body.append('file', new Blob([bytes]), name);
+      return body;
+    };
+    const none = await session('DOC-NADA', ['stock:operate']);
+    const viewer = await session('DOC-VER', ['purchases:view']);
+    const operator = await session('DOC-OPERA', ['purchases:operate']);
+    const supplier = expectStatus(await post('/suppliers', { name: sku('FORN-DOC') }), 201);
+    const product = await createProduct('DOC-A', unit.id);
+    const otherProduct = await createProduct('DOC-B', unit.id);
+    const buy = (item, extra) => post('/purchases', { purchaseDate: '2026-03-10', items: [{ productId: item.id, unitId: unit.id, quantity: '1', totalCost: '10' }], ...extra });
+    const purchase = expectStatus(await buy(product, { supplierId: supplier.id, documentNumber: run + '_NF-77' }), 201);
+    const other = expectStatus(await buy(otherProduct, { purchaseDate: '2026-04-20', documentNumber: run + 'XNF-77' }), 201);
+    const path = '/purchases/' + purchase.id + '/documents';
+    const before = fileRootFiles();
+
+    expectStatus(await request(path), 401);
+    expectStatus(await none(path), 403);
+    expectStatus(await none('/purchase-documents'), 403);
+    expectStatus(await none('/purchase-documents/filters'), 403);
+    expectStatus(await none(path, { method: 'POST', body: form(pdf, 'a.pdf') }), 403);
+    expectStatus(await viewer(path, { method: 'POST', body: form(pdf, 'a.pdf') }), 403);
+
+    // Refused uploads leave nothing behind: limit, blocked or wrong type, renamed content, missing type.
+    expectStatus(await operator(path, { method: 'POST', body: form(Buffer.concat([pdf, Buffer.alloc(20 * 1024 * 1024)]), 'grande.pdf') }), 413);
+    expectStatus(await operator(path, { method: 'POST', body: form('MZ', 'setup.exe') }), 415);
+    expectStatus(await operator(path, { method: 'POST', body: form('<svg/>', 'a.svg') }), 415);
+    expectStatus(await operator(path, { method: 'POST', body: form('PK', 'a.zip') }), 415);
+    expectStatus(await operator(path, { method: 'POST', body: form('MZ executavel', 'nota.pdf') }), 415);
+    expectStatus(await operator(path, { method: 'POST', body: form('texto comum', 'nota.pdf') }), 415);
+    expectStatus(await operator(path, { method: 'POST', body: form(pdf, 'a.pdf', 'NADA') }), 400);
+    expectStatus(await operator(path, { method: 'POST', body: form(pdf, 'a.pdf', null) }), 400);
+    expectStatus(await operator('/purchases/' + randomUUID() + '/documents', { method: 'POST', body: form(pdf, 'a.pdf') }), 404);
+    assert.equal(fileRootFiles(), before, 'envios recusados não deixam arquivo');
+
+    const invoice = expectStatus(await operator(path, { method: 'POST', body: form(pdf, 'nota.pdf') }), 201);
+    assert.equal('storageKey' in invoice, false);
+    const audit = await waitForAuditEvent({ action: 'Anexar documento da compra' }, event => event.targetId === purchase.id && event.status === 201);
+    assert.equal(audit.details.after.Arquivo, 'nota.pdf');
+    assert.equal(audit.details.context['Tipo do documento'], 'Nota fiscal');
+    const xml = expectStatus(await operator('/purchases/' + other.id + '/documents', { method: 'POST', body: form('<?xml version="1.0"?><nfe/>', 'nfe.xml', 'RECEIPT') }), 201);
+
+    // Converted and reversed purchases still accept documents.
+    expectStatus(await operator('/purchases/' + other.id + '/reversal', { method: 'POST', body: { reason: 'Teste' } }), 201);
+    const late = expectStatus(await operator('/purchases/' + other.id + '/documents', { method: 'POST', body: form(pdf, 'estorno.pdf', 'OTHER') }), 201);
+    const adminUser = await db.user.findUniqueOrThrow({ where: { email: adminEmail } });
+    const oldMovement = await db.movement.create({ data: { kind: 'PURCHASE', quantity: '1', unitCost: '1', reason: 'Antiga', productId: otherProduct.id, userId: adminUser.id } });
+    const converted = await db.purchase.create({ data: {
+      purchaseDate: new Date('2025-01-01'), goodsTotal: '1', converted: true, userId: adminUser.id,
+      items: { create: { productId: otherProduct.id, movementId: oldMovement.id, declaredQuantity: '1', declaredUnit: unit.symbol, quantity: '1', goodsTotal: '1', unitCost: '1' } },
+    } });
+    const old = expectStatus(await operator('/purchases/' + converted.id + '/documents', { method: 'POST', body: form(pdf, 'antiga.pdf', 'QUOTE') }), 201);
+
+    // A file is only reached through its own purchase.
+    expectStatus(await none(path + '/' + invoice.id + '/download'), 403);
+    expectStatus(await viewer('/purchases/' + other.id + '/documents/' + invoice.id + '/download'), 404);
+    expectStatus(await operator('/purchases/' + other.id + '/documents/' + invoice.id, { method: 'DELETE' }), 404);
+    const download = await viewer(path + '/' + invoice.id + '/download');
+    expectStatus(download, 200);
+    assert.equal(Buffer.from(download.data).toString(), pdf.toString());
+    assert.deepEqual(expectStatus(await viewer(path), 200).map(row => row.id), [invoice.id]);
+
+    // Filters. Each search is narrowed to this run through its product or document number.
+    const search = async query => expectStatus(await viewer('/purchase-documents?' + new URLSearchParams(query)), 200);
+    const ids = async query => (await search(query)).documents.map(row => row.id).sort();
+    const sorted = list => [...list].sort();
+    assert.deepEqual(await ids({ supplierId: supplier.id }), [invoice.id]);
+    assert.deepEqual(await ids({ productId: otherProduct.id }), sorted([xml.id, late.id, old.id]));
+    assert.deepEqual(await ids({ productId: otherProduct.id, type: 'RECEIPT' }), [xml.id]);
+    assert.deepEqual(await ids({ productId: otherProduct.id, from: '2026-04-01', to: '2026-04-30' }), sorted([xml.id, late.id]));
+    assert.deepEqual(await ids({ productId: otherProduct.id, to: '2025-12-31' }), [old.id]);
+    assert.deepEqual(await ids({ number: run.toLowerCase() + '_nf' }), [invoice.id], 'o sublinhado é literal');
+    assert.deepEqual(await ids({ number: String(converted.number) }), [old.id]);
+    expectStatus(await viewer('/purchase-documents?from=2026-02-01&to=2026-01-01'), 400);
+    expectStatus(await viewer('/purchase-documents?sort=storageKey:asc'), 400);
+    expectStatus(await viewer('/purchase-documents?page=0'), 400);
+
+    // Sorting and paging happen on the server.
+    const names = async (sort, page = 1) => (await search({ productId: otherProduct.id, sort, page })).documents.map(row => row.originalName);
+    assert.deepEqual(await names('name:asc'), ['antiga.pdf', 'estorno.pdf', 'nfe.xml']);
+    assert.deepEqual(await names('name:desc'), ['nfe.xml', 'estorno.pdf', 'antiga.pdf']);
+    assert.deepEqual((await names('purchaseDate:asc'))[0], 'antiga.pdf');
+    const page = await search({ productId: otherProduct.id, page: 2 });
+    assert.deepEqual([page.total, page.page, page.documents.length], [3, 2, 0]);
+    assert.equal(JSON.stringify(await search({ productId: otherProduct.id })).includes('storageKey'), false);
+    const filters = expectStatus(await viewer('/purchase-documents/filters'), 200);
+    assert.ok(filters.suppliers.some(row => row.id === supplier.id));
+    assert.ok(filters.products.some(row => row.id === product.id));
+    assert.equal(JSON.stringify(filters).includes('currentCost'), false);
+
+    // Removing clears the row and the content.
+    expectStatus(await viewer(path + '/' + invoice.id, { method: 'DELETE' }), 403);
+    const filesBefore = fileRootFiles();
+    expectStatus(await operator(path + '/' + invoice.id, { method: 'DELETE' }), 200);
+    assert.equal(await db.storedFile.count({ where: { id: invoice.id } }), 0);
+    assert.equal(await db.purchaseDocument.count({ where: { fileId: invoice.id } }), 0);
+    assert.equal(fileRootFiles(), filesBefore - 1, 'excluir não deixa arquivo órfão');
+    await waitForAuditEvent({ action: 'Excluir documento da compra' }, event => event.targetId === purchase.id && event.status === 200);
+  });
+
   await t.test('carga inicial: colunas de compra, fornecedor desconhecido e lote sem gravação parcial', async () => {
     const supplier = expectStatus(await post('/suppliers', { name: sku('FORN-CARGA') }), 201);
     const workbook = await loadTemplate('/stock/initial/template');

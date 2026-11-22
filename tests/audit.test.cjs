@@ -15,6 +15,7 @@ const controllers = [
   require('../dist/api/production/orders.js').ProductionOrderController,
   require('../dist/api/production/production.js').ProductionController,
   require('../dist/api/purchases/documents.js').PurchaseDocumentController,
+  require('../dist/api/purchases/documents.js').PurchaseDocumentSearchController,
   require('../dist/api/purchases/purchases.js').PurchaseController,
   require('../dist/api/purchases/suppliers.js').SupplierController,
   require('../dist/api/stock/controller.js').StockController,
@@ -30,6 +31,8 @@ test('purchase document routes read with purchases:view and write with purchases
     assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'purchases:view' : 'purchases:operate'], name);
     assert.equal(typeof Reflect.getMetadata(AUDIT, handler), reads ? 'undefined' : 'string', name);
   }
+  const search = require('../dist/api/purchases/documents.js').PurchaseDocumentSearchController;
+  for (const name of ['search', 'filters']) assert.deepEqual(Reflect.getMetadata('permissions', search.prototype[name]), ['purchases:view'], name);
 });
 
 test('production routes require the production permission', () => {

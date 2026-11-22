@@ -18,7 +18,7 @@ import { FinanceController, FinanceService } from './finance/finance';
 import { HealthController } from './health';
 import { ProductionOrderController, ProductionOrderService } from './production/orders';
 import { ProductionController, ProductionService } from './production/production';
-import { PurchaseDocumentController, PurchaseDocumentService } from './purchases/documents';
+import { PurchaseDocumentController, PurchaseDocumentSearch, PurchaseDocumentSearchController, PurchaseDocumentService } from './purchases/documents';
 import { PurchaseController, PurchaseService } from './purchases/purchases';
 import { SupplierController, SupplierService } from './purchases/suppliers';
 import { Database, DatabaseErrors } from './shared';
@@ -54,8 +54,8 @@ class FinanceModule {}
 class ProductionModule {}
 
 @Module({
-  imports: [StockModule, FilesModule], controllers: [PurchaseController, PurchaseDocumentController, SupplierController],
-  providers: [PurchaseService, PurchaseDocumentService, SupplierService],
+  imports: [StockModule, FilesModule], controllers: [PurchaseController, PurchaseDocumentController, PurchaseDocumentSearchController, SupplierController],
+  providers: [PurchaseService, PurchaseDocumentService, PurchaseDocumentSearch, SupplierService],
 })
 class PurchasesModule {}
 
