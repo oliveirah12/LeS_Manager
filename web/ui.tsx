@@ -496,13 +496,16 @@ export type Unit = { id: string; symbol: string; factor: string; familyId: strin
 export type Product = {
   id: string; sku: string; name: string; active: boolean; unit: Unit & { family: { units: Unit[] } }; quantity: string; currentCost: string | null; lastPurchaseCost: string | null;
   typeId: string; groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null; deleteBlock?: string | null; reserved?: string; type?: { isManufactured: boolean }; hasRecipe?: boolean;
+  lengthMm?: string | null; widthMm?: string | null; heightMm?: string | null; diameterMm?: string | null; purchaseUrl?: string | null;
+  measures?: { name: string; value: string; unit: string }[];
 };
 export type Kit = {
   id: string; sku: string; name: string; active: boolean; available: string; deleteBlock?: string | null;
   components: { productId: string; quantity: string; product: Product }[];
 };
 /** Product in the stock view, with its value at average cost computed by the API with exact decimals. */
-export type StockProduct = Product & { value: string; available: string; minStock: string | null; belowMinimum: boolean; salePrice: string | null; margin: { profit: string; percent: string } | null };
+export type StockProduct = Product & { value: string; available: string; minStock: string | null; belowMinimum: boolean; salePrice: string | null; margin: { profit: string; percent: string } | null;
+  marginPercent: string | null; suggestedPrice: string | null; belowTargetMargin: boolean };
 /** Costs computed by the API from the components' current average. */
 export type StockKit = Omit<Kit, 'components'> & {
   components: (Kit['components'][number] & { cost: string | null; share: string | null; yields: string })[];

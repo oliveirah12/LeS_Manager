@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ArrowLeftRight, ClipboardList, Download, Eye, FileSpreadsheet, PackageMinus, Plus, SlidersHorizontal } from 'lucide-react';
+import { CommercialForm } from './product-form';
 import {
   api, Badge, baseUnit, brl, by, dateTime, Field, fields, FileField, Filters, Form, Kit, Loading, matches, message, Modal, ModalForm, PageActions,
   Product, productOptions, quantity, SearchInput, Segmented, Select, sortParam, SortState, StockKit, StockProduct, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
@@ -53,17 +54,9 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
       {tab === 'history' && <HistoryTab key={version} products={data.products} />}
     </>}
 
-    {dialog?.kind === 'settings' && <ModalForm title={'Parâmetros de ' + dialog.product.sku} subtitle={dialog.product.name} label="Salvar"
-      close={() => setDialog(undefined)} action={async values => {
-        const { minStock, salePrice } = fields(values);
-        await api('stock/products/' + dialog.product.id + '/settings', { minStock: minStock || null, salePrice: salePrice || null }, 'PATCH');
-        await saved('Parâmetros salvos.');
-      }}>
-      <Field name="minStock" label={'Estoque mínimo (' + baseUnit(dialog.product).symbol + ')'} inputMode="decimal" required={false}
-        defaultValue={dialog.product.minStock ?? undefined} hint="Vazio: sem alerta. O aviso compara com o saldo livre, sem o que está reservado." />
-      <Field name="salePrice" label={'Preço de venda por ' + baseUnit(dialog.product).symbol + ' (R$)'} inputMode="decimal" required={false}
-        defaultValue={dialog.product.salePrice ?? undefined} hint={'Vazio: sem margem. Custo médio atual: ' + brl(dialog.product.currentCost)} />
-    </ModalForm>}
+    {dialog?.kind === 'settings' && <Modal title={'Estoque e venda de ' + dialog.product.sku} subtitle={dialog.product.name} close={() => setDialog(undefined)}>
+      <CommercialForm closeOnSave product={{ ...dialog.product, symbol: baseUnit(dialog.product).symbol }} saved={() => saved('Estoque e venda salvos.')} />
+    </Modal>}
     {data && dialog?.kind === 'movement' && <Modal title="Registrar movimentação" close={() => setDialog(undefined)}>
       <MovementForm data={data} initial={dialog.product} saved={saved} /></Modal>}
     {data && dialog?.kind === 'kit' && <ModalForm title={'Saída do kit ' + dialog.kit.sku} subtitle={dialog.kit.name + ' · ' + quantity(dialog.kit.available) + ' disponíveis'}
@@ -109,7 +102,8 @@ function Balances({ data, edit, move, configure }: {
         by(product.currentCost, brl(product.currentCost)), by(product.lastPurchaseCost, <span className="muted">{brl(product.lastPurchaseCost)}</span>),
         by(product.value, <strong>{brl(product.value)}</strong>),
         by(product.margin?.percent, product.margin ? <span>{product.margin.percent.startsWith('-') ? <Badge tone="warn">{quantity(product.margin.percent)}%</Badge> : <strong>{quantity(product.margin.percent)}%</strong>}
-          <span className="hint" style={{ display: 'block' }}>Venda {brl(product.salePrice)}</span></span> : <span className="muted">—</span>),
+          <span className="hint" style={{ display: 'block' }}>Venda {brl(product.salePrice)}</span>
+          {product.belowTargetMargin && <span style={{ display: 'block', marginTop: 4 }}><Badge tone="warn">Abaixo de {quantity(product.marginPercent)}%</Badge></span>}</span> : <span className="muted">—</span>),
         ...(edit ? [<div className="actions">
           <button type="button" className="btn secondary small" onClick={() => move(product)}><ArrowLeftRight size={14} aria-hidden="true" />Movimentar</button>
           <button type="button" className="btn ghost small" aria-label={'Parâmetros de ' + product.sku} onClick={() => configure(product)}>

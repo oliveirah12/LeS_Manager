@@ -261,7 +261,7 @@ function App() {
     {page === 'home' && <Home identity={identity} can={can} navigate={navigate} />}
     {(page === 'products' || page === 'inputs' || page === 'kits') && <Catalog key={page} page={page} edit={false} seeStock={can('stock:view')} />}
     {(page === 'register-products' || page === 'register-kits') &&
-      <Catalog key={page} page={page === 'register-products' ? 'products' : 'kits'} edit={can('catalog:operate')} />}
+      <Catalog key={page} page={page === 'register-products' ? 'products' : 'kits'} edit={can('catalog:operate')} editStock={can('stock:operate')} />}
     {(page === 'product-types' || page === 'GRUPO' || page === 'MARCA' || page === 'COR' || page === 'DEPARTAMENTO' || page === 'families' || page === 'units') &&
       <Registrations key={page} page={page} edit={can('registrations:operate')} admin={admin} />}
     {page === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}

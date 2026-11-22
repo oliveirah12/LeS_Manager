@@ -3,8 +3,28 @@ const { test } = require('node:test');
 // tsx loads the panel's TypeScript directly, without a separate build.
 const { require: load } = require('tsx/cjs/api');
 const {
-  accessible, applyFilters, brl, compareDecimal, decimal, displayDate, nextSort, pageFromHash, sortParam, sortRows, suggestedConsumption, yesNo,
+  accessible, applyFilters, brl, compareDecimal, decimal, displayDate, marginShortfall, nextSort, pageFromHash, sortParam, sortRows, suggestedConsumption, suggestedPrice, yesNo,
 } = load('../web/format.ts', __filename);
+const { Prisma } = require('@prisma/client');
+const { salePricing } = require('../dist/api/stock/cost.js');
+
+test('the price preview matches the API rule exactly', () => {
+  for (const [cost, margin] of [['60', '40'], ['20', '30'], ['0.0853', '40'], ['7.77', '12.34'], ['10', '33.33'], ['10', '0'], ['0.000000000001', '99.99'], ['123456.789012345678', '0.01']]) {
+    const api = salePricing(null, new Prisma.Decimal(cost), new Prisma.Decimal(margin)).suggestedPrice.toFixed();
+    assert.equal(suggestedPrice(cost, margin), api, cost + ' / ' + margin);
+    assert.equal(marginShortfall(api, cost, margin), null, cost + ' / ' + margin);
+  }
+  assert.equal(suggestedPrice('60', '40,5'), '100.85');
+  for (const [cost, margin] of [[null, '40'], ['0', '40'], ['60', '100'], ['60', '1.234'], ['60', 'x'], ['60', '']]) assert.equal(suggestedPrice(cost, margin), null);
+});
+
+test('the margin warning shows the real margin without rounding it up', () => {
+  assert.equal(marginShortfall('90', '60', '40'), '33.33');
+  assert.equal(marginShortfall('100', '60', '40'), null);
+  assert.equal(marginShortfall('99.99', '60', '40'), '39.99');
+  assert.equal(marginShortfall('50', '60', '10'), '-20.00');
+  assert.equal(marginShortfall('', '60', '40'), null);
+});
 
 // Intl separates the currency symbol with a non-breaking space.
 const plain = text => text.replace(/\s/g, ' ');

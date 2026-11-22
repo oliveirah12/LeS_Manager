@@ -48,6 +48,37 @@ export function suggestedConsumption(
   return String(Math.round(Math.max(0, number(planned) - saved) * 1000) / 1000);
 }
 
+const priceScale = 10n ** 12n;
+/** Reads a typed decimal as an integer of 12 places, so the price preview never goes through a float. */
+function scaled(text: string | null | undefined) {
+  const match = /^(\d{1,18})(?:[.,](\d{1,12}))?$/.exec(text?.trim() ?? '');
+  return match ? BigInt(match[1]) * priceScale + BigInt((match[2] ?? '').padEnd(12, '0')) : null;
+}
+const validMargin = (margin: bigint | null): margin is bigint => margin !== null && margin < 100n * priceScale && margin % (priceScale / 100n) === 0n;
+
+/** Same rule as salePricing in the API: cost ÷ (1 − margin), rounded up, with 4 places under R$ 1. */
+export function suggestedPrice(cost: string | null, marginPercent: string) {
+  const [unit, margin] = [scaled(cost), scaled(marginPercent)];
+  if (unit === null || unit <= 0n || !validMargin(margin)) return null;
+  const divisor = 100n * priceScale - margin;
+  const places = unit * 100n >= divisor ? 2 : 4;
+  const power = 10n ** BigInt(places);
+  const price = (unit * 100n * power + divisor - 1n) / divisor;
+  const fraction = (price % power).toString().padStart(places, '0').replace(/0+$/, '');
+  return (price / power).toString() + (fraction ? '.' + fraction : '');
+}
+
+/** Real margin when it falls short of the desired one, cut to 2 places so it never looks better than it is. */
+export function marginShortfall(salePrice: string, cost: string | null, marginPercent: string) {
+  const [price, unit, margin] = [scaled(salePrice), scaled(cost), scaled(marginPercent)];
+  if (price === null || price <= 0n || unit === null || unit <= 0n || !validMargin(margin)) return null;
+  if ((price - unit) * 100n * priceScale >= margin * price) return null;
+  const hundredths = (price - unit) * 10000n / price;
+  const sign = hundredths < 0n ? '-' : '';
+  const size = hundredths < 0n ? -hundredths : hundredths;
+  return sign + (size / 100n) + '.' + (size % 100n).toString().padStart(2, '0');
+}
+
 export type TableFilter<T> = {
   id: string; label: string; options: { id: string; name: string }[];
   /** The row's value for this filter. A list matches when any of its values was selected. */

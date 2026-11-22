@@ -1,6 +1,7 @@
 import { ReactNode, useState } from 'react';
 import { ClipboardList, Eye, Pencil, Plus, Power, PowerOff, Trash2 } from 'lucide-react';
 import { CatalogDetails, DetailTarget } from './catalog-details';
+import { CommercialSection, measureRows, technicalPayload, TechnicalFields } from './product-form';
 import { RecipeEditor } from './recipe';
 import { RegistrationData, referenceKinds } from './registrations';
 import {
@@ -40,7 +41,9 @@ const inputFilters = (data: CatalogView, balances?: Balance[]): TableFilter<Cata
   ...(balances ? [{ id: 'balance', label: 'Saldo', options: balanceOptions, value: (row: Product) => balanceStates(balances.find(item => item.id === row.id)) }] : []),
 ];
 
-export function Catalog({ page, edit, seeStock = false }: { page: 'products' | 'inputs' | 'kits'; edit: boolean; seeStock?: boolean }) {
+export function Catalog({ page, edit, seeStock = false, editStock = false }: {
+  page: 'products' | 'inputs' | 'kits'; edit: boolean; seeStock?: boolean; editStock?: boolean;
+}) {
   const { data, error, loading, reload } = useData<CatalogView>('catalog');
   const { data: balances, error: balanceError } = useData<Balance[]>(page === 'inputs' && seeStock ? 'catalog/balances' : null);
   const [product, setProduct] = useState<Product | null>();
@@ -125,23 +128,10 @@ export function Catalog({ page, edit, seeStock = false }: { page: 'products' | '
     </>}
     {details && <CatalogDetails target={details} close={() => setDetails(undefined)} />}
 
-    {data && edit && product !== undefined && <ModalForm title={product ? 'Editar produto' : 'Novo produto'} subtitle={product?.sku}
-      close={() => setProduct(undefined)} label={product ? 'Salvar alterações' : 'Cadastrar produto'} action={async values => {
-        const input = fields(values);
-        await save('products', { ...input, ...Object.fromEntries(referenceKinds.map(kind => [kind.field, input[kind.field] || null])) }, product?.id);
-      }}>
-      <Field name="sku" label="SKU" placeholder="Ex.: CX-KRAFT-2020" defaultValue={product?.sku} />
-      <Field name="name" label="Nome do produto" defaultValue={product?.name} />
-      <Select name="typeId" label="Tipo" options={data.productTypes}
-        defaultValue={product?.typeId ?? data.productTypes.find(type => type.isDefault)?.id} />
-      <Select name="unitId" label="Unidade" defaultValue={product?.unit.id}
-        options={unitOptions(product?.deleteBlock ? data.units.filter(unit => unit.familyId === product.unit.familyId) : data.units)} />
-      {product?.deleteBlock && <p className="hint">Como este produto já tem histórico, só aceita unidades da mesma família.</p>}
-      <div className="form-grid">
-        {referenceKinds.map(kind => <Select key={kind.id} name={kind.field} label={kind.name} required={false}
-          defaultValue={product?.[kind.field] ?? undefined} options={data.references.filter(item => item.kind === kind.id)} />)}
-      </div>
-    </ModalForm>}
+    {data && edit && product !== undefined && <Modal wide title={product ? 'Editar produto' : 'Novo produto'} subtitle={product?.sku} close={() => setProduct(undefined)}>
+      <ProductForm data={data} product={product} editStock={editStock} save={payload => save('products', payload, product?.id)}
+        savedStock={async () => { notify('Estoque e venda salvos.'); }} />
+    </Modal>}
     {data && edit && kit !== undefined && <Modal wide title={kit ? 'Editar kit' : 'Novo kit'} subtitle={kit?.sku} close={() => setKit(undefined)}>
       <KitForm data={data} kit={kit ?? undefined} save={payload => save('kits', payload, kit?.id)} />
     </Modal>}
@@ -171,6 +161,43 @@ export function Catalog({ page, edit, seeStock = false }: { page: 'products' | '
       <p className="muted">Esta ação não pode ser desfeita. O cadastro será removido, e a exclusão fica registrada na auditoria.</p>
     </ModalForm>}
   </>;
+}
+
+/** Registry and technical data share one route. Stock and sale values have their own permission, route and save button. */
+function ProductForm({ data, product, editStock, save, savedStock }: {
+  data: CatalogView; product: Product | null; editStock: boolean; save: (body: unknown) => Promise<void>; savedStock: () => Promise<void>;
+}) {
+  const [measures, setMeasures] = useState(() => measureRows(product));
+  const closePanel = useClosePanel();
+  const hasStockSection = !!product && editStock;
+  return <div className="stack">
+    <Form label={product ? 'Salvar cadastro' : 'Cadastrar produto'} cancel={hasStockSection ? 'Fechar' : 'Cancelar'} action={async values => {
+      const input = fields(values);
+      await save({
+        sku: input.sku, name: input.name, typeId: input.typeId, unitId: input.unitId,
+        ...Object.fromEntries(referenceKinds.map(kind => [kind.field, input[kind.field] || null])),
+        ...technicalPayload(input, measures),
+      });
+      if (!hasStockSection) closePanel?.();
+    }}>
+      <h3>Identificação</h3>
+      <Field name="sku" label="SKU" placeholder="Ex.: CX-KRAFT-2020" defaultValue={product?.sku} />
+      <Field name="name" label="Nome do produto" defaultValue={product?.name} />
+      <Select name="typeId" label="Tipo" options={data.productTypes}
+        defaultValue={product?.typeId ?? data.productTypes.find(type => type.isDefault)?.id} />
+      <Select name="unitId" label="Unidade" defaultValue={product?.unit.id}
+        options={unitOptions(product?.deleteBlock ? data.units.filter(unit => unit.familyId === product.unit.familyId) : data.units)} />
+      {product?.deleteBlock && <p className="hint">Como este produto já tem histórico, só aceita unidades da mesma família.</p>}
+      <div className="form-grid">
+        {referenceKinds.map(kind => <Select key={kind.id} name={kind.field} label={kind.name} required={false}
+          defaultValue={product?.[kind.field] ?? undefined} options={data.references.filter(item => item.kind === kind.id)} />)}
+      </div>
+      <h3>Dados técnicos</h3>
+      <TechnicalFields product={product} rows={measures} setRows={setMeasures} />
+    </Form>
+    {hasStockSection && <CommercialSection id={product.id} saved={savedStock} />}
+    {!product && editStock && <p className="hint">Mínimo, margem e preço ficam disponíveis depois de cadastrar o produto.</p>}
+  </div>;
 }
 
 function KitForm({ data, kit, save }: { data: CatalogView; kit?: Kit; save: (body: unknown) => Promise<void> }) {
