@@ -16,6 +16,7 @@ import { Printers } from './production';
 import { InstallApp } from './pwa';
 import { referenceKinds, Registrations } from './registrations';
 import { Stock } from './stock';
+import { Suppliers } from './suppliers';
 import { accessible, api, Identity, Loading, ModalForm, PageActionsProvider, sessionExpired, Toaster } from './ui';
 import './style.css';
 
@@ -32,7 +33,7 @@ const groups = [
     { id: 'production-orders', label: 'Ordens' }, { id: 'printers', label: 'Impressoras' },
   ] },
   { id: 'registrations', label: 'Cadastros', icon: Layers, section: 'admin', permission: 'registrations:view', pages: [
-    { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' }, { id: 'product-types', label: 'Tipos de produto' },
+    { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' }, { id: 'suppliers', label: 'Fornecedores' }, { id: 'product-types', label: 'Tipos de produto' },
     ...referenceKinds.map(({ id, label }) => ({ id, label })),
     { id: 'families', label: 'Famílias de medida' }, { id: 'units', label: 'Unidades de medida' },
   ] },
@@ -47,6 +48,7 @@ export type Page = Group['pages'][number]['id'] | 'account';
 const pageDescriptions: Record<Page, string> = {
   home: '', products: 'Consulte os produtos do catálogo.', inputs: 'Materiais usados nas fichas técnicas e na produção.', kits: 'Consulte os kits e suas composições.',
   'register-products': 'Cadastre, edite e inative produtos.', 'register-kits': 'Monte e edite a composição dos kits.',
+  suppliers: 'Empresas e pessoas de quem você compra.',
   'product-types': 'Defina o que cada produto é e como ele se comporta na produção.',
   GRUPO: 'Organize os produtos por grupos.', MARCA: 'Gerencie as marcas do catálogo.',
   COR: 'Mantenha a lista de cores disponíveis.', DEPARTAMENTO: 'Organize os departamentos do catálogo.',
@@ -64,7 +66,7 @@ const pageDescriptions: Record<Page, string> = {
 // Each screen has its own address so reload, back/forward and shared links keep the page.
 const paths: Record<Page, string> = {
   home: '', products: 'catalogo/produtos', inputs: 'catalogo/insumos', kits: 'catalogo/kits',
-  'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits', 'product-types': 'cadastros/tipos-de-produto',
+  'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits', suppliers: 'cadastros/fornecedores', 'product-types': 'cadastros/tipos-de-produto',
   GRUPO: 'cadastros/grupos', MARCA: 'cadastros/marcas', COR: 'cadastros/cores', DEPARTAMENTO: 'cadastros/departamentos',
   families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque',
   balance: 'financeiro/saldo', statement: 'financeiro/extrato', reconciliation: 'financeiro/conciliacao', integration: 'financeiro/integracao',
@@ -264,6 +266,7 @@ function App() {
       <Catalog key={page} page={page === 'register-products' ? 'products' : 'kits'} edit={can('catalog:operate')} editStock={can('stock:operate')} />}
     {(page === 'product-types' || page === 'GRUPO' || page === 'MARCA' || page === 'COR' || page === 'DEPARTAMENTO' || page === 'families' || page === 'units') &&
       <Registrations key={page} page={page} edit={can('registrations:operate')} admin={admin} />}
+    {page === 'suppliers' && <Suppliers edit={can('registrations:operate')} />}
     {page === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}
     {(page === 'balance' || page === 'statement' || page === 'reconciliation' || page === 'integration') &&
       <Finance key={page} page={page} edit={can('finance:operate')} admin={admin} openStatement={() => navigate('statement')}

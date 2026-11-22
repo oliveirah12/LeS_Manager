@@ -18,6 +18,7 @@ import { FinanceController, FinanceService } from './finance/finance';
 import { HealthController } from './health';
 import { ProductionOrderController, ProductionOrderService } from './production/orders';
 import { ProductionController, ProductionService } from './production/production';
+import { SupplierController, SupplierService } from './purchases/suppliers';
 import { Database, DatabaseErrors } from './shared';
 import { StockController } from './stock/controller';
 import { PreviewCleanup, StockService } from './stock/stock';
@@ -50,11 +51,14 @@ class FinanceModule {}
 })
 class ProductionModule {}
 
+@Module({ controllers: [SupplierController], providers: [SupplierService] })
+class PurchasesModule {}
+
 @Module({ controllers: [AuditController], providers: [AuditRetention] })
 class AuditModule {}
 
 @Module({
-  imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, ProductionModule, AuditModule],
+  imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, ProductionModule, PurchasesModule, AuditModule],
   controllers: [HealthController],
 })
 class AppModule {}

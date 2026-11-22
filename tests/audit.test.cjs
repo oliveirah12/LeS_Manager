@@ -14,6 +14,7 @@ const controllers = [
   require('../dist/api/finance/finance.js').FinanceController,
   require('../dist/api/production/orders.js').ProductionOrderController,
   require('../dist/api/production/production.js').ProductionController,
+  require('../dist/api/purchases/suppliers.js').SupplierController,
   require('../dist/api/stock/controller.js').StockController,
 ];
 
@@ -39,6 +40,16 @@ test('product file routes read with catalog:view and write with catalog:operate'
     const handler = controller.prototype[name];
     const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
     assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'catalog:view' : 'catalog:operate'], name);
+    if (!reads) assert.equal(typeof Reflect.getMetadata(AUDIT, handler), 'string', name);
+  }
+});
+
+test('supplier routes read with registrations:view and write with registrations:operate', () => {
+  const controller = require('../dist/api/purchases/suppliers.js').SupplierController;
+  for (const name of ['list', 'create', 'update', 'remove']) {
+    const handler = controller.prototype[name];
+    const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
+    assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'registrations:view' : 'registrations:operate'], name);
     if (!reads) assert.equal(typeof Reflect.getMetadata(AUDIT, handler), 'string', name);
   }
 });
