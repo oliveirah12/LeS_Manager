@@ -9,19 +9,6 @@ function Write-BackupLog([string]$Text) {
   Write-Host $line
 }
 
-function Copy-Verified([string]$File, [string]$Folder) {
-  New-Item -ItemType Directory -Force -Path $Folder | Out-Null
-  $target = Join-Path $Folder (Split-Path $File -Leaf)
-  $partial = "$target.parcial"
-  try {
-    Copy-Item -LiteralPath $File -Destination $partial -Force
-    if ((Get-FileHash -LiteralPath $File).Hash -ne (Get-FileHash -LiteralPath $partial).Hash) { throw 'A copia ficou diferente do original.' }
-    Move-Item -LiteralPath $partial -Destination $target -Force
-  } finally {
-    Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
-  }
-}
-
 # Counts files instead of days, so a long run of failures never erases the last good backups.
 function Remove-OldBackups([string]$Folder) {
   Get-ChildItem -LiteralPath $Folder -File -Filter 'les_manager_*.dump' |
@@ -33,14 +20,19 @@ function Remove-OldBackups([string]$Folder) {
 try {
   New-Item -ItemType Directory -Force -Path $DailyBackups | Out-Null
   Use-Database
+  # Copied before and after the dump, so every file the dump lists is in the backup, even one sent meanwhile.
+  $filePool = Join-Path $DailyBackups 'arquivos'
+  $newFiles = Sync-Files $Files $filePool
   $file = Backup-Database $DailyBackups
+  $newFiles += Sync-Files $Files $filePool
   $size = [Math]::Round((Get-Item -LiteralPath $file).Length / 1MB, 2)
   Remove-OldBackups $DailyBackups
-  Write-BackupLog "OK local: $(Split-Path $file -Leaf) ($size MB)"
+  Write-BackupLog "OK local: $(Split-Path $file -Leaf) ($size MB), $newFiles arquivo(s) novo(s)"
   if ($Destino) {
     Copy-Verified $file $Destino
+    $copiedFiles = Sync-Files $filePool (Join-Path $Destino 'arquivos')
     Remove-OldBackups $Destino
-    Write-BackupLog "OK copia: $Destino"
+    Write-BackupLog "OK copia: $Destino, $copiedFiles arquivo(s) novo(s)"
   }
 } catch {
   Write-BackupLog "FALHA: $($_.Exception.Message)"

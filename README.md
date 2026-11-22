@@ -50,6 +50,8 @@ O contêiner verifica `/api/health`, que confirma a API e o banco. As credenciai
 
 **Guarde a `CONFIG_ENCRYPTION_KEY` junto do backup do banco.** Ela cifra o Client Secret e a chave privada salvos no painel. Sem ela, um backup restaurado traz todo o resto, mas esses dois ficam ilegíveis, e será preciso enviá-los de novo em **Financeiro → Integração**. Trocar a chave tem o mesmo efeito.
 
+Os arquivos anexados ficam no volume `les_files_prod`, em `/data/files`. **Copie esse volume junto com o backup do banco**, porque o dump guarda só o registro de cada arquivo.
+
 Para atualizar, faça backup da base, rode `git pull`, repita o `up -d --build` e depois o `db:migrate`. As migrações são aplicadas manualmente para que nenhuma alteração no banco aconteça sem um backup antes.
 
 Rode uma única instância da API. Os limites de tentativas de login e a trava da sincronização bancária ficam na memória do processo. Para usar mais de uma instância, mova esse estado para o banco ou para um Redis antes.
@@ -72,6 +74,8 @@ Com banco vazio, crie o administrador com `node --env-file=..\LeS_Manager_dados\
 
 Para atualizar, use o atalho **Atualizar LeS Manager** da Área de Trabalho. Ele gera a última versão da `main` com o site no ar e só então para o app. Quando há migração, faz o backup antes. Se a migração ou a subida falhar, restaura o backup e volta à versão anterior.
 
+Os arquivos anexados ficam em `LeS_Manager_dados\arquivos`. **Na primeira atualização para a versão com arquivos, rode o atalho duas vezes.** A primeira instala a versão com o atualizador antigo, e a segunda grava a pasta no `.env` e religa o app. Até lá, o envio de arquivos avisa que o armazenamento não está configurado.
+
 ### Backup diário
 
 Conecte um segundo disco ou use uma pasta de rede, porque um backup no mesmo disco não sobrevive a uma falha dele. Em um PowerShell como administrador, na pasta do projeto, agende o backup. Em pasta de rede, use o caminho `\\servidor\pasta` e dê acesso à conta do computador, porque a tarefa roda como SYSTEM e não enxerga unidades mapeadas:
@@ -81,6 +85,8 @@ powershell -ExecutionPolicy Bypass -File deploy\windows\agendar-backup.ps1 -Dest
 ```
 
 O comando já roda o primeiro backup. Depois, ele acontece todo dia com o site no ar e, se o PC estiver desligado no horário, assim que ele voltar. Cada arquivo é conferido antes de valer, e os 30 mais recentes ficam em `LeS_Manager_dados\backups\diarios` e em `LeS_Manager_backups`, no destino. O resultado fica em `LeS_Manager_dados\logs\backup.log`.
+
+Os anexos vão para a subpasta `arquivos`, ao lado dos dumps. Ela só recebe arquivos novos e guarda também os excluídos depois, para que um dump antigo possa ser restaurado por inteiro, então cresce com o tempo. Ao restaurar, mantenha essa subpasta junto do `.dump`. Se faltar algum arquivo que o banco cita, a restauração é desfeita.
 
 O `.env` não entra na cópia diária, para a chave não viajar junto dos dados. **Guarde uma cópia dele em um lugar seguro e separado**, como um gerenciador de senhas. Para restaurar, informe o arquivo. O comando pede confirmação, faz um backup de segurança e volta a ele se algo falhar:
 

@@ -7,6 +7,7 @@ $Base = Join-Path (Split-Path $Repo -Parent) 'LeS_Manager_dados'
 $Releases = Join-Path $Base 'versoes'
 $Current = Join-Path $Base 'atual'
 $Backups = Join-Path $Base 'backups'
+$Files = Join-Path $Base 'arquivos'
 $Logs = Join-Path $Base 'logs'
 $EnvFile = Join-Path $Base '.env'
 $AppTask = 'LeS Manager - App'
@@ -148,6 +149,84 @@ function Restore-Database([string]$File) {
   'DROP SCHEMA public CASCADE; CREATE SCHEMA public;' | & (Join-Path $PgBin 'psql.exe') -v ON_ERROR_STOP=1 -q
   if ($LASTEXITCODE -ne 0) { throw 'Falha ao preparar o banco para restaurar.' }
   Invoke-Tool (Join-Path $PgBin 'pg_restore.exe') @('--no-owner', '--no-privileges', '--single-transaction', '--exit-on-error', '-d', $env:PGDATABASE, $File)
+}
+
+# Points the app to the attachments folder once. Returns $true when a running app must restart to read it.
+function Set-FileStorage {
+  New-Item -ItemType Directory -Force -Path $Files | Out-Null
+  if ((Read-EnvFile $EnvFile)['FILE_STORAGE_DIR']) { return $false }
+  $text = [IO.File]::ReadAllText($EnvFile)
+  if ($text -and -not $text.EndsWith("`n")) { $text += "`n" }
+  Write-TextFile $EnvFile ($text + "FILE_STORAGE_DIR=$Files`n")
+  $true
+}
+
+function Copy-Verified([string]$File, [string]$Folder) {
+  New-Item -ItemType Directory -Force -Path $Folder | Out-Null
+  $target = Join-Path $Folder (Split-Path $File -Leaf)
+  $partial = "$target.parcial"
+  try {
+    Copy-Item -LiteralPath $File -Destination $partial -Force
+    if ((Get-FileHash -LiteralPath $File).Hash -ne (Get-FileHash -LiteralPath $partial).Hash) { throw 'A copia ficou diferente do original.' }
+    Move-Item -LiteralPath $partial -Destination $target -Force
+  } finally {
+    Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+  }
+}
+
+# Only names the app generates, which leaves out the temporary folder and partial copies.
+function Get-StoredFiles([string]$Folder) {
+  if (-not (Test-Path -LiteralPath $Folder)) { return }
+  Get-ChildItem -LiteralPath $Folder -Directory | Where-Object { $_.Name -match '^[0-9a-f]{2}$' } | ForEach-Object {
+    Get-ChildItem -LiteralPath $_.FullName -File | Where-Object { $_.Name -match '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' }
+  }
+}
+
+# A stored file never changes, so the copy only adds what is new and keeps deleted files for older dumps.
+function Sync-Files([string]$Source, [string]$Target) {
+  $copied = 0
+  foreach ($file in @(Get-StoredFiles $Source)) {
+    $folder = Join-Path $Target $file.Directory.Name
+    $existing = Join-Path $folder $file.Name
+    if ((Test-Path -LiteralPath $existing) -and (Get-Item -LiteralPath $existing).Length -eq $file.Length) { continue }
+    try {
+      Copy-Verified $file.FullName $folder
+      $copied++
+    } catch {
+      # The daily backup runs with the site online, so a file may be deleted during the copy.
+      if (Test-Path -LiteralPath $file.FullName) { throw }
+    }
+  }
+  $copied
+}
+
+function Get-StoredFileKeys {
+  $psql = Join-Path $PgBin 'psql.exe'
+  $table = 'SELECT to_regclass(''public."StoredFile"'')' | & $psql -v ON_ERROR_STOP=1 -q -tA
+  if ($LASTEXITCODE -ne 0) { throw 'Falha ao consultar o banco.' }
+  if (-not "$table".Trim()) { return @() }
+  $rows = 'SELECT "storageKey" FROM "StoredFile" WHERE available' | & $psql -v ON_ERROR_STOP=1 -q -tA
+  if ($LASTEXITCODE -ne 0) { throw 'Falha ao listar os arquivos do banco.' }
+  @($rows | Where-Object { $_ } | ForEach-Object { "$_".Trim() })
+}
+
+# Makes the folder match the restored database. Nothing is removed unless every file it needs was found.
+function Restore-Files([string[]]$Keys, [string[]]$Pools, [string]$Target = $Files) {
+  $missing = 0
+  $wanted = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($key in @($Keys)) {
+    if ($key -notmatch '^[0-9a-f]{2}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') { throw 'Chave de arquivo invalida no banco.' }
+    $relative = $key -replace '/', '\'
+    [void]$wanted.Add($relative)
+    $path = Join-Path $Target $relative
+    if (Test-Path -LiteralPath $path) { continue }
+    $source = @($Pools) | ForEach-Object { Join-Path $_ $relative } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ($source) { Copy-Verified $source (Split-Path $path -Parent) } else { $missing++ }
+  }
+  if ($missing) { throw "Faltam $missing arquivo(s) na copia de arquivos do backup." }
+  foreach ($file in @(Get-StoredFiles $Target)) {
+    if (-not $wanted.Contains((Join-Path $file.Directory.Name $file.Name))) { Remove-Item -LiteralPath $file.FullName -Force }
+  }
 }
 
 # Runs a command forever, so the app and the tunnel come back after a crash or before the database is up.
