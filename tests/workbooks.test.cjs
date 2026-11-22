@@ -24,7 +24,8 @@ test('the template has the load, technical sheet and list tabs with dropdowns', 
   const [load, recipes, measures, lists] = workbook.worksheets;
   assert.deepEqual(measures.getRow(1).values.slice(1), ['SKU', 'Nome', 'Valor', 'Unidade']);
   assert.equal(measures.getCell('D2').dataValidation, undefined);
-  assert.deepEqual(load.getRow(1).values.slice(12), [
+  assert.deepEqual(load.getRow(1).values.slice(20), ['Data da compra', 'Fornecedor', 'Despesas da compra']);
+  assert.deepEqual(load.getRow(1).values.slice(12, 20), [
     'Estoque mínimo', 'Margem (%)', 'Preço de venda', 'Comprimento (mm)', 'Largura (mm)', 'Altura (mm)', 'Diâmetro (mm)', 'URL de compra',
   ]);
   assert.deepEqual(load.getRow(1).values.slice(1, 8), ['SKU', 'Nome', 'Tipo', 'Unidade', 'Quantidade', 'Custo total', 'Perda (%)']);
@@ -77,6 +78,28 @@ test('reads the registry columns, a typed link and the measures tab', async () =
   const parsed = initialFields.parse(data);
   assert.equal(parsed.rows[0].diameterMm.toFixed(), '1.75');
   assert.equal(parsed.measures[0].sku, 'PLA');
+});
+
+test('reads the purchase columns, with the date typed or as a real date', async () => {
+  const workbook = await template({ Tipo: ['Filamento'], Unidade: ['g'], Fornecedor: ['Loja A', 'Loja B'] });
+  const load = workbook.worksheets[0];
+  fill(load, 2, { SKU: 'a', Nome: 'A', Unidade: 'g', Quantidade: 10, 'Custo total': 50, 'Data da compra': '22/01/2026', Fornecedor: 'Loja B', 'Despesas da compra': 5.5 });
+  fill(load, 3, { SKU: 'b', Nome: 'B', Unidade: 'g', Quantidade: 1, 'Custo total': 1, 'Data da compra': new Date(Date.UTC(2026, 0, 23)) });
+  fill(load, 4, { SKU: 'c', Nome: 'C', Unidade: 'g', Quantidade: 1, 'Custo total': 1, 'Data da compra': 46045 });
+  const data = await workbookRows('initial', await asFile(workbook));
+  assert.deepEqual([data.rows[0].supplier, data.rows[0].purchaseExpenses], ['Loja B', '5.5']);
+  const parsed = initialFields.parse(data);
+  assert.deepEqual(parsed.rows.map(row => row.purchaseDate), ['2026-01-22', '2026-01-23', '2026-01-23']);
+  assert.equal(parsed.rows[0].purchaseExpenses.toFixed(), '5.5');
+  const header = load.getRow(1).values.indexOf('Fornecedor');
+  assert.deepEqual(load.getCell(2, header).dataValidation.formulae, ['Listas!$C$2:$C$3']);
+});
+
+test('validates the purchase columns of each row', () => {
+  const valid = fields => initialFields.safeParse({ rows: [{ sku: 'A', name: 'Nome', unit: 'un', quantity: '1', totalCost: '1', ...fields }] }).success;
+  for (const fields of [{ purchaseDate: '2026-01-22' }, { supplier: 'Loja' }, { purchaseExpenses: '0' }]) assert.equal(valid(fields), true, JSON.stringify(fields));
+  for (const fields of [{ purchaseDate: '31/02/2026' }, { purchaseDate: '2999-01-01' }, { purchaseExpenses: '-1' }]) assert.equal(valid(fields), false, JSON.stringify(fields));
+  assert.equal(initialFields.safeParse({ rows: [{ sku: 'A', name: 'Nome', unit: 'un', quantity: '0', purchaseExpenses: '1' }] }).success, false);
 });
 
 test('a preview stored before the registry fields stays valid', () => {

@@ -19,6 +19,7 @@ type InitialPreview = {
 };
 type InitialRegistry = {
   minStock?: string; marginPercent?: string; salePrice?: string; lengthMm?: string; widthMm?: string; heightMm?: string; diameterMm?: string; purchaseUrl?: string;
+  purchaseDate?: string; supplier?: string; purchaseExpenses?: string;
 };
 const dimensions = (row: InitialRegistry) => ([['C', row.lengthMm], ['L', row.widthMm], ['A', row.heightMm], ['Ø', row.diameterMm]] as const)
   .flatMap(([label, value]) => value ? [label + ' ' + quantity(value)] : []).join(' · ');
@@ -327,6 +328,14 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
           by(row.salePrice, row.salePrice ? brl(row.salePrice) : '—'), dimensions(row) || '—', row.purchaseUrl ?? '—',
         ])} />
     </>}
+    {preview.rows.some(row => row.purchaseDate || row.supplier || row.purchaseExpenses) && <>
+      <h3>Dados da última compra</h3>
+      <Table columns={['SKU', 'Data', 'Fornecedor', { label: 'Despesas', end: true }]}
+        rows={preview.rows.filter(row => row.purchaseDate || row.supplier || row.purchaseExpenses).map(row => [
+          row.sku, row.purchaseDate ? new Date(row.purchaseDate).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '—', row.supplier ?? '—',
+          by(row.purchaseExpenses, row.purchaseExpenses ? brl(row.purchaseExpenses) : '—'),
+        ])} />
+    </>}
     {preview.measures.length > 0 && <>
       <h3>Medidas extras</h3>
       <Table columns={['SKU', 'Medida', { label: 'Valor', end: true }]}
@@ -341,7 +350,7 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
   </div>;
   return <div className="stack">
     <div className="info">Use SKUs novos e os tipos, unidades e classificações da aba Listas. Informe o custo total da linha, e o sistema calcula o valor por unidade.
-      Para produtos fabricados, preencha a aba Ficha técnica com o consumo de uma unidade. Mínimo, margem, preço, dimensões, URL e a aba Medidas são opcionais.</div>
+      Para produtos fabricados, preencha a aba Ficha técnica com o consumo de uma unidade. Mínimo, margem, preço, dimensões, URL, dados da compra e a aba Medidas são opcionais. As despesas da compra ficam fora do custo médio.</div>
     <a className="btn secondary" style={{ alignSelf: 'flex-start' }} href="/api/stock/initial/template"><Download size={16} aria-hidden="true" />Baixar modelo</a>
     <Upload action={async file => { setPreview(undefined); setPreview(await api<InitialPreview>('stock/initial/preview', file)); }} />
   </div>;

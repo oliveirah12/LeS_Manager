@@ -1135,4 +1135,25 @@ test('API REST com PostgreSQL', {
     expectStatus(await operator('/purchases', { method: 'POST', body: purchase([line(first, '1', '1')], { supplierId: supplier.id }) }), 409);
     await waitForAuditEvent({ action: 'Estornar compra' }, item => item.targetId === later.id && item.status === 201);
   });
+
+  await t.test('carga inicial: colunas de compra, fornecedor desconhecido e lote sem gravação parcial', async () => {
+    const supplier = expectStatus(await post('/suppliers', { name: sku('FORN-CARGA') }), 201);
+    const workbook = await loadTemplate('/stock/initial/template');
+    const sheet = workbook.worksheets[0];
+    const put = (line, values) => sheet.getRow(1).eachCell((cell, column) => { if (cell.text in values) sheet.getCell(line, column).value = values[cell.text]; });
+    put(2, { SKU: sku('CARGA-A'), Nome: 'Carga A', Unidade: unit.symbol, Quantidade: '4', 'Custo total': '40', 'Data da compra': '15/01/2026', Fornecedor: supplier.name, 'Despesas da compra': '8' });
+    put(3, { SKU: sku('CARGA-B'), Nome: 'Carga B', Unidade: unit.symbol, Quantidade: '1', 'Custo total': '1', Fornecedor: sku('INEXISTENTE') });
+    const refused = await uploadWorkbook('/stock/initial/preview', workbook);
+    expectStatus(refused, 400);
+    assert.match(refused.data.message, /Fornecedor desconhecido/);
+    assert.equal(await db.product.count({ where: { sku: { in: [sku('CARGA-A'), sku('CARGA-B')] } } }), 0);
+    put(3, { Fornecedor: supplier.name });
+    const preview = expectStatus(await uploadWorkbook('/stock/initial/preview', workbook), 201);
+    assert.equal(preview.rows[0].purchaseExpenses, '8');
+    expectStatus(await post('/stock/initial/' + preview.id + '/confirm', {}), 201);
+    const row = await db.product.findUniqueOrThrow({ where: { sku: sku('CARGA-A') } });
+    assert.deepEqual([row.currentCost.toString(), row.lastPurchaseCost.toString(), row.lastPurchaseExpense.toString(), row.lastSupplierId], ['10', '10', '2', supplier.id]);
+    assert.equal(row.lastPurchaseAt.toISOString().slice(0, 10), '2026-01-15');
+    assert.equal(await db.purchaseItem.count({ where: { productId: row.id } }), 0, 'a carga não vira compra');
+  });
 });

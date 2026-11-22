@@ -10,6 +10,7 @@ const formats = {
     ['Grupo', 'group'], ['Marca', 'brand'], ['Cor', 'color'], ['Departamento', 'department'],
     ['Estoque mínimo', 'minStock'], ['Margem (%)', 'marginPercent'], ['Preço de venda', 'salePrice'],
     ['Comprimento (mm)', 'lengthMm'], ['Largura (mm)', 'widthMm'], ['Altura (mm)', 'heightMm'], ['Diâmetro (mm)', 'diameterMm'], ['URL de compra', 'purchaseUrl'],
+    ['Data da compra', 'purchaseDate'], ['Fornecedor', 'supplier'], ['Despesas da compra', 'purchaseExpenses'],
   ],
   inventory: [['SKU', 'sku'], ['Quantidade', 'quantity'], ['Unidade', 'unit']],
 } as const satisfies Record<string, readonly Column[]>;
@@ -22,7 +23,7 @@ const measureSheet = 'Medidas';
 const measureColumns: readonly Column[] = [['SKU', 'sku'], ['Nome', 'name'], ['Valor', 'value'], ['Unidade', 'unit']];
 const requiredInitial = ['SKU', 'Nome', 'Unidade', 'Quantidade'];
 const decimalKeys = new Set([
-  'quantity', 'unitCost', 'totalCost', 'wastePercent', 'minStock', 'marginPercent', 'salePrice', 'lengthMm', 'widthMm', 'heightMm', 'diameterMm', 'value',
+  'quantity', 'unitCost', 'totalCost', 'wastePercent', 'minStock', 'marginPercent', 'salePrice', 'lengthMm', 'widthMm', 'heightMm', 'diameterMm', 'value', 'purchaseExpenses',
 ]);
 const lastRow = 501;
 /** Current registrations offered as dropdowns, by column header. */
@@ -78,6 +79,13 @@ function linkTarget(value: ExcelJS.CellValue) {
   return value && typeof value === 'object' && 'hyperlink' in value ? value.hyperlink : value;
 }
 
+/** A date cell arrives as a Date or as an Excel serial number. Text such as 22/11/2026 is validated later. */
+function dateText(value: ExcelJS.CellValue) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === 'number') return new Date(Math.round((value - 25569) * 86400000)).toISOString().slice(0, 10);
+  return value;
+}
+
 /** Reads a sheet by its headers, so column order does not matter and older templates still work. */
 function readSheet(sheet: ExcelJS.Worksheet, known: readonly Column[], required: readonly string[]) {
   if (sheet.rowCount > lastRow || sheet.columnCount > known.length) {
@@ -100,7 +108,7 @@ function readSheet(sheet: ExcelJS.Worksheet, known: readonly Column[], required:
     const values: Record<string, string> = {};
     for (const [index, key] of columns) {
       const cell = row.getCell(index).value;
-      const value = key === 'purchaseUrl' ? linkTarget(cell) : cell;
+      const value = key === 'purchaseUrl' ? linkTarget(cell) : key === 'purchaseDate' ? dateText(cell) : cell;
       if (value == null || value === '') continue;
       if (!key) throw new BadRequestException('Há valor em uma coluna sem título na linha ' + line + '.');
       if (typeof value !== 'string' && typeof value !== 'number') {
