@@ -11,6 +11,8 @@ $Logs = Join-Path $Base 'logs'
 $EnvFile = Join-Path $Base '.env'
 $AppTask = 'LeS Manager - App'
 $TunnelTask = 'LeS Manager - Tunel'
+$BackupTask = 'LeS Manager - Backup diario'
+$DailyBackups = Join-Path $Backups 'diarios'
 $PgBin = 'C:\Program Files\PostgreSQL\17\bin'
 $Prisma = 'node_modules\prisma\build\index.js'
 
@@ -121,11 +123,24 @@ function Stop-App {
   }
 }
 
-function Backup-Database {
-  $file = Join-Path $Backups ('les_manager_' + (Get-Date -Format 'yyyy-MM-dd_HHmmss') + '.dump')
-  Invoke-Tool (Join-Path $PgBin 'pg_dump.exe') @('-Fc', '-f', $file)
-  if ((Get-Item -LiteralPath $file).Length -lt 100) { throw 'O backup ficou vazio.' }
+# The final name only appears after pg_restore reads the whole archive, so a cut dump never counts as a backup.
+function Backup-Database([string]$Folder = $Backups) {
+  $file = Join-Path $Folder ('les_manager_' + (Get-Date -Format 'yyyy-MM-dd_HHmmss') + '.dump')
+  $partial = "$file.parcial"
+  try {
+    Invoke-Tool (Join-Path $PgBin 'pg_dump.exe') @('-Fc', '-f', $partial)
+    if ((Get-Item -LiteralPath $partial).Length -lt 100) { throw 'O backup ficou vazio.' }
+    Assert-BackupReadable $partial
+    Move-Item -LiteralPath $partial -Destination $file
+  } finally {
+    Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+  }
   $file
+}
+
+function Assert-BackupReadable([string]$File) {
+  & (Join-Path $PgBin 'pg_restore.exe') --list $File | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "O arquivo de backup esta ilegivel: $File" }
 }
 
 # Drops what a failed migration created, then rebuilds the database from the backup in one transaction.

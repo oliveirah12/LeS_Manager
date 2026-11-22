@@ -72,6 +72,22 @@ Com banco vazio, crie o administrador com `node --env-file=..\LeS_Manager_dados\
 
 Para atualizar, use o atalho **Atualizar LeS Manager** da Área de Trabalho. Ele gera a última versão da `main` com o site no ar e só então para o app. Quando há migração, faz o backup antes. Se a migração ou a subida falhar, restaura o backup e volta à versão anterior.
 
+### Backup diário
+
+Conecte um segundo disco ou use uma pasta de rede, porque um backup no mesmo disco não sobrevive a uma falha dele. Em um PowerShell como administrador, na pasta do projeto, agende o backup. Em pasta de rede, use o caminho `\\servidor\pasta` e dê acesso à conta do computador, porque a tarefa roda como SYSTEM e não enxerga unidades mapeadas:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows\agendar-backup.ps1 -Destino D:\ -Hora 03:00 -Manter 30
+```
+
+O comando já roda o primeiro backup. Depois, ele acontece todo dia com o site no ar e, se o PC estiver desligado no horário, assim que ele voltar. Cada arquivo é conferido antes de valer, e os 30 mais recentes ficam em `LeS_Manager_dados\backups\diarios` e em `LeS_Manager_backups`, no destino. O resultado fica em `LeS_Manager_dados\logs\backup.log`.
+
+O `.env` não entra na cópia diária, para a chave não viajar junto dos dados. **Guarde uma cópia dele em um lugar seguro e separado**, como um gerenciador de senhas. Para restaurar, informe o arquivo. O comando pede confirmação, faz um backup de segurança e volta a ele se algo falhar:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows\restaurar-backup.ps1 -Arquivo D:\LeS_Manager_backups\les_manager_2026-11-22_030000.dump
+```
+
 ## Conferir o primeiro fluxo
 
 1. Em **Cadastros → Famílias de medida**, crie Peças com base `un` e Peso com base `g`. Em **Cadastros → Unidades de medida**, cadastre `kg` com fator `1000`. Somente administradores cadastram famílias e unidades, porque o fator define como todas as quantidades são gravadas. Nome e símbolo podem ser editados a qualquer momento. O fator só muda, e a unidade só pode ser excluída, enquanto nenhum produto da família tiver saldo ou histórico. A unidade base mantém o fator 1 e só sai junto com a família, que pode ser excluída quando não tem produtos.
