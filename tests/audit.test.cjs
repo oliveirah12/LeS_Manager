@@ -10,6 +10,7 @@ const controllers = [
   require('../dist/api/audit/audit.js').AuditController,
   require('../dist/api/catalog/catalog.js').CatalogController,
   require('../dist/api/catalog/recipe.js').RecipeController,
+  require('../dist/api/files/files.js').ProductFilesController,
   require('../dist/api/finance/finance.js').FinanceController,
   require('../dist/api/production/orders.js').ProductionOrderController,
   require('../dist/api/production/production.js').ProductionController,
@@ -27,6 +28,18 @@ test('production routes require the production permission', () => {
       if (method === undefined) continue;
       assert.deepEqual(Reflect.getMetadata('permissions', handler), [method === RequestMethod.GET ? 'production:view' : 'production:operate'], name);
     }
+  }
+});
+
+test('product file routes read with catalog:view and write with catalog:operate', () => {
+  const controller = require('../dist/api/files/files.js').ProductFilesController;
+  const routes = Object.getOwnPropertyNames(controller.prototype).filter(name => Reflect.getMetadata(METHOD_METADATA, controller.prototype[name]) !== undefined);
+  assert.equal(routes.length, 4);
+  for (const name of routes) {
+    const handler = controller.prototype[name];
+    const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
+    assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'catalog:view' : 'catalog:operate'], name);
+    if (!reads) assert.equal(typeof Reflect.getMetadata(AUDIT, handler), 'string', name);
   }
 });
 

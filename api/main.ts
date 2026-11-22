@@ -11,6 +11,8 @@ import { AuditController } from './audit/audit';
 import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
 import { RecipeController, RecipeService } from './catalog/recipe';
+import { FileMaintenance, FileService, ProductFilesController } from './files/files';
+import { DiskFileStorage, FileStorage } from './files/storage';
 import { BankConnectionService } from './finance/connection';
 import { FinanceController, FinanceService } from './finance/finance';
 import { HealthController } from './health';
@@ -27,7 +29,14 @@ class PersistenceModule {}
 @Module({ controllers: [AccessController], providers: [AccessService, SessionCleanup, { provide: APP_GUARD, useClass: AccessGuard }] })
 class AccessModule {}
 
-@Module({ controllers: [CatalogController, RecipeController], providers: [CatalogService, RecipeService], exports: [CatalogService] })
+@Module({
+  controllers: [ProductFilesController],
+  providers: [FileService, FileMaintenance, { provide: FileStorage, useClass: DiskFileStorage }],
+  exports: [FileService],
+})
+class FilesModule {}
+
+@Module({ imports: [FilesModule], controllers: [CatalogController, RecipeController], providers: [CatalogService, RecipeService], exports: [CatalogService] })
 class CatalogModule {}
 
 @Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService, PreviewCleanup], exports: [StockService] })
