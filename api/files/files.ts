@@ -5,7 +5,10 @@ import { Prisma } from '@prisma/client';
 import { Authenticated, Require } from '../access/access';
 import { Audit, auditChange, auditContext } from '../audit/recorder';
 import { DailyTask, Database, idField, parse, serial } from '../shared';
-import { attachmentHeader, hasBlockedExtension, hasExecutableSignature, productFileLimit, safeFileName, safeMimeType } from './rules';
+import {
+  attachmentHeader, hasBlockedExtension, hasExecutableSignature, hasImageExtension, imageType, matchesImageContent, productFileLimit, productImageLimit, productImageMessage,
+  safeFileName, safeMimeType,
+} from './rules';
 import { FileStorage, newStorageKey } from './storage';
 import { blockedFileMessage, FileUpload } from './upload';
 
@@ -74,6 +77,11 @@ export class FileService {
 
   /** Finishes uploads and removals that a crash interrupted. */
   async maintain() {
+    // An image is linked right after its upload, so a crash in between leaves a file without an owner.
+    await this.db.storedFile.updateMany({
+      where: { available: true, updatedAt: { lt: new Date(Date.now() - hour) }, product: { is: null }, productImage: { is: null }, purchaseDocument: { is: null } },
+      data: { available: false },
+    });
     const stale = await this.db.storedFile.findMany({ where: { available: false, updatedAt: { lt: new Date(Date.now() - hour) } }, select: { id: true } });
     await this.purge(stale.map(file => file.id));
     if (process.env.FILE_STORAGE_DIR?.trim()) await this.storage.removeTemporaries(24 * hour);
@@ -115,6 +123,38 @@ export class FileService {
     return this.remove({ id: fileId, product: { productId } });
   }
 
+  openProductImage(productId: string) { return this.open({ productImage: { id: productId } }); }
+
+  /** The new image is complete before it replaces the old one, so a failed upload keeps what was there. */
+  async setProductImage(productId: string, upload: Express.Multer.File, authorId: string) {
+    const product = await this.db.product.findUnique({ where: { id: productId }, select: { sku: true } });
+    if (!product) throw new NotFoundException('Produto não encontrado.');
+    auditContext({ Produto: product.sku });
+    const { createdBy, ...file } = await this.store(upload, authorId, async () => undefined, { content: matchesImageContent, message: productImageMessage });
+    let previous: string | null;
+    try {
+      previous = await serial(this.db, async tx => {
+        const current = await tx.product.findUnique({ where: { id: productId }, select: { imageFileId: true } });
+        if (!current) throw new NotFoundException('Produto não encontrado.');
+        if (current.imageFileId) await tx.storedFile.update({ where: { id: current.imageFileId }, data: { available: false } });
+        await tx.product.update({ where: { id: productId }, data: { imageFileId: file.id } });
+        return current.imageFileId;
+      });
+    } catch (error) {
+      await this.db.storedFile.update({ where: { id: file.id }, data: { available: false } });
+      await this.purge([file.id]);
+      throw error;
+    }
+    if (previous) await this.purge([previous]);
+    return { ...file, author: createdBy.name };
+  }
+
+  async removeProductImage(productId: string) {
+    const product = await this.db.product.findUnique({ where: { id: productId }, select: { sku: true } });
+    if (product) auditContext({ Produto: product.sku });
+    return this.remove({ productImage: { id: productId } });
+  }
+
   /** Hides the file in a transaction and then clears its content. What a crash leaves behind, the maintenance finishes. */
   async remove(where: Prisma.StoredFileWhereInput) {
     const id = await serial(this.db, async tx => {
@@ -133,10 +173,13 @@ export class FileService {
   /** Part of the product deletion: call `purge` with the returned ids after the transaction commits. */
   async releaseProductFiles(tx: Prisma.TransactionClient, productId: string) {
     const links = await tx.productFile.findMany({ where: { productId }, select: { fileId: true, file: { select: { originalName: true, available: true } } } });
-    const ids = links.map(link => link.fileId);
+    const owner = await tx.product.findUnique({ where: { id: productId }, select: { imageFile: { select: { id: true, originalName: true, available: true } } } });
+    const image = owner?.imageFile;
+    const ids = [...links.map(link => link.fileId), ...(image ? [image.id] : [])];
     await tx.storedFile.updateMany({ where: { id: { in: ids } }, data: { available: false } });
     await tx.productFile.deleteMany({ where: { productId } });
-    return { ids, names: links.filter(link => link.file.available).map(link => link.file.originalName).sort() };
+    const names = [...links.map(link => link.file), ...(image ? [image] : [])].filter(file => file.available).map(file => file.originalName).sort();
+    return { ids, names };
   }
 }
 
@@ -147,6 +190,38 @@ export class FileMaintenance extends DailyTask {
   protected async run() {
     await this.files.maintain().catch(() => console.error('Falha na manutenção dos arquivos.'));
   }
+}
+
+@Controller('catalog/products/:id/image')
+export class ProductImageController {
+  constructor(@Inject(FileService) private files: FileService) {}
+
+  @Require('catalog:view')
+  @Get()
+  @Header('X-Content-Type-Options', 'nosniff')
+  async show(@Param('id') id: string) {
+    const file = await this.files.openProductImage(parse(idField, id));
+    // The type comes from the checked extension, never from what the browser declared.
+    return new StreamableFile(file.content, { type: imageType(file.name), disposition: 'inline', length: file.size });
+  }
+
+  @Require('catalog:operate')
+  @Audit('Enviar imagem do produto')
+  @Post()
+  @FileUpload(productImageLimit, { name: hasImageExtension, message: productImageMessage })
+  async upload(@Req() request: Authenticated, @Param('id') id: string, @UploadedFile() file?: Express.Multer.File) {
+    if (!file) throw new BadRequestException('Envie uma imagem.');
+    try {
+      return await this.files.setProductImage(parse(idField, id), file, request.identity.id);
+    } finally {
+      await this.files.discard(file);
+    }
+  }
+
+  @Require('catalog:operate')
+  @Audit('Excluir imagem do produto')
+  @Delete()
+  remove(@Param('id') id: string) { return this.files.removeProductImage(parse(idField, id)); }
 }
 
 @Controller('catalog/products/:id/files')

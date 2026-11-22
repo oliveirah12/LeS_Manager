@@ -2,6 +2,7 @@ import { ReactNode, useState } from 'react';
 import { ClipboardList, Eye, Pencil, Plus, Power, PowerOff, Trash2 } from 'lucide-react';
 import { CatalogDetails, DetailTarget } from './catalog-details';
 import { ProductFiles } from './product-files';
+import { ProductImageField, ProductThumb } from './product-image';
 import { CommercialSection, measureRows, technicalPayload, TechnicalFields } from './product-form';
 import { RecipeEditor } from './recipe';
 import { RegistrationData, referenceKinds } from './registrations';
@@ -97,7 +98,7 @@ export function Catalog({ page, edit, seeStock = false, editStock = false }: {
           const balance = balances?.find(item => item.id === row.id);
           const symbol = baseUnit(row).symbol;
           return [
-            by(row.name, <Title name={row.name} code={row.sku} />), data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
+            by(row.name, <div className="product-cell"><ProductThumb product={row} /><Title name={row.name} code={row.sku} /></div>), data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
             ...(balances ? [by(balance?.quantity ?? '0', quantity(balance?.quantity ?? '0') + ' ' + symbol), by(balance?.reserved ?? '0', quantity(balance?.reserved ?? '0') + ' ' + symbol),
               by(balance?.currentCost, brl(balance?.currentCost))] : []),
             situationBadge(row), detailsButton('products', row),
@@ -108,7 +109,7 @@ export function Catalog({ page, edit, seeStock = false, editStock = false }: {
         rows={applyFilters(visible(data.products), productFilters(data), selected).map(row => {
           const classes = referenceKinds.map(kind => data.references.find(item => item.id === row[kind.field])?.name).filter(Boolean);
           return [
-            by(row.name, <Title name={row.name} code={row.sku} />), data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
+            by(row.name, <div className="product-cell"><ProductThumb product={row} /><Title name={row.name} code={row.sku} /></div>), data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
             ...(edit ? [row.unit.symbol, by(classes.join(' '), <div className="actions">{classes.map(name => <Badge key={name}>{name}</Badge>)}</div>)] : []),
             situationBadge(row),
             edit ? rowActions('products', row, () => setProduct(row),
@@ -198,8 +199,9 @@ function ProductForm({ data, product, editStock, save, savedStock, filesChanged 
       <TechnicalFields product={product} rows={measures} setRows={setMeasures} />
     </Form>
     {hasStockSection && <CommercialSection id={product.id} saved={savedStock} />}
+    {product && <ProductImageField product={product} changed={filesChanged} />}
     {product && <ProductFiles productId={product.id} edit changed={filesChanged} />}
-    {!product && <p className="hint">{editStock ? 'Mínimo, margem, preço e arquivos ficam' : 'Os arquivos ficam'} disponíveis depois de cadastrar o produto.</p>}
+    {!product && <p className="hint">{editStock ? 'Mínimo, margem, preço, imagem e arquivos ficam' : 'A imagem e os arquivos ficam'} disponíveis depois de cadastrar o produto.</p>}
   </div>;
 }
 

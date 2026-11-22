@@ -1258,6 +1258,36 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/catalog/products/' + product.id, { method: 'DELETE' }), 200);
     assert.equal(await db.storedFile.count({ where: { id: attached.id } }), 0);
     assert.deepEqual(stored(), [], 'excluir o produto não deixa arquivo órfão');
+
+    const pictured = await createProduct('COM-IMAGEM', family.units[0].id);
+    const imagePath = '/catalog/products/' + pictured.id + '/image';
+    const png = Buffer.from('89504e470d0a1a0a00', 'hex');
+    expectStatus(await viewer(imagePath, { method: 'POST', body: form(png, 'foto.png', 'image/png') }), 403);
+    expectStatus(await operator(imagePath, { method: 'POST', body: form('<svg/>', 'foto.svg', 'image/svg+xml') }), 415);
+    expectStatus(await operator(imagePath, { method: 'POST', body: form('texto', 'foto.png', 'image/png') }), 415);
+    assert.deepEqual(stored(), [], 'imagem recusada não fica no disco');
+    const first = expectStatus(await operator(imagePath, { method: 'POST', body: form(png, 'foto.png', 'text/html') }), 201);
+    expectStatus(await none(imagePath), 403);
+    const shown = await fetch(baseUrl + '/api' + imagePath, { headers: { cookie: viewer.cookie } });
+    assert.equal(shown.status, 200);
+    assert.equal(shown.headers.get('content-type'), 'image/png');
+    assert.equal(shown.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(shown.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(Buffer.from(await shown.arrayBuffer()), png);
+    const listedImage = expectStatus(await viewer('/catalog'), 200).products.find(row => row.id === pictured.id);
+    assert.equal(listedImage.imageFileId, first.id);
+    const second = expectStatus(await operator(imagePath, { method: 'POST', body: form(png, 'nova.png', 'image/png') }), 201);
+    assert.equal(await db.storedFile.count({ where: { id: first.id } }), 0, 'a imagem trocada sai do banco');
+    assert.equal(stored().length, 1, 'a imagem trocada sai do disco');
+    expectStatus(await viewer(imagePath, { method: 'DELETE' }), 403);
+    expectStatus(await operator(imagePath, { method: 'DELETE' }), 200);
+    assert.equal((await db.product.findUniqueOrThrow({ where: { id: pictured.id } })).imageFileId, null);
+    assert.equal(await db.storedFile.count({ where: { id: second.id } }), 0);
+    expectStatus(await viewer(imagePath), 404);
+    const last = expectStatus(await operator(imagePath, { method: 'POST', body: form(png, 'final.png', 'image/png') }), 201);
+    expectStatus(await admin('/catalog/products/' + pictured.id, { method: 'DELETE' }), 200);
+    assert.equal(await db.storedFile.count({ where: { id: last.id } }), 0);
+    assert.deepEqual(stored(), [], 'excluir o produto leva a imagem junto');
   });
 
   await t.test('compras: permissões, produto repetido, rateio, atomicidade e estorno', async () => {

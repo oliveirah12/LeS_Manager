@@ -64,6 +64,23 @@ export function matchesDocumentContent(name: string, head: Buffer) {
   return (documentSignatures.get(extension) ?? []).some(signature => hex.startsWith(signature));
 }
 
+export const productImageLimit = 5 * megabyte;
+export const productImageMessage = 'Envie uma imagem JPG, PNG ou WebP.';
+// SVG stays out on purpose: it can carry scripts, and images are the one file type shown inline.
+const imageTypes = new Map([['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'], ['png', 'image/png'], ['webp', 'image/webp']]);
+
+export const hasImageExtension = (name: string) => imageTypes.has(extensionOf(name));
+export const imageType = (name: string) => imageTypes.get(extensionOf(name)) ?? 'application/octet-stream';
+
+/** The real bytes decide, so the type sent when showing the image is always true. */
+export function matchesImageContent(name: string, head: Buffer) {
+  const type = imageTypes.get(extensionOf(name));
+  const hex = head.toString('hex');
+  if (type === 'image/jpeg') return hex.startsWith('ffd8ff');
+  if (type === 'image/png') return hex.startsWith('89504e47');
+  return type === 'image/webp' && hex.startsWith('52494646') && hex.slice(16, 24) === '57454250';
+}
+
 /** The browser's declared type is only informative, so anything unusual is stored as generic binary. */
 export function safeMimeType(value: string | undefined) {
   const type = value?.split(';')[0].trim().toLowerCase() ?? '';

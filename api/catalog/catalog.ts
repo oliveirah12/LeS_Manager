@@ -60,7 +60,7 @@ const technicalProduct = {
   lengthMm: true, widthMm: true, heightMm: true, diameterMm: true, purchaseUrl: true,
   measures: { select: { name: true, value: true, unit: true }, orderBy: { name: 'asc' } },
 } as const;
-const catalogProduct = { ...catalogSummary, ...technicalProduct } as const;
+const catalogProduct = { ...catalogSummary, ...technicalProduct, imageFileId: true } as const;
 /** What stock:view may read. A new product column stays private until it is listed here. */
 const stockProduct = {
   id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, lastPurchaseAt: true, lastPurchaseExpense: true,

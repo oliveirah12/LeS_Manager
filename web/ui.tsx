@@ -494,7 +494,7 @@ export const fields = (data: FormData) => Object.fromEntries([...data].map(([key
 export type Identity = { id: string; name: string; email: string; profileName: string; permissions: string[] };
 export type Unit = { id: string; symbol: string; factor: string; familyId: string; isBase: boolean };
 export type Product = {
-  id: string; sku: string; name: string; active: boolean; unit: Unit & { family: { units: Unit[] } }; quantity: string; currentCost: string | null; lastPurchaseCost: string | null;
+  id: string; sku: string; name: string; active: boolean; imageFileId?: string | null; unit: Unit & { family: { units: Unit[] } }; quantity: string; currentCost: string | null; lastPurchaseCost: string | null;
   lastPurchaseAt?: string | null; lastPurchaseExpense?: string | null; lastSupplier?: { name: string } | null;
   typeId: string; groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null; deleteBlock?: string | null; reserved?: string; type?: { isManufactured: boolean }; hasRecipe?: boolean;
   lengthMm?: string | null; widthMm?: string | null; heightMm?: string | null; diameterMm?: string | null; purchaseUrl?: string | null;

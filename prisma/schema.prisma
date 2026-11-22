@@ -158,6 +158,8 @@ model Product {
   heightMm      Decimal?        @db.Decimal(30, 12)
   diameterMm    Decimal?        @db.Decimal(30, 12)
   purchaseUrl   String?
+  imageFileId   String?         @unique
+  imageFile     StoredFile?     @relation("ProductImage", fields: [imageFileId], references: [id], onDelete: SetNull)
   measures      ProductMeasure[]
   movements     Movement[]
   kitComponents KitComponent[]
@@ -198,6 +200,7 @@ model StoredFile {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   product      ProductFile?
+  productImage Product?     @relation("ProductImage")
   purchaseDocument PurchaseDocument?
   @@index([available, updatedAt])
 }

@@ -11,6 +11,7 @@ const controllers = [
   require('../dist/api/catalog/catalog.js').CatalogController,
   require('../dist/api/catalog/recipe.js').RecipeController,
   require('../dist/api/files/files.js').ProductFilesController,
+  require('../dist/api/files/files.js').ProductImageController,
   require('../dist/api/finance/finance.js').FinanceController,
   require('../dist/api/production/corrections.js').ProductionCorrectionController,
   require('../dist/api/production/orders.js').ProductionOrderController,
