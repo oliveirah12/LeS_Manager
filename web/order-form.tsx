@@ -16,6 +16,7 @@ export function OrderForm({ view, seeCosts, done }: { view: OrdersView; seeCosts
   const [discount, setDiscount] = useState('');
   const [paymentId, setPaymentId] = useState('');
   const [fee, setFee] = useState('');
+  const [expenses, setExpenses] = useState<{ key: number; title: string; value: string }[]>([]);
   const closePanel = useClosePanel();
   const estimatedMinutes = Number(hours || 0) * 60 + Number(minutes || 0);
   const validTime = Number.isInteger(estimatedMinutes) && estimatedMinutes > 0;
@@ -36,6 +37,7 @@ export function OrderForm({ view, seeCosts, done }: { view: OrdersView; seeCosts
     if (!validTime) throw new Error('Informe o tempo de impressão em horas e minutos inteiros.');
     await api('production/orders', {
       printerId: values.get('printerId'), plannedStart: new Date(plannedStart).toISOString(), estimatedMinutes, notes: String(values.get('notes') ?? ''),
+      manualExpenses: expenses.map(({ title, value }) => ({ title, value })),
       discountPercent: discount.trim() || '0', paymentMethodId: paymentId || null, feePercent: fee.trim() || null,
       items: rows.map(row => ({
         productId: row.productId, quantity: row.quantity,
@@ -79,6 +81,19 @@ export function OrderForm({ view, seeCosts, done }: { view: OrdersView; seeCosts
     <button type="button" className="btn secondary" style={{ alignSelf: 'flex-start' }} disabled={rows.length >= view.products.length}
       onClick={() => setRows(items => [...items, blankRow(Math.max(...items.map(item => item.key)) + 1)])}>
       <Plus size={16} aria-hidden="true" />Adicionar produto</button>
+    <h3>Despesas adicionais</h3>
+    <p className="hint">As despesas de compra dos insumos entram sozinhas, pelo consumo. Adicione aqui o que for só desta ordem.</p>
+    {expenses.map((row, index) => <div className="component-row" style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr) auto' }} key={row.key}>
+      <label>Título<input aria-label={'Título da despesa ' + (index + 1)} required maxLength={120} value={row.title}
+        onChange={event => setExpenses(items => items.map(item => item.key === row.key ? { ...item, title: event.target.value } : item))} /></label>
+      <label>Valor<input aria-label={'Valor da despesa ' + (index + 1)} required inputMode="decimal" value={row.value}
+        onChange={event => setExpenses(items => items.map(item => item.key === row.key ? { ...item, value: event.target.value } : item))} /></label>
+      <button type="button" className="icon-button" aria-label={'Remover despesa ' + (index + 1)}
+        onClick={() => setExpenses(items => items.filter(item => item.key !== row.key))}><Trash2 size={18} aria-hidden="true" /></button>
+    </div>)}
+    <button type="button" className="btn secondary" style={{ alignSelf: 'flex-start' }}
+      onClick={() => setExpenses(items => [...items, { key: Math.max(-1, ...items.map(item => item.key)) + 1, title: '', value: '' }])}>
+      <Plus size={16} aria-hidden="true" />Adicionar despesa</button>
     <h3>Venda</h3>
     <div className="form-grid">
       <label>Desconto sobre o total (%)<input name="discountPercent" inputMode="decimal" placeholder="0" value={discount} onChange={event => setDiscount(event.target.value)} /></label>

@@ -22,10 +22,11 @@ type Order = {
   id: string; number: number; status: Status; notes: string | null; printer: { id: string; name: string }; user: { name: string };
   plannedStart: string; estimatedMinutes: number; expectedEnd: string; startedAt: string | null; finishedAt: string | null; printMinutes: number | null;
   machineCost?: string | null; totalCost?: string | null; lossCost?: string | null; absorbLoss: boolean; items: OrderItem[]; inputs: OrderInput[];
-  budget: Budget | null; sale: Sale;
+  budget: Budget | null; sale: Sale; expenses: OrderExpense[]; expenseCost?: string | null;
 };
+export type OrderExpense = { id: string; source: 'INPUT' | 'MANUAL'; inputId: string | null; title: string; value: string; edited: boolean; suggested: string | null };
 type Budget = {
-  machineCost: string; materialCost: string; totalCost: string; partialCost: boolean; missingCost: string[];
+  machineCost: string; expenseCost: string; materialCost: string; totalCost: string; partialCost: boolean; missingCost: string[];
   items: { productId: string; totalCost: string; unitCost: string; suggestedPrice: string | null; belowTargetMargin: boolean }[];
 };
 export type OrdersView = {
@@ -36,7 +37,7 @@ export type OrdersView = {
 /** The values only come with stock:view. */
 type PreviewItem = { productId: string; sku: string; name: string; symbol: string; good: string; lost: string; unitCost?: string | null; fullUnitCost?: string; lossCost?: string };
 type Preview = {
-  printMinutes: number; machineCost?: string; totalCost?: string; lossCost?: string; partialCost?: boolean; items: PreviewItem[];
+  printMinutes: number; machineCost?: string; expenseCost?: string; totalCost?: string; lossCost?: string; partialCost?: boolean; items: PreviewItem[];
   sale: (SaleValues & { feePercent: string; paymentName: string | null }) | null;
 };
 type Dialog = { kind: 'new' } | { kind: 'start' | 'finish' | 'cancel' | 'details'; order: Order };
@@ -207,7 +208,7 @@ function FinishOrder({ order, seeCosts, done }: { order: Order; seeCosts: boolea
           by(item.name, <Title name={item.name} code={item.sku} />), by(item.good, quantity(item.good) + ' ' + item.symbol), by(item.lost, quantity(item.lost) + ' ' + item.symbol),
           ...(seeCosts ? [by(item.unitCost, <strong>{brl(item.unitCost)}</strong>), by(item.lossCost, brl(item.lossCost))] : []),
         ])}
-        footer={seeCosts ? <><span>Máquina e energia: {brl(review.preview.machineCost)} · {duration(review.preview.printMinutes)}</span>
+        footer={seeCosts ? <><span>Máquina e energia: {brl(review.preview.machineCost)} · {duration(review.preview.printMinutes)} · Despesas: {brl(review.preview.expenseCost)}</span>
           <span>Custo total: <strong>{brl(review.preview.totalCost)}</strong></span></> : <span>Tempo cobrado: {duration(review.preview.printMinutes)}</span>} />
       {review.preview.sale && <SaleSummary sale={review.preview.sale} paymentName={review.preview.sale.paymentName} feePercent={review.preview.sale.feePercent} seeCosts={seeCosts} />}
       {review.shipOut && <p className="hint">As peças boas entram e saem do estoque na mesma operação.</p>}
@@ -233,6 +234,7 @@ function OrderDetails({ order, seeCosts }: { order: Order; seeCosts: boolean }) 
       {order.finishedAt && <div><dt>Encerrada em</dt><dd>{dateTime(order.finishedAt)}</dd></div>}
       {order.printMinutes !== null && <div><dt>Tempo cobrado</dt><dd>{duration(order.printMinutes)}</dd></div>}
       {seeCosts && order.machineCost != null && <div><dt>Máquina e energia</dt><dd>{brl(order.machineCost)}</dd></div>}
+      {seeCosts && order.expenseCost != null && <div><dt>Despesas</dt><dd>{brl(order.expenseCost)}</dd></div>}
       {seeCosts && order.totalCost != null && <div><dt>Custo total</dt><dd>{brl(order.totalCost)}</dd></div>}
       {seeCosts && order.lossCost != null && <div><dt>Valor da perda</dt><dd>{brl(order.lossCost)}{order.absorbLoss ? ' (embutida nas peças boas)' : ''}</dd></div>}
       {order.notes && <div><dt>Observação</dt><dd>{order.notes}</dd></div>}
@@ -255,6 +257,8 @@ function OrderDetails({ order, seeCosts }: { order: Order; seeCosts: boolean }) 
         ];
       })} />
     <InputsTable inputs={order.inputs} />
+    {order.expenses.length > 0 && <Table responsive={false} columns={['Despesa', 'Origem', { label: 'Valor', end: true }]}
+      rows={order.expenses.map(row => [row.title, row.source === 'INPUT' ? (row.edited ? 'Insumo (editada)' : 'Insumo') : 'Manual', by(row.value, brl(row.value))])} />}
   </div>;
 }
 
@@ -281,6 +285,7 @@ function BudgetSummary({ budget, minutes }: { budget: Budget; minutes: number })
     <dl className="dl">
       <div><dt>Insumos previstos</dt><dd>≈ {brl(budget.materialCost)}</dd></div>
       <div><dt>Máquina e energia ({duration(minutes)})</dt><dd>≈ {brl(budget.machineCost)}</dd></div>
+      <div><dt>Despesas</dt><dd>≈ {brl(budget.expenseCost)}</dd></div>
       <div><dt>Total estimado</dt><dd><strong>≈ {brl(budget.totalCost)}</strong></dd></div>
     </dl>
   </>;

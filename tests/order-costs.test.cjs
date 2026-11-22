@@ -11,13 +11,14 @@ const order = (status = 'PRINTING') => ({
   id: 'order', number: 1, status, printerId: 'printer', userId: 'user', user: { name: 'Pessoa' }, notes: null, createdAt: date, plannedStart: date,
   estimatedMinutes: 60, expectedEnd: date, startedAt: date, finishedAt: null, printMinutes: null, absorbLoss: false,
   discountPercent: d(10), paymentMethodId: 'pix', paymentMethod: { id: 'pix', name: 'Pix', feePercent: d(5), active: true }, feePercent: null, paymentName: null,
-  saleGross: null, saleDiscount: null, saleTotal: null, saleFee: null, saleNet: null,
+  saleGross: null, saleDiscount: null, saleTotal: null, saleFee: null, saleNet: null, expenseCost: null,
+  expenses: [{ id: 'e', source: 'INPUT', inputId: 'pla', title: 'Despesas de compra · PLA', value: d(0), edited: false }],
   powerWatts: d(200), energyRate: d(1), hourlyCost: d(2), machineCost: d(3), totalCost: d(4), lossCost: d(1),
   printer: { id: 'printer', name: 'Impressora', powerWatts: d(200), hourlyCost: d(2), active: true },
   items: [{
     orderId: 'order', productId: 'piece', planned: d(2), good: d(2), lost: d(0), unitCost: d(2), totalCost: d(4), lossCost: d(0), salePrice: d(10), marginPercent: d(40),
     product: { sku: 'PECA', name: 'Peça', unit },
-    consumption: [{ orderId: 'order', productId: 'piece', inputId: 'pla', planned: d(10), used: null, unitCost: d('0.1'), input: { sku: 'PLA', name: 'PLA', currentCost: d('0.1'), unit } }],
+    consumption: [{ orderId: 'order', productId: 'piece', inputId: 'pla', planned: d(10), used: null, unitCost: d('0.1'), input: { sku: 'PLA', name: 'PLA', currentCost: d('0.1'), lastPurchaseExpense: d('0.02'), unit } }],
   }],
 });
 const sensitive = /cost|energyRate|powerWatts/i;
@@ -80,4 +81,21 @@ test('the finish preview sells only the good pieces', async () => {
   const { sale } = await service(order()).preview('order', data, false);
   assert.deepEqual([sale.gross.toFixed(), sale.total.toFixed(), sale.net.toFixed()], ['10', '9', '8.55']);
   assert.equal(sale.profit, undefined);
+});
+
+test('an open order follows the input expense and a typed value stays', () => {
+  assert.equal(presentOrder(order('PLANNED'), false).expenses[0].value.toFixed(), '0.2');
+  const typed = order('PLANNED');
+  typed.expenses = [{ ...typed.expenses[0], value: d(7), edited: true }];
+  const [row] = presentOrder(typed, false).expenses;
+  assert.deepEqual([row.value.toFixed(), row.suggested.toFixed()], ['7', '0.2']);
+});
+
+test('the finish preview charges the input expense on the real consumption', async () => {
+  const data = {
+    finishedAt: new Date('2026-11-21T11:00:00.000Z'), absorbLoss: false, shipOut: false, items: [], inputs: [{ inputId: 'pla', used: d(5) }],
+  };
+  const preview = await service(order()).preview('order', data, true);
+  assert.equal(preview.expenseCost.toFixed(), '0.1');
+  assert.equal(preview.totalCost.toFixed(), '2.8');
 });

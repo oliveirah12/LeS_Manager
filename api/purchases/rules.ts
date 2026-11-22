@@ -1,7 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
-import { sumValues } from '../stock/cost';
+import { allocate, sumValues } from '../stock/cost';
+
+export { allocate };
 
 const zero = new Prisma.Decimal(0);
 const brazilToday = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
@@ -34,21 +36,6 @@ export function mergeLines(lines: (PurchaseLine & { baseUnit: string })[]): Merg
     seen.unit = sameUnit ? seen.unit : seen.baseUnit;
   }
   return [...merged.values()];
-}
-
-/** Splits a total by weight in exact decimals. The rounding residue goes to the last item with weight, so the sum always closes. */
-export function allocate(total: Prisma.Decimal, weights: Prisma.Decimal[]) {
-  const sum = sumValues(weights);
-  if (total.eq(0) || sum.lte(0)) return weights.map(() => zero);
-  const last = weights.reduce((found, weight, index) => weight.gt(0) ? index : found, -1);
-  let remaining = total;
-  return weights.map((weight, index) => {
-    if (index === last) return remaining;
-    if (weight.lte(0)) return zero;
-    const share = total.times(weight).div(sum).toDecimalPlaces(12, Prisma.Decimal.ROUND_DOWN);
-    remaining = remaining.minus(share);
-    return share;
-  });
 }
 
 export type CostInput = { title: string; mode: 'VALUE' | 'PERCENT'; value: Prisma.Decimal; split: 'VALUE' | 'QUANTITY' };

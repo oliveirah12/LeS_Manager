@@ -36,6 +36,11 @@ enum PurchaseCostSplit {
   QUANTITY
 }
 
+enum ProductionExpenseSource {
+  INPUT
+  MANUAL
+}
+
 enum ProductionStatus {
   PLANNED
   PRINTING
@@ -158,6 +163,7 @@ model Product {
   usedInRecipes ProductInput[]  @relation("RecipeInput")
   productionItems  ProductionItem[]
   productionInputs ProductionConsumption[]
+  productionExpenses ProductionExpense[]
   files         ProductFile[]
   purchaseItems PurchaseItem[]
 }
@@ -262,6 +268,8 @@ model ProductionOrder {
   saleTotal        Decimal?         @db.Decimal(30, 12)
   saleFee          Decimal?         @db.Decimal(30, 12)
   saleNet          Decimal?         @db.Decimal(30, 12)
+  expenseCost      Decimal?         @db.Decimal(30, 12)
+  expenses         ProductionExpense[]
   items            ProductionItem[]
   movements        Movement[]
   @@index([status])
@@ -291,6 +299,7 @@ model ProductionItem {
   lossCost    Decimal?                @db.Decimal(30, 12)
   salePrice     Decimal?              @db.Decimal(30, 12)
   marginPercent Decimal?              @db.Decimal(5, 2)
+  expenseCost   Decimal?              @db.Decimal(30, 12)
   consumption ProductionConsumption[]
   @@id([orderId, productId])
   @@index([productId])
@@ -307,6 +316,21 @@ model ProductionConsumption {
   used      Decimal?       @db.Decimal(30, 12)
   unitCost  Decimal?       @db.Decimal(30, 12)
   @@id([orderId, productId, inputId])
+  @@index([inputId])
+}
+
+/// Extra cost of an order. An INPUT row follows the last purchase expense × consumption until someone types a value.
+model ProductionExpense {
+  id      String                  @id @default(uuid())
+  orderId String
+  order   ProductionOrder         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  source  ProductionExpenseSource
+  inputId String?
+  input   Product?                @relation(fields: [inputId], references: [id], onDelete: Restrict)
+  title   String
+  value   Decimal                 @db.Decimal(30, 12)
+  edited  Boolean                 @default(false)
+  @@unique([orderId, inputId])
   @@index([inputId])
 }
 

@@ -743,6 +743,39 @@ test('API REST com PostgreSQL', {
     assert.deepEqual([frozen.sale.paymentName, frozen.sale.feePercent, frozen.sale.values.net], [name, '5', '42.75']);
   });
 
+  await t.test('despesas entram uma única vez no custo e na média do fabricado', async () => {
+    const input = await createProduct('DESPESA-INSUMO', unit.id);
+    const piece = await createProduct('DESPESA-PECA', unit.id);
+    for (const [product, typeId] of [[input, 2], [piece, 3]]) {
+      expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name: product.name, typeId: '00000000-0000-4000-8000-00000000000' + typeId } }), 200);
+    }
+    expectStatus(await post('/purchases', {
+      purchaseDate: '2026-01-01', items: [{ productId: input.id, unitId: unit.id, quantity: '100', totalCost: '100' }],
+      costs: [{ title: 'Frete', mode: 'VALUE', value: '50', split: 'VALUE' }],
+    }), 201);
+    const stocked = await productRow(input.id);
+    assert.deepEqual([stocked.currentCost.toString(), stocked.lastPurchaseExpense.toString()], ['1', '0.5']);
+    expectStatus(await admin(`/catalog/products/${piece.id}/recipe`, { method: 'PUT', body: { wastePercent: '0', inputs: [{ inputId: input.id, unitId: unit.id, quantity: '10' }] } }), 200);
+    const printer = expectStatus(await post('/production/printers', { name: sku('DESPESA-IMPRESSORA'), powerWatts: '100', hourlyCost: '0' }), 201);
+    await db.productionSettings.update({ where: { id: 'default' }, data: { energyRate: 0 } });
+    const order = expectStatus(await post('/production/orders', {
+      printerId: printer.id, plannedStart: '2026-11-21T10:00:00.000Z', estimatedMinutes: 60,
+      manualExpenses: [{ title: 'Embalagem', value: '2' }], items: [{ productId: piece.id, quantity: '2' }],
+    }), 201);
+    assert.deepEqual(order.expenses.map(row => [row.source, row.value]).sort(), [['INPUT', '10'], ['MANUAL', '2']]);
+    expectStatus(await post(`/production/orders/${order.id}/start`, { startedAt: '2026-11-21T10:00:00.000Z' }), 200);
+    const done = expectStatus(await post(`/production/orders/${order.id}/finish`, {
+      finishedAt: '2026-11-21T11:00:00.000Z', items: [{ productId: piece.id, lost: '0' }], inputs: [{ inputId: input.id, used: '20' }],
+    }), 200);
+    // 20 g at the average of 1, plus 20 g × 0.5 of purchase expense, plus 2 of packaging.
+    assert.deepEqual([done.expenseCost, done.totalCost], ['12', '32']);
+    assert.equal((await productRow(piece.id)).currentCost.toString(), '16');
+    assert.equal((await productRow(input.id)).currentCost.toString(), '1');
+    await db.product.update({ where: { id: input.id }, data: { lastPurchaseExpense: 9 } });
+    const frozen = expectStatus(await admin('/production/orders'), 200).orders.find(row => row.id === order.id);
+    assert.equal(frozen.expenses.find(row => row.source === 'INPUT').value, '10');
+  });
+
   await t.test('famílias e unidades só mudam o que não afeta o histórico', async () => {
     const id = 'M' + Date.now();
     const patch = (path, body) => admin(path, { method: 'PATCH', body });
