@@ -10,7 +10,7 @@ import { Database, idField, nameField, nonnegative, parse, positive, serial, sku
 import { belowMinimum, kitCosting, recipeEstimate, saleMargin, salePricing, stockValue, sumValues } from '../stock/cost';
 
 const referenceField = z.object({ kind: z.enum(ReferenceKind), name: nameField });
-const symbolField = z.string().trim().min(1).max(24);
+export const symbolField = z.string().trim().min(1).max(24);
 const familyField = z.object({ name: nameField, baseSymbol: symbolField });
 const unitField = z.object({
   familyId: idField, symbol: symbolField,
@@ -29,9 +29,9 @@ function isWebUrl(value: string) {
 }
 export const purchaseUrlField = z.string().trim().max(2048).refine(isWebUrl, 'Use um endereço http ou https, sem usuário ou senha');
 const measureField = z.object({ name: nameField, value: positive, unit: symbolField });
-export const measuresField = z.array(measureField).max(30).refine(
-  rows => new Set(rows.map(row => row.name.toLocaleLowerCase('pt-BR'))).size === rows.length, 'Não repita o nome de uma medida.',
-);
+export const maxMeasures = 30;
+export const repeatedMeasure = (rows: { name: string }[]) => new Set(rows.map(row => row.name.toLocaleLowerCase('pt-BR'))).size !== rows.length;
+export const measuresField = z.array(measureField).max(maxMeasures).refine(rows => !repeatedMeasure(rows), 'Não repita o nome de uma medida.');
 export const productFields = z.object({
   sku: skuField, name: nameField, unitId: idField, typeId: idField.optional(),
   groupId: idField.nullish(), brandId: idField.nullish(), colorId: idField.nullish(), departmentId: idField.nullish(),
@@ -441,7 +441,10 @@ export class CatalogService {
     }
   }
 
-  async createProduct(tx: Prisma.TransactionClient, data: z.infer<typeof productFields> & { wastePercent?: Prisma.Decimal }) {
+  /** The commercial fields come only from the initial load, whose route also requires stock:operate. */
+  async createProduct(tx: Prisma.TransactionClient, data: z.infer<typeof productFields> & {
+    wastePercent?: Prisma.Decimal; minStock?: Prisma.Decimal; salePrice?: Prisma.Decimal; marginPercent?: Prisma.Decimal;
+  }) {
     await this.assertReferences(tx, data);
     const { measures, ...fields } = data;
     const product = await tx.product.create({

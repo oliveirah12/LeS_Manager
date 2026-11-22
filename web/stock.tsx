@@ -12,9 +12,15 @@ type HistoryFilters = { productId?: string; kind?: string; from?: string; to?: s
 type CountPreview = { id: string; rows: { product: { sku: string; name: string; unit: Product['unit'] }; expected: string; counted: string; difference: string }[] };
 type InitialPreview = {
   id: string;
-  rows: { sku: string; name: string; unit: string; quantity: string; typeName: string; totalCost?: string; declaredCost: string | null; wastePercent?: string }[];
+  rows: ({ sku: string; name: string; unit: string; quantity: string; typeName: string; totalCost?: string; declaredCost: string | null; wastePercent?: string } & InitialRegistry)[];
   recipes: { product: string; input: string; quantity: string; unit: string }[];
+  measures: { sku: string; name: string; value: string; unit: string }[];
 };
+type InitialRegistry = {
+  minStock?: string; marginPercent?: string; salePrice?: string; lengthMm?: string; widthMm?: string; heightMm?: string; diameterMm?: string; purchaseUrl?: string;
+};
+const dimensions = (row: InitialRegistry) => ([['C', row.lengthMm], ['L', row.widthMm], ['A', row.heightMm], ['Ø', row.diameterMm]] as const)
+  .flatMap(([label, value]) => value ? [label + ' ' + quantity(value)] : []).join(' · ');
 type Dialog = { kind: 'settings'; product: StockProduct } | { kind: 'movement'; product?: Product } | { kind: 'kit'; kit: Kit } | { kind: 'kitDetails'; kit: StockKit } | { kind: 'inventory' } | { kind: 'initial' };
 const kinds = [{ id: 'PURCHASE', name: 'Compra' }, { id: 'OUT', name: 'Saída' }, { id: 'ADJUSTMENT', name: 'Ajuste' }] as const;
 const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário', PRODUCTION_IN: 'Entrada de produção', PRODUCTION_OUT: 'Consumo de produção' };
@@ -338,6 +344,19 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
       <Table columns={['Produto', 'Insumo', { label: 'Consumo por unidade', end: true }]}
         rows={preview.recipes.map(row => [row.product, row.input, by(row.quantity, quantity(row.quantity) + ' ' + row.unit)])} />
     </>}
+    {preview.rows.some(row => row.minStock || row.marginPercent || row.salePrice || dimensions(row) || row.purchaseUrl) && <>
+      <h3>Dados do cadastro</h3>
+      <Table columns={['SKU', { label: 'Mínimo', end: true }, { label: 'Margem', end: true }, { label: 'Preço de venda', end: true }, 'Dimensões (mm)', 'URL de compra']}
+        rows={preview.rows.filter(row => row.minStock || row.marginPercent || row.salePrice || dimensions(row) || row.purchaseUrl).map(row => [
+          row.sku, by(row.minStock, row.minStock ? quantity(row.minStock) + ' ' + row.unit : '—'), by(row.marginPercent, row.marginPercent ? quantity(row.marginPercent) + '%' : '—'),
+          by(row.salePrice, row.salePrice ? brl(row.salePrice) : '—'), dimensions(row) || '—', row.purchaseUrl ?? '—',
+        ])} />
+    </>}
+    {preview.measures.length > 0 && <>
+      <h3>Medidas extras</h3>
+      <Table columns={['SKU', 'Medida', { label: 'Valor', end: true }]}
+        rows={preview.measures.map(row => [row.sku, row.name, by(row.value, quantity(row.value) + ' ' + row.unit)])} />
+    </>}
     <Form key={preview.id} label="Confirmar carga inicial" extra={<button type="button" className="btn secondary" onClick={() => setPreview(undefined)}>Voltar</button>}
       action={async () => {
         await api('stock/initial/' + preview.id + '/confirm', {});
@@ -347,7 +366,7 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
   </div>;
   return <div className="stack">
     <div className="info">Use SKUs novos e os tipos, unidades e classificações da aba Listas. Informe o custo total da linha, e o sistema calcula o valor por unidade.
-      Para produtos fabricados, preencha a aba Ficha técnica com o consumo de uma unidade.</div>
+      Para produtos fabricados, preencha a aba Ficha técnica com o consumo de uma unidade. Mínimo, margem, preço, dimensões, URL e a aba Medidas são opcionais.</div>
     <a className="btn secondary" style={{ alignSelf: 'flex-start' }} href="/api/stock/initial/template"><Download size={16} aria-hidden="true" />Baixar modelo</a>
     <Upload action={async file => { setPreview(undefined); setPreview(await api<InitialPreview>('stock/initial/preview', file)); }} />
   </div>;

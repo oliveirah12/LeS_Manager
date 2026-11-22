@@ -20,8 +20,13 @@ function legacy(rows) {
 
 test('the template has the load, technical sheet and list tabs with dropdowns', async () => {
   const workbook = await template();
-  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['Carga inicial', 'Ficha técnica', 'Listas']);
-  const [load, recipes, lists] = workbook.worksheets;
+  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['Carga inicial', 'Ficha técnica', 'Medidas', 'Listas']);
+  const [load, recipes, measures, lists] = workbook.worksheets;
+  assert.deepEqual(measures.getRow(1).values.slice(1), ['SKU', 'Nome', 'Valor', 'Unidade']);
+  assert.equal(measures.getCell('D2').dataValidation, undefined);
+  assert.deepEqual(load.getRow(1).values.slice(12), [
+    'Estoque mínimo', 'Margem (%)', 'Preço de venda', 'Comprimento (mm)', 'Largura (mm)', 'Altura (mm)', 'Diâmetro (mm)', 'URL de compra',
+  ]);
   assert.deepEqual(load.getRow(1).values.slice(1, 8), ['SKU', 'Nome', 'Tipo', 'Unidade', 'Quantidade', 'Custo total', 'Perda (%)']);
   assert.deepEqual(recipes.getRow(1).values.slice(1), ['SKU do produto', 'SKU do insumo', 'Quantidade', 'Unidade']);
   assert.equal(lists.getCell('A3').value, 'Impresso 3D');
@@ -50,6 +55,42 @@ test('an older file keeps Custo as the cost per declared unit', async () => {
   const data = await workbookRows('initial', await asFile(legacy([['A', 'Antigo', 'kg', 2, 15]])));
   assert.deepEqual(data, { rows: [{ sku: 'A', name: 'Antigo', unit: 'kg', quantity: '2', unitCost: '15' }], recipes: [] });
   assert.equal(initialFields.safeParse(data).success, true);
+});
+
+const fill = (sheet, line, values) => sheet.getRow(1).eachCell((cell, column) => {
+  if (cell.text in values) sheet.getCell(line, column).value = values[cell.text];
+});
+
+test('reads the registry columns, a typed link and the measures tab', async () => {
+  const workbook = await template();
+  fill(workbook.worksheets[0], 2, {
+    SKU: 'pla', Nome: 'PLA', Unidade: 'un', Quantidade: 0, 'Estoque mínimo': 2.5, 'Margem (%)': '40', 'Preço de venda': 99.9,
+    'Comprimento (mm)': 120.5, 'Diâmetro (mm)': '1,75', 'URL de compra': { text: 'Loja', hyperlink: 'https://loja.example/item' },
+  });
+  fill(workbook.getWorksheet('Medidas'), 2, { SKU: 'pla', Nome: 'Passo', Valor: 0.4, Unidade: 'mm' });
+  const data = await workbookRows('initial', await asFile(workbook));
+  assert.deepEqual(data.rows[0], {
+    sku: 'pla', name: 'PLA', unit: 'un', quantity: '0', minStock: '2.5', marginPercent: '40', salePrice: '99.9',
+    lengthMm: '120.5', diameterMm: '1,75', purchaseUrl: 'https://loja.example/item',
+  });
+  assert.deepEqual(data.measures, [{ sku: 'pla', name: 'Passo', value: '0.4', unit: 'mm' }]);
+  const parsed = initialFields.parse(data);
+  assert.equal(parsed.rows[0].diameterMm.toFixed(), '1.75');
+  assert.equal(parsed.measures[0].sku, 'PLA');
+});
+
+test('a preview stored before the registry fields stays valid', () => {
+  const parsed = initialFields.parse({ rows: [{ sku: 'A', name: 'Antigo', unit: 'un', quantity: '1', totalCost: '5' }], recipes: [] });
+  assert.deepEqual(parsed.measures, []);
+  assert.equal(parsed.rows[0].marginPercent, undefined);
+});
+
+test('validates the registry fields of each row', () => {
+  const valid = fields => initialFields.safeParse({ rows: [{ sku: 'A', name: 'Nome', unit: 'un', quantity: '0', ...fields }] }).success;
+  for (const fields of [{ marginPercent: '99.99' }, { marginPercent: '0' }, { minStock: '0' }, { salePrice: '0.01' }, { heightMm: '3' }]) assert.equal(valid(fields), true, JSON.stringify(fields));
+  for (const fields of [{ marginPercent: '100' }, { marginPercent: '1.234' }, { minStock: '-1' }, { salePrice: '0' }, { widthMm: '0' }, { purchaseUrl: 'javascript:alert(1)' }]) {
+    assert.equal(valid(fields), false, JSON.stringify(fields));
+  }
 });
 
 test('rejects unknown headers, two cost columns and missing required columns', async () => {

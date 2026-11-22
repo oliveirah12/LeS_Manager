@@ -835,6 +835,49 @@ test('API REST com PostgreSQL', {
     assert.equal(await db.movement.count({ where: { kind: 'INITIAL', productId: { in: imported.map(product => product.id) } } }), 2);
   });
 
+  await t.test('a carga grava cadastro e medidas de forma atômica e aceita o arquivo antigo', async () => {
+    const fill = (sheet, line, values) => sheet.getRow(1).eachCell((cell, column) => {
+      if (cell.text in values) sheet.getCell(line, column).value = values[cell.text];
+    });
+    const workbook = await loadTemplate('/stock/initial/template');
+    const sheet = workbook.getWorksheet('Carga inicial');
+    const [first, second] = [sku('CADASTRO-1'), sku('CADASTRO-2')];
+    fill(sheet, 2, {
+      SKU: first, Nome: 'Com cadastro', Unidade: unit.symbol, Quantidade: '2', 'Custo total': '120', 'Estoque mínimo': '1', 'Margem (%)': '40',
+      'Preço de venda': '100', 'Comprimento (mm)': '12.5', 'URL de compra': 'https://loja.example/a',
+    });
+    fill(sheet, 3, { SKU: second, Nome: 'Com erro', Unidade: unit.symbol, Quantidade: '0', 'Margem (%)': '100' });
+    fill(workbook.getWorksheet('Medidas'), 2, { SKU: first, Nome: 'Passo', Valor: '0.4', Unidade: 'mm' });
+    const stored = () => db.product.count({ where: { sku: { in: [first, second] } } });
+    expectStatus(await uploadWorkbook('/stock/initial/preview', workbook), 400);
+    assert.equal(await stored(), 0);
+
+    fill(sheet, 3, { 'Margem (%)': '10' });
+    const batch = expectStatus(await uploadWorkbook('/stock/initial/preview', workbook), 201);
+    assert.equal(batch.rows[0].marginPercent, '40');
+    assert.deepEqual(batch.measures.map(row => [row.sku, row.value]), [[first, '0.4']]);
+
+    // A conflict in the second row at confirmation also keeps the first one out.
+    const blocker = expectStatus(await post('/catalog/products', { sku: second, name: 'Bloqueio', unitId: unit.id }), 201);
+    expectStatus(await post(`/stock/initial/${batch.id}/confirm`), 409);
+    assert.equal(await db.product.count({ where: { sku: first } }), 0);
+    expectStatus(await admin('/catalog/products/' + blocker.id, { method: 'DELETE' }), 200);
+
+    expectStatus(await post(`/stock/initial/${batch.id}/confirm`), [200, 201]);
+    const product = await db.product.findUniqueOrThrow({ where: { sku: first }, include: { measures: true } });
+    assert.deepEqual([product.minStock, product.marginPercent, product.salePrice, product.lengthMm, product.currentCost].map(value => value.toString()), ['1', '40', '100', '12.5', '60']);
+    assert.equal(product.purchaseUrl, 'https://loja.example/a');
+    assert.deepEqual(product.measures.map(row => [row.name, row.value.toString(), row.unit]), [['Passo', '0.4', 'mm']]);
+
+    const legacy = new Workbook();
+    const legacySku = sku('CADASTRO-ANTIGO');
+    legacy.addWorksheet('Carga inicial').addRows([['SKU', 'Nome', 'Unidade', 'Quantidade', 'Custo'], [legacySku, 'Antigo', unit.symbol, '2', '15']]);
+    const oldBatch = expectStatus(await uploadWorkbook('/stock/initial/preview', legacy), 201);
+    expectStatus(await post(`/stock/initial/${oldBatch.id}/confirm`), [200, 201]);
+    const old = await db.product.findUniqueOrThrow({ where: { sku: legacySku } });
+    assert.deepEqual([old.quantity.toString(), old.currentCost.toString(), old.marginPercent, old.purchaseUrl], ['2', '15', null, null]);
+  });
+
   await t.test('a carga inicial cadastra tipos, perda e ficha técnica de forma atômica', async () => {
     const workbook = await loadTemplate('/stock/initial/template');
     const [sheet, recipes] = [workbook.getWorksheet('Carga inicial'), workbook.getWorksheet('Ficha técnica')];
