@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Eye, Pencil, Plus, Trash2, Undo2 } from 'lucide-react';
+import { PurchaseAttachments } from './purchase-documents';
 import {
   api, Badge, brl, by, dateTime, Field, fields, Loading, message, Modal, ModalForm, notify, PageActions, Product, productOptions, quantity, Select, Table, Title, today, Unit, unitOptions, useData,
 } from './ui';
@@ -171,6 +172,7 @@ function PurchaseDialog({ dialog, edit, setDialog, close, saved }: {
         rows={data.costs.map(cost => [
           cost.title, cost.mode === 'PERCENT' ? quantity(cost.value) + '%' : 'Valor', cost.split === 'VALUE' ? 'Por valor' : 'Por quantidade', by(cost.amount, brl(cost.amount)),
         ])} />}
+      <PurchaseAttachments purchaseId={data.id} edit={edit} />
       {edit && !data.reversedAt && <div className="form-actions">
         <button type="button" className="btn secondary" onClick={() => setDialog({ kind: 'edit', id: data.id })}><Pencil size={16} aria-hidden="true" />Editar dados</button>
         <button type="button" className={'btn secondary' + (data.reversalBlock ? ' unavailable' : '')} disabled={!!data.reversalBlock} title={data.reversalBlock ?? undefined}
