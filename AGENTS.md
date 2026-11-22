@@ -10,5 +10,6 @@
 - Autorize cada rota no backend. Mantenha o código de primeiro acesso temporário e de uso único. Nunca registre senhas, códigos, tokens ou certificados.
 - Toda rota de escrita declara `@Audit('rótulo estável')` ou `@Audit(false)`, e `tests/audit.test.cjs` cobra isso. Audite inclusões, alterações, exclusões e eventos de segurança, e deixe consultas e prévias de fora. Descreva a mudança com `auditChange(antes, depois)` usando valores legíveis. Nunca grave senhas, códigos, tokens ou certificados.
 - O service worker guarda somente a página pública de contingência. Mantenha dados do painel e respostas da API fora do cache.
+- Toda entrega para a `main` sobe a versão em `package.json` e registra o que mudou em `web/releases.ts`, em linguagem de quem usa o painel. Um teste cobra que as duas fiquem iguais.
 - Execute `npm run build` e `npm test`. Para os testes HTTP, aponte `TEST_DATABASE_URL` a uma base exclusiva de testes e aplique as migrações nela.
 - Use `les_architecture_reviewer` para fronteiras, SOLID e legibilidade e `les_quality_reviewer` para testes, acessos e integridade. Ambos revisam sem alterar arquivos.

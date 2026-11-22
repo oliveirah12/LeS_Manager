@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { ReactNode, useEffect, useRef, useState } from 'react';
+import { ReleaseNotices } from './release-notices';
 import { createRoot } from 'react-dom/client';
 import {
   ChevronDown, Home as HomeIcon, Layers, LogOut, Menu, Moon, MoreHorizontal, Package, PanelLeftClose, PanelLeftOpen, Printer,
@@ -313,6 +314,7 @@ function App() {
         <a href={hashOf('home')} className="brand" onClick={event => { event.preventDefault(); navigate('home'); }}>
           <img src="/brand.png" alt="" width="30" height="30" /><span>LeS Manager</span></a>
         <span className="spacer" />
+        <ReleaseNotices read={readPreference} save={savePreference} />
         <AccountMenu identity={identity} theme={theme} toggleTheme={toggleTheme}
           openAccount={() => navigate(admin ? 'admin-account' : 'account')} signOut={() => setLogout(true)} />
       </header>
