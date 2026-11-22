@@ -188,6 +188,7 @@ model StoredFile {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   product      ProductFile?
+  purchaseDocument PurchaseDocument?
   @@index([available, updatedAt])
 }
 
@@ -340,8 +341,30 @@ model Purchase {
   reversedBy     User?          @relation("PurchaseReverser", fields: [reversedById], references: [id])
   items          PurchaseItem[]
   costs          PurchaseCost[]
+  documents      PurchaseDocument[]
   @@index([createdAt])
   @@index([supplierId])
+  @@index([purchaseDate])
+}
+
+/// Declared in the alphabetical order of the Portuguese labels, because the database sorts an enum by its declaration.
+enum PurchaseDocumentType {
+  PAYMENT_PROOF
+  INVOICE
+  QUOTE
+  OTHER
+  RECEIPT
+}
+
+/// Attaches a stored file to a purchase. Any purchase accepts documents, including converted and reversed ones.
+model PurchaseDocument {
+  fileId     String               @id
+  file       StoredFile           @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  purchaseId String
+  purchase   Purchase             @relation(fields: [purchaseId], references: [id])
+  type       PurchaseDocumentType
+  @@index([purchaseId])
+  @@index([type])
 }
 
 /// One product of a purchase. Repeated lines are merged, so each product has one movement and one undo state.

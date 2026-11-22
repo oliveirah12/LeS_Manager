@@ -6,7 +6,9 @@ const { join } = require('node:path');
 const { test } = require('node:test');
 const { Controller, Module, Post, UploadedFile } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
-const { attachmentHeader, hasBlockedExtension, hasExecutableSignature, safeFileName, safeMimeType } = require('../dist/api/files/rules.js');
+const {
+  attachmentHeader, hasBlockedExtension, hasDocumentExtension, hasExecutableSignature, matchesDocumentContent, purchaseDocumentLimit, safeFileName, safeMimeType,
+} = require('../dist/api/files/rules.js');
 const { DiskFileStorage, newStorageKey, storageRoot } = require('../dist/api/files/storage.js');
 const { FileUpload } = require('../dist/api/files/upload.js');
 
@@ -41,6 +43,17 @@ test('executables are blocked by extension, even disguised, and by content', () 
   for (const name of ['peca.stl', 'modelo.3mf', 'nota.pdf', 'foto.jpeg', 'semextensao', 'exe', 'a.exe.pdf']) assert.ok(!hasBlockedExtension(name), name);
   for (const head of ['4d5a9000', '7f454c46', 'cffaedfe', 'cafebabe', '2321']) assert.ok(hasExecutableSignature(Buffer.from(head, 'hex')), head);
   for (const head of ['25504446', '89504e47', '504b0304', '', '4d']) assert.ok(!hasExecutableSignature(Buffer.from(head, 'hex')), head);
+});
+
+test('purchase documents accept PDF, images and XML, with content matching the extension', () => {
+  assert.equal(purchaseDocumentLimit, 20 * 1024 * 1024);
+  for (const name of ['nota.PDF', 'foto.jpg', 'foto.jpeg', 'a.png', 'a.webp', 'a.gif', 'a.tif', 'a.tiff', 'nfe.xml']) assert.ok(hasDocumentExtension(name), name);
+  for (const name of ['a.svg', 'a.html', 'a.zip', 'a.docx', 'semextensao', 'pdf', 'a.pdf.exe']) assert.ok(!hasDocumentExtension(name), name);
+  const accepted = [['a.pdf', '25504446'], ['a.png', '89504e47'], ['a.jpg', 'ffd8ffe0'], ['a.webp', '52494646'], ['a.gif', '47494638'], ['a.tif', '49492a00'], ['a.tiff', '4d4d002a'],
+    ['a.xml', '3c3f786d'], ['a.xml', 'efbbbf3c'], ['a.xml', '0a203c6e'], ['a.xml', 'fffe3c00']];
+  for (const [name, head] of accepted) assert.ok(matchesDocumentContent(name, Buffer.from(head, 'hex')), name + ' ' + head);
+  const refused = [['a.pdf', '89504e47'], ['a.png', '25504446'], ['a.jpg', '4d5a9000'], ['a.xml', '25504446'], ['a.xml', '20202020'], ['a.pdf', ''], ['a.svg', '3c737667']];
+  for (const [name, head] of refused) assert.ok(!matchesDocumentContent(name, Buffer.from(head, 'hex')), name + ' ' + head);
 });
 
 test('the declared type and the download header cannot inject anything', () => {

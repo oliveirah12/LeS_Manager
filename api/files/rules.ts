@@ -34,6 +34,36 @@ export function hasExecutableSignature(head: Buffer) {
   return ['7f454c46', 'feedface', 'feedfacf', 'cefaedfe', 'cffaedfe', 'cafebabe'].includes(head.subarray(0, 4).toString('hex'));
 }
 
+export const purchaseDocumentLimit = 20 * megabyte;
+export const purchaseDocumentMessage = 'Envie um PDF, uma imagem (JPG, PNG, WebP, GIF ou TIFF) ou um XML.';
+
+const documentSignatures = new Map([
+  ['pdf', ['25504446']], ['png', ['89504e47']], ['jpg', ['ffd8ff']], ['jpeg', ['ffd8ff']], ['webp', ['52494646']], ['gif', ['47494638']],
+  ['tif', ['49492a00', '4d4d002a']], ['tiff', ['49492a00', '4d4d002a']],
+]);
+const extensionOf = (name: string) => {
+  const safe = safeFileName(name);
+  const dot = safe.lastIndexOf('.');
+  return dot < 0 ? '' : safe.slice(dot + 1).toLowerCase();
+};
+
+export const hasDocumentExtension = (name: string) => extensionOf(name) === 'xml' || documentSignatures.has(extensionOf(name));
+
+/** XML may open with a byte order mark or blank space before its first tag. */
+function looksLikeXml(head: Buffer) {
+  const hex = head.toString('hex');
+  if (hex.startsWith('fffe3c00') || hex.startsWith('feff003c')) return true;
+  return head.toString('latin1').replace(/^\xef\xbb\xbf/, '').trimStart().startsWith('<');
+}
+
+/** The first bytes must agree with the extension, so a renamed file is refused. */
+export function matchesDocumentContent(name: string, head: Buffer) {
+  const extension = extensionOf(name);
+  if (extension === 'xml') return looksLikeXml(head);
+  const hex = head.toString('hex');
+  return (documentSignatures.get(extension) ?? []).some(signature => hex.startsWith(signature));
+}
+
 /** The browser's declared type is only informative, so anything unusual is stored as generic binary. */
 export function safeMimeType(value: string | undefined) {
   const type = value?.split(';')[0].trim().toLowerCase() ?? '';
