@@ -1,5 +1,8 @@
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
+const { mkdtempSync, readdirSync, rmSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
 const { test } = require('node:test');
 const { setTimeout: delay } = require('node:timers/promises');
 
@@ -14,6 +17,9 @@ test('API REST com PostgreSQL', {
   // Requests without X-Forwarded-For keep the socket address, so only the limit test below sets it.
   process.env.TRUST_PROXY = '1';
   process.env.CONFIG_ENCRYPTION_KEY ??= require('node:crypto').randomBytes(32).toString('base64');
+  const fileRoot = mkdtempSync(join(tmpdir(), 'les-http-files-'));
+  process.env.FILE_STORAGE_DIR = fileRoot;
+  t.after(() => rmSync(fileRoot, { recursive: true, force: true }));
   const { PrismaClient } = require('@prisma/client');
   const { Workbook } = require('exceljs');
   const { hashPassword } = require('../dist/api/access/security.js');
@@ -940,5 +946,81 @@ test('API REST com PostgreSQL', {
     assert.equal(input.currentCost.toString(), '0.1');
     assert.equal(product.wastePercent.toString(), '5');
     assert.deepEqual(product.recipe.map(row => [row.inputId, row.quantity.toString()]), [[input.id, '120']]);
+  });
+
+  await t.test('arquivos do produto respeitam permissão, nome, tipo e exclusão', async () => {
+    const family = await createFamily('ARQUIVOS', sku('ARQ'));
+    const product = await createProduct('COM-ARQUIVO', family.units[0].id);
+    const path = '/catalog/products/' + product.id + '/files';
+    const form = (bytes, name, type = 'application/pdf') => {
+      const body = new FormData();
+      body.append('file', new Blob([bytes], { type }), name);
+      return body;
+    };
+    const stored = () => readdirSync(fileRoot, { recursive: true, withFileTypes: true })
+      .filter(entry => entry.isFile()).map(entry => join(entry.parentPath, entry.name));
+    async function sessionWith(permissions, index) {
+      const label = 'ARQ' + index;
+      const email = run.toLowerCase() + '-' + label.toLowerCase() + '@example.com';
+      await db.user.create({ data: {
+        email, name: 'Perfil ' + label, passwordHash: await hashPassword(password),
+        profile: { create: { name: sku(label), permissions } },
+      } });
+      const session = await request('/access/login', { method: 'POST', headers: { 'x-forwarded-for': '192.0.2.' + (index + 1) }, body: { email, password } });
+      expectStatus(session, 200);
+      const call = (route, options = {}) => request(route, { ...options, cookie: session.cookie });
+      call.cookie = session.cookie;
+      return call;
+    }
+    const [none, viewer, operator] = await Promise.all([['stock:view'], ['catalog:view'], ['catalog:operate']].map(sessionWith));
+
+    expectStatus(await request(path), 401);
+    expectStatus(await none(path), 403);
+    expectStatus(await none(path, { method: 'POST', body: form('x', 'a.pdf') }), 403);
+    expectStatus(await viewer(path, { method: 'POST', body: form('x', 'a.pdf') }), 403);
+    assert.deepEqual(stored(), [], 'perfil recusado não grava em disco');
+
+    const file = expectStatus(await operator(path, { method: 'POST', body: form('conteudo', 'Peça "final".pdf', 'text/html') }), 201);
+    assert.equal(file.originalName, 'Peça _final_.pdf');
+    assert.equal('storageKey' in file, false);
+    assert.equal(file.sizeBytes, 8);
+    const row = await db.storedFile.findUniqueOrThrow({ where: { id: file.id } });
+    assert.equal(row.available, true);
+    assert.match(row.storageKey, /^[0-9a-f]{2}\/[0-9a-f-]{36}$/);
+    assert.equal(stored().length, 1);
+    const audit = await waitForAuditEvent({ action: 'Enviar arquivo do produto' }, event => event.targetId === product.id && event.status === 201);
+    assert.equal(audit.details.after.Arquivo, 'Peça _final_.pdf');
+
+    const listed = expectStatus(await viewer(path), 200);
+    assert.deepEqual(listed.map(item => item.id), [file.id]);
+    assert.equal('storageKey' in listed[0], false);
+    expectStatus(await none(path + '/' + file.id + '/download'), 403);
+    const download = await fetch(baseUrl + '/api' + path + '/' + file.id + '/download', { headers: { cookie: viewer.cookie } });
+    assert.equal(download.status, 200);
+    assert.equal(download.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(download.headers.get('content-type'), 'application/octet-stream');
+    assert.equal(download.headers.get('cache-control'), 'no-store');
+    assert.match(download.headers.get('content-disposition'), /^attachment; filename="Peca _final_.pdf"; filename\*=UTF-8''/);
+    assert.equal(await download.text(), 'conteudo');
+
+    expectStatus(await operator(path, { method: 'POST', body: form('x', 'setup.exe') }), 415);
+    expectStatus(await operator(path, { method: 'POST', body: form('MZ executavel', 'manual.pdf') }), 415);
+    expectStatus(await operator(path, { method: 'POST', body: form('', 'vazio.pdf') }), 400);
+    expectStatus(await operator('/catalog/products/' + randomUUID() + '/files', { method: 'POST', body: form('x', 'a.pdf') }), 404);
+    assert.equal(stored().length, 1, 'envios recusados não deixam temporários');
+
+    const other = await createProduct('SEM-ARQUIVO', family.units[0].id);
+    expectStatus(await admin('/catalog/products/' + other.id + '/files/' + file.id + '/download'), 404);
+    expectStatus(await admin('/catalog/products/' + other.id + '/files/' + file.id, { method: 'DELETE' }), 404);
+
+    expectStatus(await viewer(path + '/' + file.id, { method: 'DELETE' }), 403);
+    expectStatus(await operator(path + '/' + file.id, { method: 'DELETE' }), 200);
+    assert.equal(await db.storedFile.count({ where: { id: file.id } }), 0);
+    assert.deepEqual(stored(), []);
+
+    const attached = expectStatus(await operator(path, { method: 'POST', body: form('outro', 'b.stl') }), 201);
+    expectStatus(await admin('/catalog/products/' + product.id, { method: 'DELETE' }), 200);
+    assert.equal(await db.storedFile.count({ where: { id: attached.id } }), 0);
+    assert.deepEqual(stored(), [], 'excluir o produto não deixa arquivo órfão');
   });
 });

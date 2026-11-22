@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
 import { canAccess } from '../access/security';
 import { Audit, auditChange, auditContext } from '../audit/recorder';
+import { FileService } from '../files/files';
 import { Database, idField, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal } from '../shared';
 import { belowMinimum, kitCosting, recipeEstimate, saleMargin, salePricing, stockValue, sumValues } from '../stock/cost';
 
@@ -147,7 +148,7 @@ export function inBase(unit: { familyId: string; factor: Prisma.Decimal }, famil
 
 @Injectable()
 export class CatalogService {
-  constructor(@Inject(Database) private db: Database) {}
+  constructor(@Inject(Database) private db: Database, @Inject(FileService) private files: FileService) {}
 
   async registrations() {
     const [families, units, storedReferences, types, usedUnits] = await Promise.all([
@@ -267,7 +268,9 @@ export class CatalogService {
   async overview() {
     const [registrations, products, kits] = await Promise.all([
       this.registrations(),
-      this.db.product.findMany({ select: { ...catalogProduct, ...productUsage }, orderBy: { sku: 'asc' } }),
+      this.db.product.findMany({
+        select: { ...catalogProduct, _count: { select: { ...productUsage._count.select, files: { where: { file: { available: true } } } } } }, orderBy: { sku: 'asc' },
+      }),
       this.db.kit.findMany({
         include: { components: { include: { product: { select: catalogSummary } } }, ...kitUsage },
         orderBy: { sku: 'asc' },
@@ -275,7 +278,7 @@ export class CatalogService {
     ]);
     return {
       ...registrations,
-      products: products.map(({ _count, ...product }) => ({ ...product, hasRecipe: _count.recipe > 0, deleteBlock: productBlock(_count) })),
+      products: products.map(({ _count, ...product }) => ({ ...product, hasRecipe: _count.recipe > 0, fileCount: _count.files, deleteBlock: productBlock(_count) })),
       kits: kits.map(({ _count, ...kit }) => ({ ...kit, deleteBlock: kitBlock(_count) })),
     };
   }
@@ -490,17 +493,21 @@ export class CatalogService {
   }
 
   /** Deletes a product that never entered the history. Unconfirmed count previews do not hold it back. */
-  deleteProduct(id: string) {
-    return serial(this.db, async tx => {
+  async deleteProduct(id: string) {
+    const released = await serial(this.db, async tx => {
       const product = await tx.product.findUnique({ where: { id }, select: { ...productAudit, ...productUsage } });
       if (!product) throw new NotFoundException('Produto não encontrado.');
       const block = productBlock(product._count);
       if (block) throw new ConflictException(block + ' Inative o produto em vez de excluir.');
       await tx.inventoryRow.deleteMany({ where: { productId: id } });
+      // Attachments are not history: they leave with the product, and their content only after the commit.
+      const files = await this.files.releaseProductFiles(tx, id);
       await tx.product.delete({ where: { id } });
-      auditChange(productValues(product), null);
-      return { id };
+      auditChange({ ...productValues(product), Arquivos: files.names }, null);
+      return files.ids;
     });
+    await this.files.purge(released);
+    return { id };
   }
 
   deleteKit(id: string) {
