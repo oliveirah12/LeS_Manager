@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { CheckCircle2, Eye, Pencil, Play, Plus, X } from 'lucide-react';
+import { CheckCircle2, Eye, Pencil, Play, Plus, Wrench, X } from 'lucide-react';
 import { decimal, suggestedConsumption } from './format';
+import { CorrectOrder, RevisionHistory } from './order-correction';
 import { OrderForm } from './order-form';
 import {
   api, Badge, brl, by, dateTime, Field, Form, Loading, message, Modal, ModalForm, notify, PageActions, quantity, Select, sortParam, SortState, Table, Title, useClosePanel, useData,
@@ -19,8 +20,9 @@ export type OrderInput = {
   parts: { productId: string; planned: string }[]; replaces: string[];
 };
 export type Order = {
-  id: string; number: number; status: Status; notes: string | null; printer: { id: string; name: string }; user: { name: string };
+  id: string; number: number; revision: number; status: Status; notes: string | null; printer: { id: string; name: string }; user: { name: string };
   plannedStart: string; estimatedMinutes: number; expectedEnd: string; startedAt: string | null; finishedAt: string | null; printMinutes: number | null;
+  powerWatts?: string | null; energyRate?: string | null; hourlyCost?: string | null;
   machineCost?: string | null; totalCost?: string | null; lossCost?: string | null; absorbLoss: boolean; items: OrderItem[]; inputs: OrderInput[];
   budget: Budget | null; sale: Sale; expenses: OrderExpense[]; expenseCost?: string | null;
 };
@@ -41,7 +43,7 @@ type Preview = {
   printMinutes: number; machineCost?: string; expenseCost?: string; totalCost?: string; lossCost?: string; partialCost?: boolean; items: PreviewItem[];
   sale: (SaleValues & { feePercent: string; paymentName: string | null }) | null;
 };
-type Dialog = { kind: 'new' } | { kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details'; order: Order };
+type Dialog = { kind: 'new' } | { kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct'; order: Order };
 
 const statuses: Record<Status, { name: string; tone?: 'ok' | 'warn' | 'brand' }> = {
   PLANNED: { name: 'Planejada' }, PRINTING: { name: 'Em impressão', tone: 'brand' }, DONE: { name: 'Concluída', tone: 'ok' }, CANCELED: { name: 'Cancelada', tone: 'warn' },
@@ -50,7 +52,7 @@ const localValue = (date = new Date()) => new Date(date.getTime() - date.getTime
 const iso = (value: FormDataEntryValue | null) => new Date(String(value)).toISOString();
 const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60 ? (minutes % 60) + ' min' : minutes >= 60 ? '' : '0 min');
 
-export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: boolean }) {
+export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; correct: boolean; seeCosts: boolean }) {
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>(null);
   const query = new URLSearchParams({ page: String(page), ...(sort ? { sort: sortParam(sort)! } : {}) });
@@ -69,7 +71,7 @@ export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: 
     setSort(null);
   }
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
-  const open = (kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details', order: Order) => setDialog({ kind, order });
+  const open = (kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct', order: Order) => setDialog({ kind, order });
   return <>
     {edit && <PageActions><button type="button" className="btn" onClick={() => setDialog({ kind: 'new' })}><Plus size={16} aria-hidden="true" />Nova ordem</button></PageActions>}
     {message(error)}
@@ -96,6 +98,7 @@ export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: 
           {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" aria-label={'Editar ordem ' + order.number} onClick={() => open('edit', order)}><Pencil size={14} aria-hidden="true" />Editar</button>}
           {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" onClick={() => open('start', order)}><Play size={14} aria-hidden="true" />Iniciar</button>}
           {edit && order.status === 'PRINTING' && <button type="button" className="btn secondary small" onClick={() => open('finish', order)}><CheckCircle2 size={14} aria-hidden="true" />Concluir</button>}
+          {correct && order.status === 'DONE' && <button type="button" className="btn secondary small" aria-label={'Corrigir ordem ' + order.number} onClick={() => open('correct', order)}><Wrench size={14} aria-hidden="true" />Corrigir</button>}
           {edit && (order.status === 'PLANNED' || order.status === 'PRINTING') &&
             <button type="button" className="btn ghost small" onClick={() => open('cancel', order)}><X size={14} aria-hidden="true" />Cancelar</button>}
         </div>,
@@ -127,6 +130,8 @@ export function ProductionOrders({ edit, seeCosts }: { edit: boolean; seeCosts: 
           inputMode="decimal" required={false} placeholder="0" hint={'Reservado: ' + quantity(input.planned) + ' ' + input.symbol} />)}
       </> : <p className="muted">A ordem ainda não iniciou, então nada muda no estoque.</p>}
     </ModalForm>}
+    {data && dialog?.kind === 'correct' && <Modal wide title={'Corrigir ordem #' + dialog.order.number} subtitle="Correção técnica auditada de uma ordem concluída." close={() => setDialog(undefined)}>
+      <CorrectOrder order={dialog.order} view={data} seeCosts={seeCosts} done={done} /></Modal>}
     {dialog?.kind === 'details' && <Modal wide title={'Ordem #' + dialog.order.number} subtitle={statuses[dialog.order.status].name} close={() => setDialog(undefined)}>
       <OrderDetails order={dialog.order} seeCosts={seeCosts} /></Modal>}
   </>;
@@ -264,6 +269,7 @@ function OrderDetails({ order, seeCosts }: { order: Order; seeCosts: boolean }) 
     <InputsTable inputs={order.inputs} />
     {order.expenses.length > 0 && <Table responsive={false} columns={['Despesa', 'Origem', { label: 'Valor', end: true }]}
       rows={order.expenses.map(row => [row.title, row.source === 'INPUT' ? (row.edited ? 'Insumo (editada)' : 'Insumo') : 'Manual', by(row.value, brl(row.value))])} />}
+    {order.revision > 0 && <RevisionHistory orderId={order.id} seeCosts={seeCosts} />}
   </div>;
 }
 

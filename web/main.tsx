@@ -281,7 +281,7 @@ function App() {
     {(page === 'balance' || page === 'statement' || page === 'reconciliation' || page === 'integration') &&
       <Finance key={page} page={page} edit={can('finance:operate')} admin={admin} openStatement={() => navigate('statement')}
         openIntegration={() => navigate('integration')} />}
-    {page === 'production-orders' && <ProductionOrders edit={can('production:operate')} seeCosts={can('stock:view')} />}
+    {page === 'production-orders' && <ProductionOrders edit={can('production:operate')} correct={can('production:correct')} seeCosts={can('stock:view')} />}
     {page === 'printers' && <Printers edit={can('production:operate')} />}
     {page === 'admin' && <Administration onUserChanged={async id => { if (id === identity.id) await signIn(); }} />}
     {page === 'audit' && <Audit />}
