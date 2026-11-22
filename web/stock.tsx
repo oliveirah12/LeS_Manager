@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { ArrowLeftRight, ClipboardList, Download, Eye, FileSpreadsheet, PackageMinus, Plus, SlidersHorizontal } from 'lucide-react';
 import {
-  api, Badge, baseUnit, brl, dateTime, Field, fields, FileField, Filters, Form, Kit, Loading, matches, message, Modal, ModalForm, PageActions,
-  Product, productOptions, quantity, SearchInput, Segmented, Select, StockKit, StockProduct, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
+  api, Badge, baseUnit, brl, by, dateTime, Field, fields, FileField, Filters, Form, Kit, Loading, matches, message, Modal, ModalForm, PageActions,
+  Product, productOptions, quantity, SearchInput, Segmented, Select, sortParam, SortState, StockKit, StockProduct, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
   useData, notify,
 } from './ui';
 
@@ -95,15 +95,15 @@ function Balances({ data, edit, move, configure }: {
       columns={['Produto', { label: 'Saldo', end: true }, { label: 'Custo médio', end: true }, { label: 'Última compra', end: true },
         { label: 'Valor em estoque', end: true }, { label: 'Margem', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
       rows={rows.map(product => [
-        <Title name={product.name} code={product.sku} />,
-        Number(product.quantity) === 0 ? <Badge tone="warn">Sem saldo</Badge> :
+        by(product.name, <Title name={product.name} code={product.sku} />),
+        by(product.quantity, Number(product.quantity) === 0 ? <Badge tone="warn">Sem saldo</Badge> :
           <span><strong>{quantity(product.quantity)}</strong> <span className="muted">{baseUnit(product).symbol}</span>
             {Number(product.reserved) > 0 && <span className="hint" style={{ display: 'block' }}>{quantity(product.reserved!)} reservado</span>}
-            {product.belowMinimum && <span style={{ display: 'block', marginTop: 4 }}><Badge tone="warn">Abaixo do mínimo</Badge></span>}</span>,
-        brl(product.currentCost), <span className="muted">{brl(product.lastPurchaseCost)}</span>,
-        <strong>{brl(product.value)}</strong>,
-        product.margin ? <span>{product.margin.percent.startsWith('-') ? <Badge tone="warn">{quantity(product.margin.percent)}%</Badge> : <strong>{quantity(product.margin.percent)}%</strong>}
-          <span className="hint" style={{ display: 'block' }}>Venda {brl(product.salePrice)}</span></span> : <span className="muted">—</span>,
+            {product.belowMinimum && <span style={{ display: 'block', marginTop: 4 }}><Badge tone="warn">Abaixo do mínimo</Badge></span>}</span>),
+        by(product.currentCost, brl(product.currentCost)), by(product.lastPurchaseCost, <span className="muted">{brl(product.lastPurchaseCost)}</span>),
+        by(product.value, <strong>{brl(product.value)}</strong>),
+        by(product.margin?.percent, product.margin ? <span>{product.margin.percent.startsWith('-') ? <Badge tone="warn">{quantity(product.margin.percent)}%</Badge> : <strong>{quantity(product.margin.percent)}%</strong>}
+          <span className="hint" style={{ display: 'block' }}>Venda {brl(product.salePrice)}</span></span> : <span className="muted">—</span>),
         ...(edit ? [<div className="actions">
           <button type="button" className="btn secondary small" onClick={() => move(product)}><ArrowLeftRight size={14} aria-hidden="true" />Movimentar</button>
           <button type="button" className="btn ghost small" aria-label={'Parâmetros de ' + product.sku} onClick={() => configure(product)}>
@@ -126,10 +126,10 @@ function KitDetails({ kit }: { kit: StockKit }) {
       rows={kit.components.map(item => {
         const unit = baseUnit(item.product).symbol;
         return [
-          <Title name={item.product.name} code={item.product.sku} />,
-          quantity(item.quantity) + ' ' + unit, quantity(item.product.quantity) + ' ' + unit,
-          <span>{quantity(item.yields)} {Number(item.yields) === 1 ? 'kit' : 'kits'}{Number(item.yields) === Number(kit.available) && <> <Badge tone="warn">Limita</Badge></>}</span>,
-          brl(item.product.currentCost), <strong>{brl(item.cost)}</strong>, percent(item.share),
+          by(item.product.name, <Title name={item.product.name} code={item.product.sku} />),
+          by(item.quantity, quantity(item.quantity) + ' ' + unit), by(item.product.quantity, quantity(item.product.quantity) + ' ' + unit),
+          by(item.yields, <span>{quantity(item.yields)} {Number(item.yields) === 1 ? 'kit' : 'kits'}{Number(item.yields) === Number(kit.available) && <> <Badge tone="warn">Limita</Badge></>}</span>),
+          by(item.product.currentCost, brl(item.product.currentCost)), by(item.cost, <strong>{brl(item.cost)}</strong>), by(item.share, percent(item.share)),
         ];
       })}
       footer={<>
@@ -147,11 +147,11 @@ function Kits({ data, edit, out, details }: { data: StockView; edit: boolean; ou
     <Table empty="Nenhum kit ativo."
       columns={['Kit', 'Componentes', { label: 'Custo total', end: true }, { label: 'Disponível', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
       rows={rows.map(kit => [
-        <Title name={kit.name} code={kit.sku} />,
-        <button type="button" className="btn ghost small" aria-label={'Ver componentes de ' + kit.sku} onClick={() => details(kit)}>
-          <Eye size={14} aria-hidden="true" />{kit.components.length} {kit.components.length === 1 ? 'componente' : 'componentes'}</button>,
-        <KitCost kit={kit} />,
-        Number(kit.available) > 0 ? <strong>{quantity(kit.available)}</strong> : <Badge tone="warn">Indisponível</Badge>,
+        by(kit.name, <Title name={kit.name} code={kit.sku} />),
+        by(kit.components.length, <button type="button" className="btn ghost small" aria-label={'Ver componentes de ' + kit.sku} onClick={() => details(kit)}>
+          <Eye size={14} aria-hidden="true" />{kit.components.length} {kit.components.length === 1 ? 'componente' : 'componentes'}</button>),
+        by(kit.totalCost, <KitCost kit={kit} />),
+        by(kit.available, Number(kit.available) > 0 ? <strong>{quantity(kit.available)}</strong> : <Badge tone="warn">Indisponível</Badge>),
         ...(edit ? [<button type="button" className="btn secondary small" disabled={Number(kit.available) <= 0} onClick={() => out(kit)}>
           <PackageMinus size={14} aria-hidden="true" />Dar saída</button>] : []),
       ])} />
@@ -162,7 +162,8 @@ function HistoryTab({ products }: { products: Product[] }) {
   const [filters, setFilters] = useState<HistoryFilters>({});
   const [cursors, setCursors] = useState<string[]>([]);
   const cursor = cursors.at(-1);
-  const query = new URLSearchParams(Object.entries({ ...filters, cursor }).filter((entry): entry is [string, string] => !!entry[1]));
+  const [sort, setSort] = useState<SortState>(null);
+  const query = new URLSearchParams(Object.entries({ ...filters, cursor, sort: sortParam(sort) }).filter((entry): entry is [string, string] => !!entry[1]));
   const history = useData<HistoryPage>('stock/movements' + (query.size ? '?' + query : ''));
   const active = Object.values(filters).filter(Boolean).length;
   return <div className="tab-panel" role="tabpanel">
@@ -174,7 +175,9 @@ function HistoryTab({ products }: { products: Product[] }) {
     </Filters>
     {message(history.error)}
     {history.loading && !history.data ? <Loading label="Carregando movimentações…" /> : history.data && <Table empty="Nenhuma movimentação encontrada."
-      columns={['Produto', 'Movimento', { label: 'Quantidade', end: true }, { label: 'Custo', end: true }, 'Usuário', 'Data', 'Motivo']}
+      sort={sort} onSort={next => { setSort(next); setCursors([]); }}
+      columns={['Produto', { label: 'Movimento', sortKey: 'kind' }, { label: 'Quantidade', end: true, sortKey: 'quantity' }, { label: 'Custo', end: true }, 'Usuário',
+        { label: 'Data', sortKey: 'createdAt' }, { label: 'Motivo', sortKey: 'reason' }]}
       rows={history.data.movements.map(item => [
         <Title name={item.product.name} code={item.product.sku} />,
         labels[item.kind] + (item.kit ? ' · ' + item.kit.sku : ''),
@@ -279,9 +282,9 @@ function Inventory({ data, saved }: { data: StockView; saved: (text: string) => 
       rows={preview.rows.map(row => {
         const unit = baseUnit(row.product).symbol;
         const difference = Number(row.difference);
-        return [<Title name={row.product.name} code={row.product.sku} />, quantity(row.expected) + ' ' + unit, quantity(row.counted) + ' ' + unit,
-          <strong style={{ color: difference > 0 ? 'var(--ok)' : difference < 0 ? 'var(--danger)' : 'var(--muted)' }}>
-            {difference > 0 ? '+ ' : ''}{quantity(row.difference)} {unit}</strong>];
+        return [by(row.product.name, <Title name={row.product.name} code={row.product.sku} />), by(row.expected, quantity(row.expected) + ' ' + unit), by(row.counted, quantity(row.counted) + ' ' + unit),
+          by(row.difference, <strong style={{ color: difference > 0 ? 'var(--ok)' : difference < 0 ? 'var(--danger)' : 'var(--muted)' }}>
+            {difference > 0 ? '+ ' : ''}{quantity(row.difference)} {unit}</strong>)];
       })} />
     <Form key={preview.id} label="Aplicar inventário" extra={<button type="button" className="btn secondary" onClick={() => setPreview(undefined)}>Voltar</button>}
       action={async () => {
@@ -330,13 +333,13 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
     <div className="section-head"><div><h3>Prévia da carga inicial</h3><p>{preview.rows.length} produtos novos serão cadastrados.</p></div></div>
     <Table columns={['Produto', 'Tipo', { label: 'Saldo informado', end: true }, { label: 'Custo total', end: true }, { label: 'Custo por unidade', end: true }, { label: 'Perda', end: true }]}
       rows={preview.rows.map(row => [
-        <Title name={row.name} code={row.sku} />, row.typeName, quantity(row.quantity) + ' ' + row.unit, brl(row.totalCost),
-        row.declaredCost === null ? '—' : brl(row.declaredCost) + ' / ' + row.unit, row.wastePercent ? quantity(row.wastePercent) + '%' : '—',
+        by(row.name, <Title name={row.name} code={row.sku} />), row.typeName, by(row.quantity, quantity(row.quantity) + ' ' + row.unit), by(row.totalCost, brl(row.totalCost)),
+        by(row.declaredCost, row.declaredCost === null ? '—' : brl(row.declaredCost) + ' / ' + row.unit), by(row.wastePercent, row.wastePercent ? quantity(row.wastePercent) + '%' : '—'),
       ])} />
     {preview.recipes.length > 0 && <>
       <h3>Fichas técnicas</h3>
       <Table columns={['Produto', 'Insumo', { label: 'Consumo por unidade', end: true }]}
-        rows={preview.recipes.map(row => [row.product, row.input, quantity(row.quantity) + ' ' + row.unit])} />
+        rows={preview.recipes.map(row => [row.product, row.input, by(row.quantity, quantity(row.quantity) + ' ' + row.unit)])} />
     </>}
     <Form key={preview.id} label="Confirmar carga inicial" extra={<button type="button" className="btn secondary" onClick={() => setPreview(undefined)}>Voltar</button>}
       action={async () => {

@@ -2,10 +2,41 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 // tsx loads the panel's TypeScript directly, without a separate build.
 const { require: load } = require('tsx/cjs/api');
-const { accessible, applyFilters, brl, decimal, displayDate, pageFromHash, suggestedConsumption, yesNo } = load('../web/format.ts', __filename);
+const {
+  accessible, applyFilters, brl, compareDecimal, decimal, displayDate, nextSort, pageFromHash, sortParam, sortRows, suggestedConsumption, yesNo,
+} = load('../web/format.ts', __filename);
 
 // Intl separates the currency symbol with a non-breaking space.
 const plain = text => text.replace(/\s/g, ' ');
+
+test('compares decimal strings exactly, beyond float precision', () => {
+  assert.equal(compareDecimal('9', '10'), -1);
+  assert.equal(compareDecimal('-2', '-10'), 1);
+  assert.equal(compareDecimal('1.50', '1.5'), 0);
+  assert.equal(compareDecimal('0', '-0.000'), 0);
+  assert.equal(compareDecimal('1e-7', '0.000001'), -1);
+  assert.equal(compareDecimal('12345678901234567.000000000001', '12345678901234567.000000000002'), -1);
+});
+
+test('sorts text without accents or case, numbers by value and empty values last', () => {
+  const same = (rows, direction, numeric) => sortRows(rows, row => row, direction, numeric);
+  assert.deepEqual(same(['Zinco', 'água', 'Bronze'], 'asc'), ['água', 'Bronze', 'Zinco']);
+  assert.deepEqual(same(['SKU-10', 'SKU-9'], 'asc'), ['SKU-9', 'SKU-10']);
+  assert.deepEqual(same(['10', null, '9', ''], 'asc', true), ['9', '10', null, '']);
+  assert.deepEqual(same(['10', null, '9'], 'desc', true), ['10', '9', null]);
+  const ties = [{ id: 1, value: 'a' }, { id: 2, value: 'A' }];
+  assert.deepEqual(sortRows(ties, row => row.value, 'desc').map(row => row.id), [1, 2]);
+});
+
+test('cycles a column through ascending, descending and the default order', () => {
+  const asc = nextSort(null, 'name');
+  assert.deepEqual(asc, { key: 'name', direction: 'asc' });
+  assert.deepEqual(nextSort(asc, 'name'), { key: 'name', direction: 'desc' });
+  assert.equal(nextSort({ key: 'name', direction: 'desc' }, 'name'), null);
+  assert.deepEqual(nextSort(asc, 'sku'), { key: 'sku', direction: 'asc' });
+  assert.equal(sortParam({ key: 'name', direction: 'desc' }), 'name:desc');
+  assert.equal(sortParam(null), undefined);
+});
 
 test('formats exact decimals in pt-BR without losing digits', () => {
   assert.equal(decimal('1234567.5'), '1.234.567,5');

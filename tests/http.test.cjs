@@ -310,6 +310,17 @@ test('API REST com PostgreSQL', {
     const future = expectStatus(await admin('/stock/movements?' + new URLSearchParams({ productId: product.id, from: tomorrow })), 200);
     assert.equal(future.movements.length, 0);
     expectStatus(await admin('/stock/movements?kind=INVALIDO'), 400);
+    const sortedOuts = async sort => expectStatus(await admin('/stock/movements?' + new URLSearchParams({ productId: product.id, kind: 'OUT', sort })), 200).movements.map(row => row.quantity);
+    assert.deepEqual(await sortedOuts('quantity:asc'), ['-500', '-250']);
+    assert.deepEqual(await sortedOuts('quantity:desc'), ['-250', '-500']);
+    expectStatus(await admin('/stock/movements?sort=unitCost:asc'), 400);
+    expectStatus(await admin('/audit?sort=actorName:asc'), 400);
+    expectStatus(await admin('/audit?sort=action:asc'), 200);
+    const orderPage = expectStatus(await admin('/production/orders?page=1&sort=printer:asc'), 200);
+    assert.equal(orderPage.page, 1);
+    assert.equal(typeof orderPage.total, 'number');
+    expectStatus(await admin('/production/orders?sort=notes:asc'), 400);
+    expectStatus(await admin('/production/orders?page=0'), 400);
 
     const precise = await createProduct('PRECISAO', gram.id);
     expectStatus(await movement(precise.id, gram.id, 'PURCHASE', '123456789012345678.123456789012', '1'), 201);

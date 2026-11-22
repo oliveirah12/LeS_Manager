@@ -1,17 +1,19 @@
 import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Req, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { MovementKind } from '@prisma/client';
+import { MovementKind, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
 import { Audit } from '../audit/recorder';
 import { CatalogService, stockSettingsFields } from '../catalog/catalog';
-import { Database, dayRange, idField, parse } from '../shared';
+import { Database, dayRange, idField, parse, sortField } from '../shared';
 import { countFields, initialFields, kitOutFields, movementFields, StockService } from './stock';
 import { WorkbookKind, WorkbookLists, workbookRows, workbookTemplate } from './workbooks';
 
 const pageSize = 100;
+// Only required columns of the movement: a cursor cannot continue past a NULL in the sorted column.
+const historySort = ['kind', 'quantity', 'createdAt', 'reason'] as const;
 const historyFields = z.object({
-  cursor: idField.optional(), productId: idField.optional(),
+  cursor: idField.optional(), productId: idField.optional(), sort: sortField(historySort).optional(),
   kind: z.enum(MovementKind).optional(), from: z.iso.date().optional(), to: z.iso.date().optional(),
 });
 
@@ -43,14 +45,15 @@ export class StockController {
   @Require('stock:view')
   @Get('movements')
   async movements(@Query() query: unknown) {
-    const { cursor, productId, kind, from, to } = parse(historyFields, query);
+    const { cursor, sort, productId, kind, from, to } = parse(historyFields, query);
+    const { key, direction } = sort ?? { key: 'createdAt' as const, direction: 'desc' as const };
     const movements = await this.db.movement.findMany({
       where: { productId, kind, createdAt: dayRange(from, to) },
       include: {
         product: { select: { sku: true, name: true, unit: { include: { family: { include: { units: { where: { isBase: true } } } } } } } },
         user: { select: { name: true } }, kit: { select: { sku: true } },
       },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ [key]: direction } as Prisma.MovementOrderByWithRelationInput, { id: direction }],
       take: pageSize + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });

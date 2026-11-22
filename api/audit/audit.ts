@@ -2,10 +2,13 @@ import { Controller, Get, Inject, Query } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { Require } from '../access/access';
-import { Database, dayRange, idField, parse } from '../shared';
+import { Database, dayRange, idField, parse, sortField } from '../shared';
 
+// Only required columns: a cursor cannot continue past a NULL in the sorted column.
+const sortable = ['action', 'createdAt'] as const;
 const filterFields = z.object({
   cursor: idField.optional(),
+  sort: sortField(sortable).optional(),
   userId: idField.optional(),
   action: z.string().trim().min(1).max(160).optional(),
   from: z.iso.date().optional(),
@@ -26,10 +29,11 @@ export class AuditController {
   @Require('admin')
   @Get()
   async list(@Query() query: unknown) {
-    const { cursor, userId, action, from, to, result } = parse(filterFields, query);
+    const { cursor, sort, userId, action, from, to, result } = parse(filterFields, query);
+    const { key, direction } = sort ?? { key: 'createdAt' as const, direction: 'desc' as const };
     const events = await this.db.auditEvent.findMany({
       where: { actorId: userId, action, createdAt: dayRange(from, to), ...(result ? results[result] : {}) },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [key === 'action' ? { action: direction } : { createdAt: direction }, { id: direction }],
       take: 51,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });

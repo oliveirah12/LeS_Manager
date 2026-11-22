@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { CheckCircle2, Eye, Play, Plus, Trash2, X } from 'lucide-react';
 import { suggestedConsumption } from './format';
 import {
-  api, Badge, brl, dateTime, Field, Form, Loading, message, Modal, ModalForm, notify, PageActions, quantity, Select, Table, Title, useClosePanel, useData,
+  api, Badge, brl, by, dateTime, Field, Form, Loading, message, Modal, ModalForm, notify, PageActions, quantity, Select, sortParam, SortState, Table, Title, useClosePanel, useData,
 } from './ui';
 
 type Status = 'PLANNED' | 'PRINTING' | 'DONE' | 'CANCELED';
@@ -24,7 +24,7 @@ type Budget = {
   machineCost: string; materialCost: string; totalCost: string; partialCost: boolean; missingCost: string[];
   items: { productId: string; totalCost: string; unitCost: string }[];
 };
-type OrdersView = { orders: Order[]; printers: { id: string; name: string }[]; products: { id: string; sku: string; name: string; symbol: string }[] };
+type OrdersView = { orders: Order[]; page: number; pageSize: number; total: number; printers: { id: string; name: string }[]; products: { id: string; sku: string; name: string; symbol: string }[] };
 type PreviewItem = { productId: string; sku: string; name: string; symbol: string; good: string; lost: string; unitCost: string | null; fullUnitCost: string; lossCost: string };
 type Preview = { printMinutes: number; machineCost: string; totalCost: string; lossCost: string; partialCost: boolean; items: PreviewItem[] };
 type Dialog = { kind: 'new' } | { kind: 'start' | 'finish' | 'cancel' | 'details'; order: Order };
@@ -37,18 +37,39 @@ const iso = (value: FormDataEntryValue | null) => new Date(String(value)).toISOS
 const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60 ? (minutes % 60) + ' min' : minutes >= 60 ? '' : '0 min');
 
 export function ProductionOrders({ edit }: { edit: boolean }) {
-  const { data, error, loading, reload } = useData<OrdersView>('production/orders');
+  const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<SortState>(null);
+  const query = new URLSearchParams({ page: String(page), ...(sort ? { sort: sortParam(sort)! } : {}) });
+  const { data, error, loading, reload } = useData<OrdersView>('production/orders?' + query);
   const [dialog, setDialog] = useState<Dialog>();
   async function done(text: string) {
     notify(text);
     await reload();
   }
+  /** A new order is the highest number, so the default view's first page is where it shows up. */
+  async function created(text: string) {
+    if (page === 1 && !sort) return done(text);
+    notify(text);
+    setDialog(undefined);
+    setPage(1);
+    setSort(null);
+  }
+  const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   const open = (kind: 'start' | 'finish' | 'cancel' | 'details', order: Order) => setDialog({ kind, order });
   return <>
     {edit && <PageActions><button type="button" className="btn" onClick={() => setDialog({ kind: 'new' })}><Plus size={16} aria-hidden="true" />Nova ordem</button></PageActions>}
     {message(error)}
     {!data ? loading && <Loading label="Carregando ordens…" /> : <Table empty="Nenhuma ordem de produção."
-      columns={['Ordem', 'Produtos', 'Impressora', 'Situação', 'Previsão', { label: 'Custo', end: true }, { label: 'Ações', actions: true }]}
+      sort={sort} onSort={next => { setSort(next); setPage(1); }}
+      footer={pages > 1 && <>
+        <span>Página {data.page} de {pages} · {data.total} ordens</span>
+        <div className="actions">
+          <button type="button" className="btn secondary small" disabled={page <= 1} onClick={() => setPage(page - 1)}>Anterior</button>
+          <button type="button" className="btn secondary small" disabled={page >= pages} onClick={() => setPage(page + 1)}>Próxima</button>
+        </div>
+      </>}
+      columns={[{ label: 'Ordem', sortKey: 'number' }, 'Produtos', { label: 'Impressora', sortKey: 'printer' }, { label: 'Situação', sortKey: 'status' }, 'Previsão',
+        { label: 'Custo', end: true }, { label: 'Ações', actions: true }]}
       rows={data.orders.map(order => [
         <span className="cell-title">#{order.number}</span>,
         <span>{order.items.map(item => quantity(item.planned) + ' ' + item.symbol + ' ' + item.sku).join(' · ')}</span>,
@@ -65,7 +86,7 @@ export function ProductionOrders({ edit }: { edit: boolean }) {
         </div>,
       ])} />}
 
-    {data && dialog?.kind === 'new' && <Modal wide title="Nova ordem de produção" close={() => setDialog(undefined)}><NewOrder view={data} done={done} /></Modal>}
+    {data && dialog?.kind === 'new' && <Modal wide title="Nova ordem de produção" close={() => setDialog(undefined)}><NewOrder view={data} done={created} /></Modal>}
     {dialog?.kind === 'start' && <ModalForm title={'Iniciar ordem #' + dialog.order.number} subtitle="Os insumos ficam reservados até a conclusão." label="Iniciar impressão"
       close={() => setDialog(undefined)} action={async values => {
         await api('production/orders/' + dialog.order.id + '/start', { startedAt: iso(values.get('startedAt')) });
@@ -97,8 +118,8 @@ export function ProductionOrders({ edit }: { edit: boolean }) {
 function InputsTable({ inputs }: { inputs: OrderInput[] }) {
   return <Table responsive={false} columns={['Insumo', { label: 'Previsto', end: true }, ...(inputs.some(input => input.used !== null) ? [{ label: 'Real', end: true }] : [])]}
     rows={inputs.map(input => [
-      <Title name={input.name} code={input.sku} />, quantity(input.planned) + ' ' + input.symbol,
-      ...(inputs.some(row => row.used !== null) ? [input.used === null ? '—' : quantity(input.used) + ' ' + input.symbol] : []),
+      by(input.name, <Title name={input.name} code={input.sku} />), by(input.planned, quantity(input.planned) + ' ' + input.symbol),
+      ...(inputs.some(row => row.used !== null) ? [by(input.used, input.used === null ? '—' : quantity(input.used) + ' ' + input.symbol)] : []),
     ])} />;
 }
 
@@ -219,8 +240,8 @@ function FinishOrder({ order, done }: { order: Order; done: (text: string) => Pr
         : <div className="info">As peças boas mantêm o custo normal. A perda de <strong>{brl(review.preview.lossCost)}</strong> fica registrada na ordem.</div>)}
       <Table columns={['Produto', { label: 'Boas', end: true }, { label: 'Perdidas', end: true }, { label: 'Custo por peça', end: true }, { label: 'Valor da perda', end: true }]}
         rows={review.preview.items.map(item => [
-          <Title name={item.name} code={item.sku} />, quantity(item.good) + ' ' + item.symbol, quantity(item.lost) + ' ' + item.symbol,
-          <strong>{brl(item.unitCost)}</strong>, brl(item.lossCost),
+          by(item.name, <Title name={item.name} code={item.sku} />), by(item.good, quantity(item.good) + ' ' + item.symbol), by(item.lost, quantity(item.lost) + ' ' + item.symbol),
+          by(item.unitCost, <strong>{brl(item.unitCost)}</strong>), by(item.lossCost, brl(item.lossCost)),
         ])}
         footer={<><span>Máquina e energia: {brl(review.preview.machineCost)} · {duration(review.preview.printMinutes)}</span>
           <span>Custo total: <strong>{brl(review.preview.totalCost)}</strong></span></>} />
@@ -258,9 +279,9 @@ function OrderDetails({ order }: { order: Order }) {
       rows={order.items.map(item => {
         const estimate = order.budget?.items.find(row => row.productId === item.productId);
         return [
-          <Title name={item.name} code={item.sku} />, quantity(item.planned) + ' ' + item.symbol,
-          ...(finished ? [quantity(item.good ?? '0'), quantity(item.lost ?? '0'), brl(item.unitCost)] : []),
-          ...(order.budget ? ['≈ ' + brl(estimate?.totalCost), '≈ ' + brl(estimate?.unitCost)] : []),
+          by(item.name, <Title name={item.name} code={item.sku} />), by(item.planned, quantity(item.planned) + ' ' + item.symbol),
+          ...(finished ? [by(item.good ?? '0', quantity(item.good ?? '0')), by(item.lost ?? '0', quantity(item.lost ?? '0')), by(item.unitCost, brl(item.unitCost))] : []),
+          ...(order.budget ? [by(estimate?.totalCost, '≈ ' + brl(estimate?.totalCost)), by(estimate?.unitCost, '≈ ' + brl(estimate?.unitCost))] : []),
         ];
       })} />
     <InputsTable inputs={order.inputs} />

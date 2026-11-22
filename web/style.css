@@ -257,6 +257,11 @@ tbody tr:first-child td { border-top: 0; }
 tbody tr { transition: background-color var(--fast); }
 tbody tr:hover { background: color-mix(in srgb, var(--hover) 55%, transparent); }
 th.end, td.end { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sort-button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; margin: -2px -4px; border: 0; border-radius: 4px; background: none; color: inherit; font: inherit; white-space: nowrap; }
+.sort-button:hover { color: var(--text); background: var(--hover); }
+.sort-button svg { opacity: .45; flex: none; }
+th[aria-sort='ascending'] .sort-button, th[aria-sort='descending'] .sort-button { color: var(--text); }
+th[aria-sort='ascending'] svg, th[aria-sort='descending'] svg { opacity: 1; color: var(--brand); }
 td .cell-title { display: block; font-weight: 600; }
 td .cell-title.with-badge { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 td .cell-sub { display: block; font-size: .8rem; color: var(--muted); }
@@ -458,7 +463,12 @@ dialog.panel.closing::backdrop { animation: fade-out var(--fast) ease-in both; }
   .table-card.responsive { background: transparent; border: 0; border-radius: 0; overflow: visible; }
   .responsive .table-scroll { overflow: visible; }
   .responsive table, .responsive tbody, .responsive tr, .responsive td { display: block; }
-  .responsive thead { display: none; }
+  /* On phones the header becomes a scrolling row with only the sort buttons. */
+  .responsive thead { display: block; margin-bottom: 8px; }
+  .responsive thead tr { display: flex; gap: 6px; padding: 0 0 2px; overflow-x: auto; background: transparent; border: 0; border-radius: 0; }
+  .responsive th { display: none; padding: 0; background: transparent; border: 0; }
+  .responsive th[aria-sort] { display: block; flex: none; }
+  .responsive .sort-button { margin: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
   .responsive tbody { display: flex; flex-direction: column; gap: 10px; }
   .responsive tr { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
   .responsive tbody tr:hover { background: var(--surface); }

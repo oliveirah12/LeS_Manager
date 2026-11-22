@@ -1,12 +1,12 @@
 import {
-  BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Post, Req,
+  BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Post, Query, Req,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
 import { Audit, auditChange, auditContext } from '../audit/recorder';
 import { productInclude } from '../catalog/catalog';
-import { Database, idField, nonnegative, parse, positive, serial, storedDecimal } from '../shared';
+import { Database, idField, nonnegative, parse, positive, serial, sortField, storedDecimal } from '../shared';
 import { printerHourCost, productionBudget, productionCosting, sumValues } from '../stock/cost';
 import { StockService } from '../stock/stock';
 
@@ -102,6 +102,12 @@ function closing(order: LoadedOrder, energyRate: Prisma.Decimal, data: Finish) {
   return { printMinutes, machineCost, used, costing: productionCosting({ items, rows: costingRows(order), used, machineCost, absorbLoss: data.absorbLoss }) };
 }
 
+const orderPageSize = 50;
+const orderListFields = z.object({
+  page: z.coerce.number().int().min(1).max(1_000_000).default(1),
+  sort: sortField(['number', 'printer', 'status'] as const).optional(),
+});
+
 @Injectable()
 export class ProductionOrderService {
   constructor(@Inject(Database) private db: Database, @Inject(StockService) private stock: StockService) {}
@@ -117,10 +123,14 @@ export class ProductionOrderService {
     return tx.productionSettings.findUniqueOrThrow({ where: { id: 'default' } }).then(settings => settings.energyRate);
   }
 
-  async overview() {
-    const [energyRate, orders, printers, products] = await Promise.all([
+  async overview({ page, sort }: z.infer<typeof orderListFields>) {
+    const orderBy: Prisma.ProductionOrderOrderByWithRelationInput[] = !sort ? [{ number: 'desc' }]
+      : sort.key === 'number' ? [{ number: sort.direction }]
+      : [sort.key === 'printer' ? { printer: { name: sort.direction } } : { status: sort.direction }, { number: 'desc' }];
+    const [energyRate, orders, total, printers, products] = await Promise.all([
       this.energyRate(this.db),
-      this.db.productionOrder.findMany({ include: orderInclude, orderBy: { number: 'desc' }, take: 200 }),
+      this.db.productionOrder.findMany({ include: orderInclude, orderBy, skip: (page - 1) * orderPageSize, take: orderPageSize }),
+      this.db.productionOrder.count(),
       this.db.printer.findMany({ where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
       this.db.product.findMany({
         where: { active: true, type: { isManufactured: true }, recipe: { some: {} } },
@@ -128,7 +138,7 @@ export class ProductionOrderService {
       }),
     ]);
     return {
-      orders: orders.map(order => ({ ...present(order), budget: orderBudget(order, energyRate) })), printers,
+      orders: orders.map(order => ({ ...present(order), budget: orderBudget(order, energyRate) })), page, pageSize: orderPageSize, total, printers,
       products: products.map(product => ({ id: product.id, sku: product.sku, name: product.name, symbol: symbolOf(product) })),
     };
   }
@@ -298,7 +308,7 @@ export class ProductionOrderController {
 
   @Require('production:view')
   @Get()
-  overview() { return this.orders.overview(); }
+  overview(@Query() query: unknown) { return this.orders.overview(parse(orderListFields, query)); }
 
   @Require('production:operate')
   @Audit('Criar ordem de produção')

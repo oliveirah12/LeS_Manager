@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Copy, KeyRound, Pencil, Plus, UserRound } from 'lucide-react';
 import {
-  api, Badge, dateTime, Field, fields, Form, Identity, Loading, message, Modal, ModalForm, notify, PageActions, PasswordField, Section, Segmented, Select, Table,
+  api, Badge, by, dateTime, Field, fields, Form, Identity, Loading, message, Modal, ModalForm, notify, PageActions, PasswordField, Section, Segmented, Select, Table,
   Tabs, Title, useData,
 } from './ui';
 
@@ -101,8 +101,9 @@ export function Administration({ onUserChanged }: { onUserChanged: (id: string) 
       {users.loading && !users.data ? <Loading label="Carregando usuários…" /> : users.data && <Table empty="Nenhum usuário."
         columns={['Usuário', 'Perfil', 'Situação', { label: 'Ações', actions: true }]}
         rows={users.data.map(item => [
-          <Title name={item.name} code={item.email} mono={false} />, profileName(item.profileId),
-          !item.active ? <Badge>Inativo</Badge> : item.pending ? <Badge tone="warn">Aguardando ativação</Badge> : <Badge tone="ok"><span className="dot" />Ativo</Badge>,
+          by(item.name, <Title name={item.name} code={item.email} mono={false} />), profileName(item.profileId),
+          by(!item.active ? 'Inativo' : item.pending ? 'Aguardando ativação' : 'Ativo',
+            !item.active ? <Badge>Inativo</Badge> : item.pending ? <Badge tone="warn">Aguardando ativação</Badge> : <Badge tone="ok"><span className="dot" />Ativo</Badge>),
           <div className="actions">
             <button type="button" className="btn secondary small" onClick={() => setUser(item)}><Pencil size={14} aria-hidden="true" />Editar</button>
             {item.active && item.pending && <button type="button" className="btn ghost small" onClick={() => setRenew(item)}><KeyRound size={14} aria-hidden="true" />Novo código</button>}
@@ -114,7 +115,7 @@ export function Administration({ onUserChanged }: { onUserChanged: (id: string) 
       {profiles.loading && !profiles.data ? <Loading label="Carregando perfis…" /> : profiles.data && <Table empty="Nenhum perfil."
         columns={['Perfil', 'Permissões', { label: 'Ações', actions: true }]}
         rows={profiles.data.map(item => [
-          <span className="cell-title">{item.name}</span>, <div className="actions">{permissionSummary(item)}</div>,
+          by(item.name, <span className="cell-title">{item.name}</span>), <div className="actions">{permissionSummary(item)}</div>,
           item.permissions.includes('admin') ? <span className="muted">Reservado</span> :
             <button type="button" className="btn secondary small" onClick={() => setProfile(item)}><Pencil size={14} aria-hidden="true" />Editar</button>,
         ])} />}

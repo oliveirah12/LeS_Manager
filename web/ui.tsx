@@ -1,6 +1,7 @@
 import { createContext, FormEvent, ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CheckCircle2, Eye, EyeOff, Inbox, Search, SlidersHorizontal, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, CheckCircle2, ChevronsUpDown, Eye, EyeOff, Inbox, Search, SlidersHorizontal, X } from 'lucide-react';
+import { nextSort, sortRows, SortState, SortValue } from './format';
 
 /* ---------- Data ---------- */
 
@@ -63,7 +64,8 @@ export function useData<T>(path: string | null) {
 
 // The screens keep importing these from ui; the pure logic lives in format so the tests can load it.
 export { accessible, applyFilters, brl, decimal, displayDate, quantity, yesNo, yesNoOptions } from './format';
-export type { TableFilter } from './format';
+export { sortParam } from './format';
+export type { SortState, TableFilter } from './format';
 export const dateTime = (value: string) => new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
 export const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 export function relativeTime(value: string) {
@@ -335,22 +337,51 @@ export function matches(query: string, ...texts: (string | null | undefined)[]) 
 
 /* ---------- Tables ---------- */
 
-export type Column = string | { label: string; end?: boolean; hideLabel?: boolean; actions?: boolean };
+export type Column = string | { label: string; end?: boolean; hideLabel?: boolean; actions?: boolean; sortKey?: string };
 
-/** A table on wide screens and a list of cards on phones. The first column is each card's title. */
-export function Table({ columns, rows, empty = 'Nenhum registro.', footer, responsive = true }: {
-  columns: Column[]; rows: ReactNode[][]; empty?: string; footer?: ReactNode; responsive?: boolean;
+/** A drawn cell paired with the raw value it sorts by, such as an exact decimal behind "R$ 1.200,00". */
+export class SortCell { constructor(readonly value: SortValue, readonly content: ReactNode) {} }
+export const by = (value: SortValue, content: ReactNode = value) => new SortCell(value, content);
+const rawValue = (cell: unknown): SortValue => cell instanceof SortCell ? cell.value : typeof cell === 'string' || typeof cell === 'number' ? cell : null;
+
+/**
+ * A table on wide screens and a list of cards on phones. The first column is each card's title.
+ * Without onSort it sorts the rows it holds: a column qualifies when its cells carry a raw value, and numeric
+ * (end) columns must use by(), since their text is formatted. With onSort the server sorts the columns with a sortKey.
+ */
+export function Table({ columns, rows, empty = 'Nenhum registro.', footer, responsive = true, sort, onSort }: {
+  columns: Column[]; rows: (ReactNode | SortCell)[][]; empty?: string; footer?: ReactNode; responsive?: boolean;
+  sort?: SortState; onSort?: (sort: SortState) => void;
 }) {
-  const specs = columns.map(column => typeof column === 'string' ? { label: column } : column);
+  const [localSort, setLocalSort] = useState<SortState>(null);
+  const specs = columns.map(column => typeof column === 'string' ? { label: column } as Exclude<Column, string> : column);
+  const active = onSort ? sort ?? null : localSort;
+  const sortKey = (column: Exclude<Column, string>, col: number) => {
+    if (onSort) return column.sortKey;
+    const sortable = !column.actions && rows.every(row => row[col] instanceof SortCell || (!column.end && rawValue(row[col]) !== null));
+    return sortable ? column.label : undefined;
+  };
   if (!rows.length) return <div className="table-card"><Empty>{empty}</Empty></div>;
+  const sortedCol = !onSort && active ? specs.findIndex((column, col) => sortKey(column, col) === active.key) : -1;
+  const indexed = rows.map((row, index) => ({ row, index }));
+  // Each row keeps its original index as key, so React moves the row instead of rewriting it.
+  const ordered = sortedCol < 0 ? indexed : sortRows(indexed, item => rawValue(item.row[sortedCol]), active!.direction, specs[sortedCol].end);
   return <div className={'table-card' + (responsive ? ' responsive' : '')}>
     <div className="table-scroll"><table>
-      <thead><tr>{specs.map(column => <th key={column.label} className={column.end ? 'end' : undefined}>
-        {column.actions ? <span className="sr-only">{column.label}</span> : column.label}</th>)}</tr></thead>
-      <tbody>{rows.map((row, index) => <tr key={index}>{row.map((cell, col) => {
+      <thead><tr>{specs.map((column, col) => {
+        const key = sortKey(column, col);
+        const direction = key && active?.key === key ? active.direction : undefined;
+        const Icon = direction === 'asc' ? ArrowUp : direction === 'desc' ? ArrowDown : ChevronsUpDown;
+        return <th key={column.label} className={column.end ? 'end' : undefined} scope="col"
+          aria-sort={key ? (direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : 'none') : undefined}>
+          {key ? <button type="button" className="sort-button" onClick={() => (onSort ?? setLocalSort)(nextSort(active, key))}>
+            {column.label}<Icon size={13} aria-hidden="true" /></button>
+            : column.actions ? <span className="sr-only">{column.label}</span> : column.label}</th>;
+      })}</tr></thead>
+      <tbody>{ordered.map(({ row, index }) => <tr key={index}>{row.map((cell, col) => {
         const column = specs[col];
         const className = [column?.end && 'end', (column?.hideLabel || column?.actions) && 'no-label', column?.actions && 'actions-cell'].filter(Boolean).join(' ');
-        return <td key={col} data-label={column?.label} className={className || undefined}>{cell}</td>;
+        return <td key={col} data-label={column?.label} className={className || undefined}>{cell instanceof SortCell ? cell.content : cell}</td>;
       })}</tr>)}</tbody>
     </table></div>
     {footer && <div className="table-footer">{footer}</div>}

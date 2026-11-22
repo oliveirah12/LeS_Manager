@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { CalendarRange, CheckCircle2, ChevronRight, PlugZap, RefreshCw, Settings } from 'lucide-react';
 import {
-  api, Badge, brl, dateTime, displayDate, Empty, Field, FileField, fields, Loading, matches, message, ModalForm, notify, PageActions, relativeTime,
+  api, Badge, brl, by, dateTime, displayDate, Empty, Field, FileField, fields, Loading, matches, message, ModalForm, notify, PageActions, relativeTime,
   SearchInput, Segmented, Select, Table, today, useData,
 } from './ui';
 
@@ -213,10 +213,12 @@ function Statement({ provider, reconciling, edit }: { provider: Provider; reconc
     {loading && !data ? <Loading label="Carregando lançamentos…" /> : data && <Table empty={transactions.length ? 'Nenhum lançamento com esses filtros.' : 'Nenhum lançamento importado para o período.'}
       columns={['Descrição', 'Data', { label: 'Valor', end: true }, ...(reconciling ? ['Conciliação', ...(edit ? [{ label: 'Ações', actions: true }] : [])] : [])]}
       rows={rows.map(row => [
-        description(row), displayDate(row.date), amount(row),
+        by(row.title || row.type, description(row)), by(row.date, displayDate(row.date)),
+        by((credit(row) ? '' : '-') + row.amount.replace(/^-/, ''), amount(row)),
         ...(reconciling ? [
-          row.reconciliation ? <Badge tone="ok"><CheckCircle2 size={12} aria-hidden="true" />{row.reconciliation.reference || 'Conciliado'}</Badge>
-            : row.key ? <Badge tone="warn">Pendente</Badge> : <Badge>Sem identificador</Badge>,
+          by(row.reconciliation ? row.reconciliation.reference || 'Conciliado' : row.key ? 'Pendente' : 'Sem identificador',
+            row.reconciliation ? <Badge tone="ok"><CheckCircle2 size={12} aria-hidden="true" />{row.reconciliation.reference || 'Conciliado'}</Badge>
+              : row.key ? <Badge tone="warn">Pendente</Badge> : <Badge>Sem identificador</Badge>),
           ...(edit ? [row.key ? <button type="button" className="btn secondary small" onClick={() => setTransaction(row)}>
             {row.reconciliation ? 'Editar' : 'Conciliar'}</button> : <span />] : []),
         ] : []),

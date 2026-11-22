@@ -1,4 +1,4 @@
-import { Badge, brl, dateTime, Loading, message, Modal, quantity, Table, Title, useData } from './ui';
+import { Badge, brl, by, dateTime, Loading, message, Modal, quantity, Table, Title, useData } from './ui';
 
 type Named = { sku: string; name: string; active: boolean; quantity: string };
 type ProductDetails = {
@@ -70,27 +70,28 @@ function ProductPanel({ id }: { id: string }) {
     {recipe && recipe.inputs.length > 0 && <>
       <h3>Ficha técnica · perda de {quantity(recipe.wastePercent)}%</h3>
       <Table responsive={false} columns={['Insumo', { label: 'Por peça', end: true }]}
-        rows={recipe.inputs.map(row => [<Title name={row.name} code={row.sku} />, quantity(row.quantity) + ' ' + row.symbol])} />
+        rows={recipe.inputs.map(row => [by(row.name, <Title name={row.name} code={row.sku} />), by(row.quantity, quantity(row.quantity) + ' ' + row.symbol)])} />
     </>}
     {recipe && recipe.usedIn.length > 0 && <>
       <h3>Produtos que consomem</h3>
       <Table responsive={false} columns={['Produto', { label: 'Por peça', end: true }]}
-        rows={recipe.usedIn.map(row => [<Title name={row.name} code={row.sku} />, amount(row.quantity)])} />
+        rows={recipe.usedIn.map(row => [by(row.name, <Title name={row.name} code={row.sku} />), by(row.quantity, amount(row.quantity))])} />
     </>}
     {data.kits.length > 0 && <>
       <h3>Kits que usam</h3>
       <Table responsive={false} columns={['Kit', { label: 'Quantidade', end: true }]}
-        rows={data.kits.map(row => [<Title name={row.name} code={row.sku} />, amount(row.quantity)])} />
+        rows={data.kits.map(row => [by(row.name, <Title name={row.name} code={row.sku} />), by(row.quantity, amount(row.quantity))])} />
     </>}
     {!!data.orders?.length && <>
       <h3>Ordens em andamento</h3>
       <Table responsive={false} columns={['Ordem', 'Situação', { label: 'Previsto', end: true }]}
-        rows={data.orders.map(row => ['#' + row.number, <Badge tone={row.status === 'PRINTING' ? 'brand' : undefined}>{orderNames[row.status]}</Badge>, amount(row.planned)])} />
+        rows={data.orders.map(row => [by(row.number, '#' + row.number),
+          by(orderNames[row.status], <Badge tone={row.status === 'PRINTING' ? 'brand' : undefined}>{orderNames[row.status]}</Badge>), by(row.planned, amount(row.planned))])} />
     </>}
     {!!stock?.purchases.length && <>
       <h3>Últimas compras</h3>
       <Table responsive={false} columns={['Data', { label: 'Quantidade', end: true }, { label: 'Custo unitário', end: true }]}
-        rows={stock.purchases.map(row => [dateTime(row.createdAt), amount(row.quantity), brl(row.unitCost)])} />
+        rows={stock.purchases.map(row => [by(Date.parse(row.createdAt), dateTime(row.createdAt)), by(row.quantity, amount(row.quantity)), by(row.unitCost, brl(row.unitCost))])} />
     </>}
   </div>;
 }
@@ -113,8 +114,8 @@ function KitPanel({ id }: { id: string }) {
     <Table responsive={false} columns={['Componente', { label: 'Quantidade', end: true },
       ...(stock ? [{ label: 'Custo', end: true }, { label: 'Rende', end: true }] : [])]}
       rows={data.components.map(row => [
-        <Title name={row.name} code={row.sku} />, quantity(row.quantity) + ' ' + row.symbol,
-        ...(stock ? [brl(row.cost), quantity(row.yields ?? '0')] : []),
+        by(row.name, <Title name={row.name} code={row.sku} />), by(row.quantity, quantity(row.quantity) + ' ' + row.symbol),
+        ...(stock ? [by(row.cost, brl(row.cost)), by(row.yields ?? '0', quantity(row.yields ?? '0'))] : []),
       ])} />
   </div>;
 }

@@ -4,7 +4,7 @@ import { CatalogDetails, DetailTarget } from './catalog-details';
 import { RecipeEditor } from './recipe';
 import { RegistrationData, referenceKinds } from './registrations';
 import {
-  api, applyFilters, Badge, baseUnit, brl, Field, fields, Form, Kit, Loading, matches, message, Modal, ModalForm, notify, PageActions, Product, productOptions,
+  api, applyFilters, Badge, baseUnit, brl, by, Field, fields, Form, Kit, Loading, matches, message, Modal, ModalForm, notify, PageActions, Product, productOptions,
   quantity, SearchInput, Segmented, Select, StockKit, StockView, Table, TableFilter, TableFilters, Title, unitOptions, useClosePanel, useData, yesNo, yesNoOptions,
 } from './ui';
 
@@ -61,8 +61,8 @@ export function Catalog({ page, edit, seeStock = false }: { page: 'products' | '
   }
   const visible = <T extends { active: boolean; sku: string; name: string }>(rows: T[]) => rows.filter(row =>
     matches(query, row.sku, row.name) && (situation === 'all' || row.active === (situation === 'active')));
-  const situationBadge = (row: { active: boolean }) => row.active
-    ? <Badge tone="ok"><span className="dot" />Ativo</Badge> : <Badge>Inativo</Badge>;
+  const situationBadge = (row: { active: boolean }) => by(row.active ? 'Ativo' : 'Inativo', row.active
+    ? <Badge tone="ok"><span className="dot" />Ativo</Badge> : <Badge>Inativo</Badge>);
   const rowActions = (kind: Status['kind'], row: { id: string; sku: string; active: boolean; deleteBlock?: string | null }, open: () => void, extra?: ReactNode) => <div className="actions">
     <button type="button" className="btn secondary small" onClick={open}><Pencil size={14} aria-hidden="true" />Editar</button>
     {extra}
@@ -93,29 +93,32 @@ export function Catalog({ page, edit, seeStock = false }: { page: 'products' | '
           const balance = balances?.find(item => item.id === row.id);
           const symbol = baseUnit(row).symbol;
           return [
-            <Title name={row.name} code={row.sku} />, data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
-            ...(balances ? [quantity(balance?.quantity ?? '0') + ' ' + symbol, quantity(balance?.reserved ?? '0') + ' ' + symbol, brl(balance?.currentCost)] : []),
+            by(row.name, <Title name={row.name} code={row.sku} />), data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
+            ...(balances ? [by(balance?.quantity ?? '0', quantity(balance?.quantity ?? '0') + ' ' + symbol), by(balance?.reserved ?? '0', quantity(balance?.reserved ?? '0') + ' ' + symbol),
+              by(balance?.currentCost, brl(balance?.currentCost))] : []),
             situationBadge(row), detailsButton('products', row),
           ];
         })} />}
       {page === 'products' && <Table empty="Nenhum produto encontrado."
         columns={['Produto', 'Tipo', ...(edit ? ['Unidade', 'Classificação'] : []), 'Situação', { label: 'Ações', actions: true }]}
-        rows={applyFilters(visible(data.products), productFilters(data), selected).map(row => [
-          <Title name={row.name} code={row.sku} />, data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
-          ...(edit ? [row.unit.symbol, <div className="actions">{referenceKinds.map(kind => data.references.find(item => item.id === row[kind.field])?.name)
-            .filter(Boolean).map(name => <Badge key={name}>{name}</Badge>)}</div>] : []),
-          situationBadge(row),
-          edit ? rowActions('products', row, () => setProduct(row),
-            data.productTypes.find(type => type.id === row.typeId)?.isManufactured &&
-              <button type="button" className="btn secondary small" onClick={() => setRecipe(row)}><ClipboardList size={14} aria-hidden="true" />Ficha técnica</button>)
-            : detailsButton('products', row),
-        ])} />}
+        rows={applyFilters(visible(data.products), productFilters(data), selected).map(row => {
+          const classes = referenceKinds.map(kind => data.references.find(item => item.id === row[kind.field])?.name).filter(Boolean);
+          return [
+            by(row.name, <Title name={row.name} code={row.sku} />), data.productTypes.find(type => type.id === row.typeId)?.name ?? '—',
+            ...(edit ? [row.unit.symbol, by(classes.join(' '), <div className="actions">{classes.map(name => <Badge key={name}>{name}</Badge>)}</div>)] : []),
+            situationBadge(row),
+            edit ? rowActions('products', row, () => setProduct(row),
+              data.productTypes.find(type => type.id === row.typeId)?.isManufactured &&
+                <button type="button" className="btn secondary small" onClick={() => setRecipe(row)}><ClipboardList size={14} aria-hidden="true" />Ficha técnica</button>)
+              : detailsButton('products', row),
+          ];
+        })} />}
       {page === 'kits' && <Table empty="Nenhum kit encontrado."
         columns={['Kit', edit ? 'Componentes' : 'Itens', 'Situação', { label: 'Ações', actions: true }]}
         rows={applyFilters(visible(data.kits), kitFilters(data), selected).map(row => [
-          <Title name={row.name} code={row.sku} />,
-          edit ? <span className="muted">{row.components.map(item => quantity(item.quantity) + ' ' + baseUnit(item.product).symbol + ' ' + item.product.sku).join(' · ')}</span>
-            : row.components.length,
+          by(row.name, <Title name={row.name} code={row.sku} />),
+          by(row.components.length, edit ? <span className="muted">{row.components.map(item => quantity(item.quantity) + ' ' + baseUnit(item.product).symbol + ' ' + item.product.sku).join(' · ')}</span>
+            : row.components.length),
           situationBadge(row),
           edit ? rowActions('kits', row, () => setKit(row)) : detailsButton('kits', row),
         ])} />}
