@@ -13,6 +13,7 @@ type ProductDetails = {
   orders: { number: number; status: 'PLANNED' | 'PRINTING'; planned: string }[] | null;
   stock: {
     quantity: string; reserved: string; available: string; currentCost: string | null; value: string; lastPurchaseCost: string | null;
+    lastPurchase: { date: string | null; unitExpense: string | null; supplier: string | null; number: number | null; expenses: { title: string; amount: string; unit: string }[] };
     minStock: string | null; belowMinimum: boolean; salePrice: string | null; margin: { profit: string; percent: string } | null;
     marginPercent: string | null; suggestedPrice: string | null; belowTargetMargin: boolean;
     lastMovement: { kind: string; quantity: string; createdAt: string } | null;
@@ -61,7 +62,9 @@ function ProductPanel({ id }: { id: string }) {
         <div><dt>Estoque mínimo</dt><dd>{stock.minStock === null ? '—' : amount(stock.minStock)}{stock.belowMinimum && <> <Badge tone="warn">Abaixo</Badge></>}</dd></div>
         <div><dt>Custo médio</dt><dd>{brl(stock.currentCost)}</dd></div>
         <div><dt>Valor em estoque</dt><dd>{brl(stock.value)}</dd></div>
-        <div><dt>Última compra</dt><dd>{brl(stock.lastPurchaseCost)}</dd></div>
+        <div><dt>Última compra</dt><dd>{brl(stock.lastPurchaseCost)}{stock.lastPurchase.date && ' · ' + new Date(stock.lastPurchase.date).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}{stock.lastPurchase.number !== null && ' · nº ' + stock.lastPurchase.number}</dd></div>
+        <div><dt>Fornecedor da última compra</dt><dd>{stock.lastPurchase.supplier ?? '—'}</dd></div>
+        <div><dt>Despesa unitária da última compra</dt><dd>{brl(stock.lastPurchase.unitExpense)}{stock.lastPurchase.expenses.length > 0 && <span className="hint" style={{ display: 'block' }}>{stock.lastPurchase.expenses.map(row => row.title + ': ' + brl(row.unit) + ' / ' + symbol).join(' · ')}</span>}</dd></div>
         <div><dt>Preço de venda</dt><dd>{brl(stock.salePrice)}</dd></div>
         <div><dt>Margem</dt><dd>{stock.margin ? quantity(stock.margin.percent) + '% · ' + brl(stock.margin.profit) + ' por ' + symbol : '—'}{stock.belowTargetMargin && <> <Badge tone="warn">Abaixo da desejada</Badge></>}</dd></div>
         <div><dt>Margem desejada</dt><dd>{stock.marginPercent === null ? '—' : quantity(stock.marginPercent) + '%'}</dd></div>

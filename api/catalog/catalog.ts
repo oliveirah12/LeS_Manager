@@ -63,7 +63,8 @@ const technicalProduct = {
 const catalogProduct = { ...catalogSummary, ...technicalProduct } as const;
 /** What stock:view may read. A new product column stays private until it is listed here. */
 const stockProduct = {
-  id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true, marginPercent: true,
+  id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, lastPurchaseAt: true, lastPurchaseExpense: true,
+  lastSupplier: { select: { name: true } }, minStock: true, salePrice: true, marginPercent: true,
   ...productInclude,
 } as const;
 const references = [
@@ -332,7 +333,7 @@ export class CatalogService {
     const product = await this.db.product.findUnique({
       where: { id },
       select: {
-        id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, minStock: true, salePrice: true, marginPercent: true, wastePercent: true, ...productInclude, ...technicalProduct,
+        id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, lastPurchaseAt: true, lastPurchaseExpense: true, lastSupplier: { select: { name: true } }, minStock: true, salePrice: true, marginPercent: true, wastePercent: true, ...productInclude, ...technicalProduct,
         type: { select: { name: true, isInput: true, isManufactured: true } },
         kitComponents: { select: { quantity: true, kit: { select: { sku: true, name: true, active: true } } }, orderBy: { kitId: 'asc' } },
         usedInRecipes: { select: { quantity: true, product: { select: { sku: true, name: true, active: true } } }, orderBy: { productId: 'asc' } },
@@ -344,11 +345,15 @@ export class CatalogService {
     if (!product) throw new NotFoundException('Produto não encontrado.');
     const symbol = (row: { unit: { symbol: string; family: { units: { symbol: string }[] } } }) => row.unit.family.units[0]?.symbol ?? row.unit.symbol;
     const reserved = seeStock ? await this.reservedById() : null;
-    const [lastMovement, purchases, consumption] = await Promise.all([
+    const [lastMovement, purchases, lastItem, consumption] = await Promise.all([
       seeStock ? this.db.movement.findFirst({ where: { productId: id }, orderBy: { createdAt: 'desc' }, select: { kind: true, quantity: true, createdAt: true } }) : null,
       seeStock ? this.db.movement.findMany({
-        where: { productId: id, kind: 'PURCHASE' }, orderBy: { createdAt: 'desc' }, take: 5, select: { quantity: true, unitCost: true, createdAt: true },
+        where: { productId: id, kind: 'PURCHASE', purchaseItem: { purchase: { reversedAt: null } } }, orderBy: { createdAt: 'desc' }, take: 5, select: { quantity: true, unitCost: true, createdAt: true },
       }) : [],
+      seeStock ? this.db.purchaseItem.findFirst({
+        where: { productId: id, purchase: { reversedAt: null } }, orderBy: { purchase: { number: 'desc' } },
+        select: { quantity: true, purchase: { select: { number: true } }, shares: { select: { amount: true, cost: { select: { title: true } } } } },
+      }) : null,
       seeOrders && product.type.isInput ? this.db.productionConsumption.findMany({
         where: { inputId: id, item: { order: { status: { in: ['PLANNED', 'PRINTING'] } } } },
         select: { planned: true, item: { select: { order: { select: { number: true, status: true } } } } },
@@ -376,6 +381,10 @@ export class CatalogService {
       stock: seeStock ? {
         quantity: product.quantity, reserved: held, available: Prisma.Decimal.max(0, product.quantity.minus(held)),
         currentCost: product.currentCost, value: stockValue(product.quantity, product.currentCost), lastPurchaseCost: product.lastPurchaseCost,
+        lastPurchase: {
+          date: product.lastPurchaseAt, unitExpense: product.lastPurchaseExpense, supplier: product.lastSupplier?.name ?? null, number: lastItem?.purchase.number ?? null,
+          expenses: lastItem?.shares.map(share => ({ title: share.cost.title, amount: share.amount, unit: share.amount.div(lastItem.quantity).toDecimalPlaces(12) })) ?? [],
+        },
         lastMovement, purchases, minStock: product.minStock, belowMinimum: belowMinimum(product.quantity, held, product.minStock),
         salePrice: product.salePrice, margin: saleMargin(product.salePrice, product.currentCost), marginPercent: product.marginPercent,
         ...salePricing(product.salePrice, product.currentCost, product.marginPercent),

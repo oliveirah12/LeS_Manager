@@ -99,7 +99,9 @@ function Balances({ data, edit, move, configure }: {
           <span><strong>{quantity(product.quantity)}</strong> <span className="muted">{baseUnit(product).symbol}</span>
             {Number(product.reserved) > 0 && <span className="hint" style={{ display: 'block' }}>{quantity(product.reserved!)} reservado</span>}
             {product.belowMinimum && <span style={{ display: 'block', marginTop: 4 }}><Badge tone="warn">Abaixo do mínimo</Badge></span>}</span>),
-        by(product.currentCost, brl(product.currentCost)), by(product.lastPurchaseCost, <span className="muted">{brl(product.lastPurchaseCost)}</span>),
+        by(product.currentCost, brl(product.currentCost)), by(product.lastPurchaseCost, <span className="muted">{brl(product.lastPurchaseCost)}
+          {Number(product.lastPurchaseExpense) > 0 && <span className="hint" style={{ display: 'block' }}>+ {brl(product.lastPurchaseExpense)} de despesas</span>}
+          {product.lastPurchaseAt && <span className="hint" style={{ display: 'block' }}>{new Date(product.lastPurchaseAt).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}{product.lastSupplier ? ' · ' + product.lastSupplier.name : ''}</span>}</span>),
         by(product.value, <strong>{brl(product.value)}</strong>),
         by(product.margin?.percent, product.margin ? <span>{product.margin.percent.startsWith('-') ? <Badge tone="warn">{quantity(product.margin.percent)}%</Badge> : <strong>{quantity(product.margin.percent)}%</strong>}
           <span className="hint" style={{ display: 'block' }}>Venda {brl(product.salePrice)}</span>
