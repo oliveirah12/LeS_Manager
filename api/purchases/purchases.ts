@@ -85,7 +85,7 @@ export class PurchaseService {
     if (purchase.reversedAt) return 'Esta compra já foi estornada.';
     if (purchase.converted) return 'Compra convertida do histórico antigo, sem o estado anterior guardado.';
     const moved = purchase.items.filter(item => item.product.revision !== item.revisionAfter);
-    if (moved.length) return 'Houve movimentação posterior em: ' + moved.map(item => item.product.sku).join(', ') + '.';
+    if (moved.length) return 'Houve movimentação ou alteração posterior de saldo, custo, unidade ou situação em: ' + moved.map(item => item.product.sku).join(', ') + '.';
     for (const item of purchase.items) {
       const reserved = await this.stock.reservedBalance(this.db, item.productId);
       if (item.product.quantity.minus(item.quantity).lt(reserved)) return 'O saldo de ' + item.product.sku + ' está reservado para uma impressão em andamento.';
@@ -203,7 +203,7 @@ export class PurchaseService {
       if (purchase.reversedAt) throw new ConflictException('Esta compra já foi estornada.');
       if (purchase.converted) throw new ConflictException('Compras convertidas do histórico antigo não têm o estado anterior guardado e não podem ser estornadas.');
       const moved = purchase.items.filter(item => item.product.revision !== item.revisionAfter);
-      if (moved.length) throw new ConflictException('Houve movimentação posterior em: ' + moved.map(item => item.product.sku).join(', ') + '.');
+      if (moved.length) throw new ConflictException('Houve movimentação ou alteração posterior de saldo, custo, unidade ou situação em: ' + moved.map(item => item.product.sku).join(', ') + '.');
       for (const item of purchase.items) {
         await this.stock.record(tx, item.product, item.quantity.neg(), 'PURCHASE_REVERSAL', userId, 'Estorno da compra nº ' + purchase.number + ': ' + reason, item.unitCost);
         // Date and supplier of an older purchase may have been edited since, so they are read from it.

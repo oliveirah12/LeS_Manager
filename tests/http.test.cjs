@@ -1364,7 +1364,7 @@ test('API REST com PostgreSQL', {
 
     // Any later movement blocks the reversal.
     expectStatus(await movement(first.id, unit.id, 'OUT', '1'), 201);
-    assert.match(expectStatus(await viewer('/purchases/' + posted.id), 200).reversalBlock, /movimentação posterior/);
+    assert.match(expectStatus(await viewer('/purchases/' + posted.id), 200).reversalBlock, /movimentação ou alteração posterior/);
     expectStatus(await operator('/purchases/' + posted.id + '/reversal', { method: 'POST', body: { reason: 'Tarde' } }), 409);
     assert.equal((await productRow(second.id)).quantity.toString(), '1', 'o bloqueio de um item barra a compra inteira');
 
