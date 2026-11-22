@@ -12,6 +12,7 @@ import { Finance } from './finance';
 import { Home } from './home';
 import { pageFromHash } from './format';
 import { ProductionOrders } from './orders';
+import { PaymentMethods } from './payment-methods';
 import { Printers } from './production';
 import { PurchaseDocuments } from './purchase-documents';
 import { Purchases } from './purchases';
@@ -36,7 +37,7 @@ const groups = [
     { id: 'production-orders', label: 'Ordens' }, { id: 'printers', label: 'Impressoras' },
   ] },
   { id: 'registrations', label: 'Cadastros', icon: Layers, section: 'admin', permission: 'registrations:view', pages: [
-    { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' }, { id: 'suppliers', label: 'Fornecedores' }, { id: 'product-types', label: 'Tipos de produto' },
+    { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' }, { id: 'suppliers', label: 'Fornecedores' }, { id: 'payment-methods', label: 'Formas de pagamento' }, { id: 'product-types', label: 'Tipos de produto' },
     ...referenceKinds.map(({ id, label }) => ({ id, label })),
     { id: 'families', label: 'Famílias de medida' }, { id: 'units', label: 'Unidades de medida' },
   ] },
@@ -52,6 +53,7 @@ const pageDescriptions: Record<Page, string> = {
   home: '', products: 'Consulte os produtos do catálogo.', inputs: 'Materiais usados nas fichas técnicas e na produção.', kits: 'Consulte os kits e suas composições.',
   'register-products': 'Cadastre, edite e inative produtos.', 'register-kits': 'Monte e edite a composição dos kits.',
   suppliers: 'Empresas e pessoas de quem você compra.',
+  'payment-methods': 'Formas de pagamento e taxas usadas na venda das ordens.',
   'product-types': 'Defina o que cada produto é e como ele se comporta na produção.',
   GRUPO: 'Organize os produtos por grupos.', MARCA: 'Gerencie as marcas do catálogo.',
   COR: 'Mantenha a lista de cores disponíveis.', DEPARTAMENTO: 'Organize os departamentos do catálogo.',
@@ -71,7 +73,7 @@ const pageDescriptions: Record<Page, string> = {
 // Each screen has its own address so reload, back/forward and shared links keep the page.
 const paths: Record<Page, string> = {
   home: '', products: 'catalogo/produtos', inputs: 'catalogo/insumos', kits: 'catalogo/kits',
-  'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits', suppliers: 'cadastros/fornecedores', 'product-types': 'cadastros/tipos-de-produto',
+  'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits', suppliers: 'cadastros/fornecedores', 'payment-methods': 'cadastros/formas-de-pagamento', 'product-types': 'cadastros/tipos-de-produto',
   GRUPO: 'cadastros/grupos', MARCA: 'cadastros/marcas', COR: 'cadastros/cores', DEPARTAMENTO: 'cadastros/departamentos',
   families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque', purchases: 'compras', 'purchase-documents': 'compras/documentos',
   balance: 'financeiro/saldo', statement: 'financeiro/extrato', reconciliation: 'financeiro/conciliacao', integration: 'financeiro/integracao',
@@ -272,6 +274,7 @@ function App() {
     {(page === 'product-types' || page === 'GRUPO' || page === 'MARCA' || page === 'COR' || page === 'DEPARTAMENTO' || page === 'families' || page === 'units') &&
       <Registrations key={page} page={page} edit={can('registrations:operate')} admin={admin} />}
     {page === 'suppliers' && <Suppliers edit={can('registrations:operate')} />}
+    {page === 'payment-methods' && <PaymentMethods edit={can('registrations:operate')} />}
     {page === 'purchases' && <Purchases edit={can('purchases:operate')} />}
     {page === 'purchase-documents' && <PurchaseDocuments edit={can('purchases:operate')} />}
     {page === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}

@@ -3,6 +3,8 @@ const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
 const { averageCost, belowMinimum, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, recipeEstimate, saleMargin, salePricing } = require('../dist/api/stock/cost.js');
 
+const { orderSale, saleResult } = require('../dist/api/production/sale.js');
+
 const d = value => new Prisma.Decimal(value);
 const pricing = (price, cost, margin) => {
   const result = salePricing(price === null ? null : d(price), cost === null ? null : d(cost), margin === null ? null : d(margin));
@@ -227,4 +229,21 @@ test('the API sends decimals without scientific notation', () => {
   assert.equal(json('0.00000005'), '0.00000005');
   assert.equal(json('0.000000000001'), '0.000000000001');
   assert.equal(json('123456789012345678901234'), '123456789012345678901234');
+});
+
+test('the discount applies to the order total and the fee to what remains', () => {
+  const sale = orderSale([{ quantity: d(2), salePrice: d(50) }, { quantity: d(1), salePrice: d(100) }], d(10), d(5));
+  assert.deepEqual([sale.gross, sale.discount, sale.total, sale.fee, sale.net].map(value => value.toFixed()), ['200', '20', '180', '9', '171']);
+  assert.equal(sale.partial, false);
+});
+
+test('the fee lowers the margin but not the cost', () => {
+  const sale = orderSale([{ quantity: d(1), salePrice: d(100) }], d(0), d(10));
+  const result = saleResult(sale, d(60));
+  assert.deepEqual([result.profit.toFixed(), result.marginPercent.toFixed()], ['30', '30']);
+});
+
+test('an order without prices has no sale, and a missing price marks it as partial', () => {
+  assert.equal(orderSale([{ quantity: d(1), salePrice: null }], d(0), d(0)), null);
+  assert.equal(orderSale([{ quantity: d(1), salePrice: d(5) }, { quantity: d(1), salePrice: null }], d(0), d(0)).partial, true);
 });

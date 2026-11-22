@@ -13,6 +13,7 @@ const controllers = [
   require('../dist/api/files/files.js').ProductFilesController,
   require('../dist/api/finance/finance.js').FinanceController,
   require('../dist/api/production/orders.js').ProductionOrderController,
+  require('../dist/api/production/payments.js').PaymentMethodController,
   require('../dist/api/production/production.js').ProductionController,
   require('../dist/api/purchases/documents.js').PurchaseDocumentController,
   require('../dist/api/purchases/documents.js').PurchaseDocumentSearchController,
@@ -68,6 +69,16 @@ test('supplier routes read with registrations:view and write with registrations:
     const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
     assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'registrations:view' : 'registrations:operate'], name);
     if (!reads) assert.equal(typeof Reflect.getMetadata(AUDIT, handler), 'string', name);
+  }
+});
+
+test('payment method routes read with registrations:view and write with registrations:operate', () => {
+  const controller = require('../dist/api/production/payments.js').PaymentMethodController;
+  for (const name of ['list', 'create', 'update', 'remove']) {
+    const handler = controller.prototype[name];
+    const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
+    assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'registrations:view' : 'registrations:operate'], name);
+    assert.equal(typeof Reflect.getMetadata(AUDIT, handler), reads ? 'undefined' : 'string', name);
   }
 });
 

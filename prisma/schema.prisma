@@ -251,10 +251,31 @@ model ProductionOrder {
   totalCost        Decimal?         @db.Decimal(30, 12)
   lossCost         Decimal?         @db.Decimal(30, 12)
   absorbLoss       Boolean          @default(false)
+  discountPercent  Decimal          @default(0) @db.Decimal(5, 2)
+  paymentMethodId  String?
+  paymentMethod    PaymentMethod?   @relation(fields: [paymentMethodId], references: [id])
+  /// Empty follows the payment method until the order finishes, when the rate in force is frozen here.
+  feePercent       Decimal?         @db.Decimal(5, 2)
+  paymentName      String?
+  saleGross        Decimal?         @db.Decimal(30, 12)
+  saleDiscount     Decimal?         @db.Decimal(30, 12)
+  saleTotal        Decimal?         @db.Decimal(30, 12)
+  saleFee          Decimal?         @db.Decimal(30, 12)
+  saleNet          Decimal?         @db.Decimal(30, 12)
   items            ProductionItem[]
   movements        Movement[]
   @@index([status])
   @@index([printerId])
+  @@index([paymentMethodId])
+}
+
+/// How a sale is paid. The optional fee lowers the net value and the margin, never the cost.
+model PaymentMethod {
+  id         String            @id @default(uuid())
+  name       String            @unique
+  feePercent Decimal?          @db.Decimal(5, 2)
+  active     Boolean           @default(true)
+  orders     ProductionOrder[]
 }
 
 model ProductionItem {
@@ -268,6 +289,8 @@ model ProductionItem {
   unitCost    Decimal?                @db.Decimal(30, 12)
   totalCost   Decimal?                @db.Decimal(30, 12)
   lossCost    Decimal?                @db.Decimal(30, 12)
+  salePrice     Decimal?              @db.Decimal(30, 12)
+  marginPercent Decimal?              @db.Decimal(5, 2)
   consumption ProductionConsumption[]
   @@id([orderId, productId])
   @@index([productId])

@@ -155,3 +155,18 @@ export function pageFromHash<P extends string>(hash: string, paths: Record<P, st
   try { path = decodeURIComponent(path).toLowerCase(); } catch { return undefined; }
   return (Object.keys(paths) as P[]).find(page => paths[page] === path);
 }
+
+/** Estimate shown while typing. The API recalculates it in exact decimals when saving. */
+export function saleEstimate(rows: { quantity: string; salePrice: string }[], discountPercent: string, feePercent: string) {
+  const number = (value: string) => {
+    const parsed = Number(value.trim().replace(',', '.'));
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  const priced = rows.filter(row => row.salePrice.trim() && row.quantity.trim());
+  if (!priced.length) return null;
+  const gross = priced.reduce((total, row) => total + number(row.quantity) * number(row.salePrice), 0);
+  const discount = gross * number(discountPercent) / 100;
+  const total = gross - discount;
+  const fee = total * number(feePercent) / 100;
+  return { gross, discount, total, fee, net: total - fee };
+}

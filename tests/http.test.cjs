@@ -707,6 +707,42 @@ test('API REST com PostgreSQL', {
     assert.ok(Number((await listedOrder(costs, operated.id)).totalCost) > 0);
   });
 
+  await t.test('formas de pagamento e venda da ordem respeitam acessos e congelam ao concluir', async () => {
+    const reader = await session('PAGTO-LEITURA', ['registrations:view']);
+    const operator = await session('PAGTO-OPERA', ['registrations:operate']);
+    const stranger = await session('PAGTO-SEM', ['production:view']);
+    const name = sku('PIX');
+    expectStatus(await stranger('/payment-methods'), 403);
+    expectStatus(await reader('/payment-methods'), 200);
+    expectStatus(await reader('/payment-methods', { method: 'POST', body: { name } }), 403);
+    expectStatus(await operator('/payment-methods', { method: 'POST', body: { name, feePercent: '101' } }), 400);
+    const method = expectStatus(await operator('/payment-methods', { method: 'POST', body: { name, feePercent: '5' } }), 201);
+    const hidden = expectStatus(await operator('/payment-methods', { method: 'POST', body: { name: sku('INATIVA'), active: false } }), 201);
+    assert.equal(expectStatus(await stranger('/production/orders'), 200).paymentMethods.some(row => row.id === hidden.id), false);
+
+    const input = await createProduct('VENDA-INSUMO', unit.id);
+    const piece = await createProduct('VENDA-PECA', unit.id);
+    for (const [product, typeId] of [[input, 2], [piece, 3]]) {
+      expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name: product.name, typeId: '00000000-0000-4000-8000-00000000000' + typeId } }), 200);
+    }
+    expectStatus(await movement(input.id, unit.id, 'PURCHASE', '100', '1'), 201);
+    expectStatus(await admin(`/catalog/products/${piece.id}/recipe`, { method: 'PUT', body: { wastePercent: '0', inputs: [{ inputId: input.id, unitId: unit.id, quantity: '10' }] } }), 200);
+    const printer = expectStatus(await post('/production/printers', { name: sku('VENDA-IMPRESSORA'), powerWatts: '100', hourlyCost: '0' }), 201);
+    const base = { printerId: printer.id, plannedStart: '2026-11-21T10:00:00.000Z', estimatedMinutes: 60, discountPercent: '10', paymentMethodId: method.id };
+    expectStatus(await post('/production/orders', { ...base, paymentMethodId: hidden.id, items: [{ productId: piece.id, quantity: '2', salePrice: '50' }] }), 409);
+    const order = expectStatus(await post('/production/orders', { ...base, items: [{ productId: piece.id, quantity: '2', salePrice: '50', marginPercent: '40' }] }), 201);
+    assert.equal(order.sale.values.net, '85.5');
+    expectStatus(await admin('/payment-methods/' + method.id, { method: 'DELETE' }), 409);
+    expectStatus(await post(`/production/orders/${order.id}/start`, { startedAt: '2026-11-21T10:00:00.000Z' }), 200);
+    const done = expectStatus(await post(`/production/orders/${order.id}/finish`, {
+      finishedAt: '2026-11-21T11:00:00.000Z', items: [{ productId: piece.id, lost: '1' }], inputs: [{ inputId: input.id, used: '20' }],
+    }), 200);
+    assert.deepEqual([done.sale.values.gross, done.sale.values.total, done.sale.values.net], ['50', '45', '42.75']);
+    expectStatus(await admin('/payment-methods/' + method.id, { method: 'PATCH', body: { name: name + '-NOVO', feePercent: '50', active: false } }), 200);
+    const frozen = expectStatus(await admin('/production/orders'), 200).orders.find(row => row.id === order.id);
+    assert.deepEqual([frozen.sale.paymentName, frozen.sale.feePercent, frozen.sale.values.net], [name, '5', '42.75']);
+  });
+
   await t.test('famílias e unidades só mudam o que não afeta o histórico', async () => {
     const id = 'M' + Date.now();
     const patch = (path, body) => admin(path, { method: 'PATCH', body });
