@@ -3,7 +3,7 @@ import { ReactNode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ChevronDown, Home as HomeIcon, Layers, LogOut, Menu, Moon, MoreHorizontal, Package, PanelLeftClose, PanelLeftOpen, Printer,
-  ShieldCheck, Sun, Tag, UserRound, Users, Wallet,
+  ShieldCheck, ShoppingCart, Sun, Tag, UserRound, Users, Wallet,
 } from 'lucide-react';
 import { AccountSettings, Administration, SignIn } from './access';
 import { Audit } from './audit';
@@ -13,6 +13,7 @@ import { Home } from './home';
 import { pageFromHash } from './format';
 import { ProductionOrders } from './orders';
 import { Printers } from './production';
+import { Purchases } from './purchases';
 import { InstallApp } from './pwa';
 import { referenceKinds, Registrations } from './registrations';
 import { Stock } from './stock';
@@ -23,6 +24,7 @@ import './style.css';
 const groups = [
   { id: 'home', label: 'Início', icon: HomeIcon, section: 'ops', permission: null, pages: [{ id: 'home', label: 'Início' }] },
   { id: 'stock', label: 'Estoque', icon: Package, section: 'ops', permission: 'stock:view', pages: [{ id: 'stock', label: 'Estoque' }] },
+  { id: 'purchases', label: 'Compras', icon: ShoppingCart, section: 'ops', permission: 'purchases:view', pages: [{ id: 'purchases', label: 'Compras' }] },
   { id: 'catalog', label: 'Catálogo', icon: Tag, section: 'ops', permission: 'catalog:view', pages: [
     { id: 'products', label: 'Produtos' }, { id: 'inputs', label: 'Insumos' }, { id: 'kits', label: 'Kits' },
   ] },
@@ -54,6 +56,7 @@ const pageDescriptions: Record<Page, string> = {
   COR: 'Mantenha a lista de cores disponíveis.', DEPARTAMENTO: 'Organize os departamentos do catálogo.',
   families: 'Cada família tem uma unidade base, como g para peso.', units: 'Unidades e fatores de conversão para a unidade base.',
   stock: 'Saldos e custos na unidade base de cada produto.',
+  purchases: 'Lance compras com vários itens, custos adicionais e rateio.',
   balance: 'Saldo da conta bancária na última sincronização.', statement: 'Transações bancárias por período.',
   reconciliation: 'Confira os lançamentos do banco com as referências internas.',
   integration: 'Credenciais e certificado usados para ler o saldo e o extrato.',
@@ -68,7 +71,7 @@ const paths: Record<Page, string> = {
   home: '', products: 'catalogo/produtos', inputs: 'catalogo/insumos', kits: 'catalogo/kits',
   'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits', suppliers: 'cadastros/fornecedores', 'product-types': 'cadastros/tipos-de-produto',
   GRUPO: 'cadastros/grupos', MARCA: 'cadastros/marcas', COR: 'cadastros/cores', DEPARTAMENTO: 'cadastros/departamentos',
-  families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque',
+  families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque', purchases: 'compras',
   balance: 'financeiro/saldo', statement: 'financeiro/extrato', reconciliation: 'financeiro/conciliacao', integration: 'financeiro/integracao',
   'production-orders': 'producao/ordens', printers: 'producao/impressoras',
   audit: 'auditoria', admin: 'acessos/usuarios', 'admin-account': 'acessos/minha-conta', account: 'conta',
@@ -267,6 +270,7 @@ function App() {
     {(page === 'product-types' || page === 'GRUPO' || page === 'MARCA' || page === 'COR' || page === 'DEPARTAMENTO' || page === 'families' || page === 'units') &&
       <Registrations key={page} page={page} edit={can('registrations:operate')} admin={admin} />}
     {page === 'suppliers' && <Suppliers edit={can('registrations:operate')} />}
+    {page === 'purchases' && <Purchases edit={can('purchases:operate')} />}
     {page === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}
     {(page === 'balance' || page === 'statement' || page === 'reconciliation' || page === 'integration') &&
       <Finance key={page} page={page} edit={can('finance:operate')} admin={admin} openStatement={() => navigate('statement')}

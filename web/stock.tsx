@@ -23,8 +23,8 @@ type InitialRegistry = {
 const dimensions = (row: InitialRegistry) => ([['C', row.lengthMm], ['L', row.widthMm], ['A', row.heightMm], ['Ø', row.diameterMm]] as const)
   .flatMap(([label, value]) => value ? [label + ' ' + quantity(value)] : []).join(' · ');
 type Dialog = { kind: 'settings'; product: StockProduct } | { kind: 'movement'; product?: Product } | { kind: 'kit'; kit: Kit } | { kind: 'kitDetails'; kit: StockKit } | { kind: 'inventory' } | { kind: 'initial' };
-const kinds = [{ id: 'PURCHASE', name: 'Compra' }, { id: 'OUT', name: 'Saída' }, { id: 'ADJUSTMENT', name: 'Ajuste' }] as const;
-const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário', PRODUCTION_IN: 'Entrada de produção', PRODUCTION_OUT: 'Consumo de produção' };
+const kinds = [{ id: 'OUT', name: 'Saída' }, { id: 'ADJUSTMENT', name: 'Ajuste' }] as const;
+const labels: Record<string, string> = { PURCHASE: 'Compra', OUT: 'Saída', ADJUSTMENT: 'Ajuste', INITIAL: 'Carga inicial', KIT_OUT: 'Saída de kit', INVENTORY: 'Inventário', PRODUCTION_IN: 'Entrada de produção', PRODUCTION_OUT: 'Consumo de produção', PURCHASE_REVERSAL: 'Estorno de compra' };
 
 export function Stock({ edit, importInitial }: { edit: boolean; importInitial: boolean }) {
   const stock = useData<StockView>('stock');
@@ -196,32 +196,16 @@ function HistoryTab({ products }: { products: Product[] }) {
   </div>;
 }
 
-/** Moving weighted average after a purchase, in base units. Display only: the backend computes the stored value. */
-function previewAverage(product: Product, amount: number, unitCost: number) {
-  const balance = Number(product.quantity);
-  const current = product.currentCost === null ? null : Number(product.currentCost);
-  if (!(amount > 0) || !(unitCost >= 0)) return null;
-  if (current === null || balance <= 0) return unitCost;
-  return (balance * current + amount * unitCost) / (balance + amount);
-}
-
 function MovementForm({ data, initial, saved }: { data: StockView; initial?: Product; saved: (message: string) => Promise<void> }) {
-  const [kind, setKind] = useState<'PURCHASE' | 'OUT' | 'ADJUSTMENT'>('PURCHASE');
+  const [kind, setKind] = useState<'OUT' | 'ADJUSTMENT'>('OUT');
   const [productId, setProduct] = useState(initial?.id ?? '');
   const [unitId, setUnit] = useState(initial?.unit.id ?? '');
   const [amount, setAmount] = useState('');
-  const [total, setTotal] = useState('');
   const closePanel = useClosePanel();
   const product = data.products.find(item => item.id === productId);
   const units = data.units.filter(unit => unit.familyId === product?.unit.familyId);
-  const unit = units.find(item => item.id === unitId) ?? product?.unit;
-  const factor = Number(unit?.factor ?? 1);
-  const informed = Number(amount.replace(',', '.'));
-  const paid = Number(total.replace(',', '.'));
-  const average = kind === 'PURCHASE' && product && total.trim()
-    ? previewAverage(product, informed * factor, paid / (informed * factor)) : null;
-  const submitLabel = { PURCHASE: 'Registrar compra', OUT: 'Registrar saída', ADJUSTMENT: 'Registrar ajuste' }[kind];
-  const entersPieces = kind === 'PURCHASE' || (kind === 'ADJUSTMENT' && !amount.trim().startsWith('-') && Number(amount.replace(',', '.')) > 0);
+  const submitLabel = { OUT: 'Registrar saída', ADJUSTMENT: 'Registrar ajuste' }[kind];
+  const entersPieces = kind === 'ADJUSTMENT' && !amount.trim().startsWith('-') && Number(amount.replace(',', '.')) > 0;
   const needsAcknowledge = !!product?.type?.isManufactured && entersPieces;
   return <Form label={submitLabel} cancel="Cancelar" action={async values => {
     const { acknowledgeNoInputs, ...input } = fields(values);
@@ -243,12 +227,7 @@ function MovementForm({ data, initial, saved }: { data: StockView; initial?: Pro
         <input name="quantity" inputMode="decimal" required value={amount} onChange={event => setAmount(event.target.value)} /></label>
       <Select key={productId} name="unitId" label="Unidade" defaultValue={unitId} options={unitOptions(units)} onChange={setUnit} />
     </div>
-    {kind === 'PURCHASE' && <label>Custo total da compra (R$)
-      <input name="totalCost" inputMode="decimal" required placeholder="0,00" value={total} onChange={event => setTotal(event.target.value)} />
-      {average !== null && product && <span className="hint"><strong className="num">{brl(paid / informed)}</strong> por {unit?.symbol} · novo custo
-        médio <strong className="num">{brl(average)}</strong> por {baseUnit(product).symbol}</span>}
-    </label>}
-    <Field name="reason" label="Motivo" placeholder="Nota fiscal, pedido ou observação" />
+    <Field name="reason" label="Motivo" placeholder="Pedido, perda ou observação" />
     {needsAcknowledge && <div className="info stack" role="alert" key={productId + kind} style={{ gap: 8 }}>
       <span><strong>Esta entrada não baixa filamento nem outros insumos.</strong> Para produzir consumindo o estoque, use Produção → Ordens.</span>
       <label className="check"><input name="acknowledgeNoInputs" type="checkbox" required />Estou ciente e quero registrar mesmo assim</label>
