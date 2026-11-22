@@ -56,6 +56,7 @@ model User {
   bankReconciliations BankReconciliation[]
   bankConnections   BankConnection[]
   productionOrders  ProductionOrder[]
+  storedFiles       StoredFile[]
 }
 
 model Session {
@@ -140,6 +141,7 @@ model Product {
   usedInRecipes ProductInput[]  @relation("RecipeInput")
   productionItems  ProductionItem[]
   productionInputs ProductionConsumption[]
+  files         ProductFile[]
 }
 
 /// Extra measure of a product, such as thread pitch or nozzle size. It has no meaning without the product.
@@ -151,6 +153,33 @@ model ProductMeasure {
   value     Decimal @db.Decimal(30, 12)
   unit      String
   @@unique([productId, name])
+}
+
+/// A file kept on disk under a generated key. It is only served while `available`: false means the upload
+/// has not finished or the removal has started, and the daily maintenance finishes whatever a crash interrupted.
+model StoredFile {
+  id           String       @id @default(uuid())
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  sha256       String
+  storageKey   String       @unique
+  available    Boolean      @default(false)
+  createdById  String
+  createdBy    User         @relation(fields: [createdById], references: [id])
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  product      ProductFile?
+  @@index([available, updatedAt])
+}
+
+/// Attaches a stored file to a product. Other modules link files through their own table.
+model ProductFile {
+  fileId    String     @id
+  file      StoredFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product    @relation(fields: [productId], references: [id])
+  @@index([productId])
 }
 
 /// Technical sheet: what one base unit of a manufactured product consumes, in the input's base unit.
