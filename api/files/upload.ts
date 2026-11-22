@@ -21,7 +21,7 @@ class UploadLimitFilter implements ExceptionFilter {
 }
 
 /** Receives one file in the "file" field, straight to a temporary file with a generated name. */
-export const FileUpload = (maxBytes: number) => applyDecorators(
+export const FileUpload = (maxBytes: number, accepted?: { name: (name: string) => boolean; message: string }) => applyDecorators(
   UseFilters(new UploadLimitFilter(maxBytes)),
   UseInterceptors(FileInterceptor('file', {
     storage: diskStorage({
@@ -39,6 +39,7 @@ export const FileUpload = (maxBytes: number) => applyDecorators(
     defParamCharset: 'utf8',
     fileFilter: (_request, file, done) => {
       if (hasBlockedExtension(file.originalname)) done(new UnsupportedMediaTypeException(blockedFileMessage), false);
+      else if (accepted && !accepted.name(file.originalname)) done(new UnsupportedMediaTypeException(accepted.message), false);
       else done(null, true);
     },
   })),

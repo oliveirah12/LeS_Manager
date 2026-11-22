@@ -27,12 +27,16 @@ export class FileService {
    * content is in place, so a failure at any step never shows a file that does not exist.
    * `link` ties the file to its owner in the same transaction.
    */
-  async store(upload: Express.Multer.File, authorId: string, link: (tx: Prisma.TransactionClient, fileId: string) => Promise<void>) {
+  async store(
+    upload: Express.Multer.File, authorId: string, link: (tx: Prisma.TransactionClient, fileId: string) => Promise<void>,
+    accepted?: { content: (name: string, head: Buffer) => boolean; message: string },
+  ) {
     if (!upload.size) throw new BadRequestException('O arquivo está vazio.');
     const originalName = safeFileName(upload.originalname);
     if (hasBlockedExtension(originalName)) throw new UnsupportedMediaTypeException(blockedFileMessage);
     const { sha256, head } = await this.storage.inspect(upload.path);
     if (hasExecutableSignature(head)) throw new UnsupportedMediaTypeException(blockedFileMessage);
+    if (accepted && !accepted.content(originalName, head)) throw new UnsupportedMediaTypeException(accepted.message);
     const storageKey = newStorageKey();
     const file = await serial(this.db, async tx => {
       const row = await tx.storedFile.create({
@@ -95,28 +99,35 @@ export class FileService {
     return { ...file, author: createdBy.name };
   }
 
-  async openForProduct(productId: string, fileId: string) {
-    const file = await this.db.storedFile.findFirst({
-      where: { id: fileId, available: true, product: { productId } }, select: { originalName: true, sizeBytes: true, storageKey: true },
-    });
+  openForProduct(productId: string, fileId: string) { return this.open({ id: fileId, product: { productId } }); }
+
+  /** Opens a file only through the link that authorizes it. */
+  async open(where: Prisma.StoredFileWhereInput) {
+    const file = await this.db.storedFile.findFirst({ where: { ...where, available: true }, select: { originalName: true, sizeBytes: true, storageKey: true } });
     const content = file && await this.storage.open(file.storageKey);
     if (!file || !content) throw new NotFoundException('Arquivo não encontrado.');
     return { name: file.originalName, size: file.sizeBytes, content };
   }
 
   async removeFromProduct(productId: string, fileId: string) {
-    await serial(this.db, async tx => {
+    const product = await this.db.product.findUnique({ where: { id: productId }, select: { sku: true } });
+    if (product) auditContext({ Produto: product.sku });
+    return this.remove({ id: fileId, product: { productId } });
+  }
+
+  /** Hides the file in a transaction and then clears its content. What a crash leaves behind, the maintenance finishes. */
+  async remove(where: Prisma.StoredFileWhereInput) {
+    const id = await serial(this.db, async tx => {
       const file = await tx.storedFile.findFirst({
-        where: { id: fileId, available: true, product: { productId } },
-        select: { originalName: true, mimeType: true, sizeBytes: true, sha256: true, product: { select: { product: { select: { sku: true } } } } },
+        where: { ...where, available: true }, select: { id: true, originalName: true, mimeType: true, sizeBytes: true, sha256: true },
       });
       if (!file) throw new NotFoundException('Arquivo não encontrado.');
-      auditContext({ Produto: file.product!.product.sku });
       auditChange(fileValues(file), null);
-      await tx.storedFile.update({ where: { id: fileId }, data: { available: false } });
+      await tx.storedFile.update({ where: { id: file.id }, data: { available: false } });
+      return file.id;
     });
-    await this.purge([fileId]);
-    return { id: fileId };
+    await this.purge([id]);
+    return { id };
   }
 
   /** Part of the product deletion: call `purge` with the returned ids after the transaction commits. */

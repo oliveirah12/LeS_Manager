@@ -14,10 +14,23 @@ const controllers = [
   require('../dist/api/finance/finance.js').FinanceController,
   require('../dist/api/production/orders.js').ProductionOrderController,
   require('../dist/api/production/production.js').ProductionController,
+  require('../dist/api/purchases/documents.js').PurchaseDocumentController,
   require('../dist/api/purchases/purchases.js').PurchaseController,
   require('../dist/api/purchases/suppliers.js').SupplierController,
   require('../dist/api/stock/controller.js').StockController,
 ];
+
+test('purchase document routes read with purchases:view and write with purchases:operate', () => {
+  const controller = require('../dist/api/purchases/documents.js').PurchaseDocumentController;
+  const routes = Object.getOwnPropertyNames(controller.prototype).filter(name => Reflect.getMetadata(METHOD_METADATA, controller.prototype[name]) !== undefined);
+  assert.equal(routes.length, 4);
+  for (const name of routes) {
+    const handler = controller.prototype[name];
+    const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
+    assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'purchases:view' : 'purchases:operate'], name);
+    assert.equal(typeof Reflect.getMetadata(AUDIT, handler), reads ? 'undefined' : 'string', name);
+  }
+});
 
 test('production routes require the production permission', () => {
   const productionControllers = [
