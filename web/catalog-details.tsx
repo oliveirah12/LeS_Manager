@@ -1,3 +1,4 @@
+import { ProductFiles } from './product-files';
 import { Badge, brl, by, dateTime, Loading, message, Modal, quantity, Table, Title, useData } from './ui';
 
 type Named = { sku: string; name: string; active: boolean; quantity: string };
@@ -105,6 +106,7 @@ function ProductPanel({ id }: { id: string }) {
       <Table responsive={false} columns={['Data', { label: 'Quantidade', end: true }, { label: 'Custo unitário', end: true }]}
         rows={stock.purchases.map(row => [by(Date.parse(row.createdAt), dateTime(row.createdAt)), by(row.quantity, amount(row.quantity)), by(row.unitCost, brl(row.unitCost))])} />
     </>}
+    <ProductFiles productId={id} edit={false} />
   </div>;
 }
 

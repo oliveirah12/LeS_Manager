@@ -497,7 +497,7 @@ export type Product = {
   id: string; sku: string; name: string; active: boolean; unit: Unit & { family: { units: Unit[] } }; quantity: string; currentCost: string | null; lastPurchaseCost: string | null;
   typeId: string; groupId: string | null; brandId: string | null; colorId: string | null; departmentId: string | null; deleteBlock?: string | null; reserved?: string; type?: { isManufactured: boolean }; hasRecipe?: boolean;
   lengthMm?: string | null; widthMm?: string | null; heightMm?: string | null; diameterMm?: string | null; purchaseUrl?: string | null;
-  measures?: { name: string; value: string; unit: string }[];
+  measures?: { name: string; value: string; unit: string }[]; fileCount?: number;
 };
 export type Kit = {
   id: string; sku: string; name: string; active: boolean; available: string; deleteBlock?: string | null;

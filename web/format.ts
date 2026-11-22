@@ -22,6 +22,11 @@ export function brl(value: string | number | null | undefined) {
 
 /** Turns an ISO date (2026-01-31) into the Brazilian order (31/01/2026). */
 export const displayDate = (value: string) => value.split('-').reverse().join('/');
+export function fileSize(bytes: number) {
+  if (bytes < 1024) return bytes + ' B';
+  const [value, unit] = bytes < 1024 * 1024 ? [bytes / 1024, 'KB'] : [bytes / (1024 * 1024), 'MB'];
+  return value.toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' ' + unit;
+}
 
 /** Mirrors the backend rule: admin sees everything, and whoever operates a module can also view it. */
 export const accessible = (permissions: string[], permission: string) => permissions.includes('admin') || permissions.includes(permission) ||
