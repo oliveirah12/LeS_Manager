@@ -13,6 +13,7 @@ import { StockService } from '../stock/stock';
 import { InputUse, resolveExpenses, suggestedExpense } from './expenses';
 import { PlanRow, planExpenses, setInputTotals, substituteInputs } from './plan';
 import { orderSale, saleFields, saleResult } from './sale';
+import { findClash, possibleClashes, scheduleFields } from './schedule';
 
 const dateField = z.iso.datetime().transform(value => new Date(value));
 export const minutesField = z.number().int().positive().max(1000000);
@@ -223,6 +224,7 @@ const orderListFields = z.object({
   sort: sortField(['start', 'number', 'printer', 'status'] as const).optional(),
 });
 type OrderSort = z.infer<typeof orderListFields>['sort'];
+const panelDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
 
 @Injectable()
 export class ProductionOrderService {
@@ -237,6 +239,18 @@ export class ProductionOrderService {
 
   private energyRate(tx: Prisma.TransactionClient) {
     return tx.productionSettings.findUniqueOrThrow({ where: { id: 'default' } }).then(settings => settings.energyRate);
+  }
+
+  /** Runs inside the serializable transaction, so two people cannot book the same time at once. */
+  private async requireFreeSlot(tx: Prisma.TransactionClient, printerId: string, start: Date, minutes: number, ignoreId?: string) {
+    const period = { start, end: new Date(start.getTime() + minutes * 60000) };
+    const orders = await tx.productionOrder.findMany({
+      where: { printerId, ...(ignoreId ? { id: { not: ignoreId } } : {}), ...possibleClashes(period) }, select: scheduleFields, orderBy: { number: 'asc' },
+    });
+    const clash = findClash(orders, period, new Date());
+    if (clash) {
+      throw new ConflictException('A impressora está ocupada pela ordem #' + clash.order.number + ', de ' + panelDate.format(clash.busy.start) + ' até ' + panelDate.format(clash.busy.end) + '.');
+    }
   }
 
   /** The start is the real one once printing began. Prisma cannot sort by that fallback, so SQL picks the page and Prisma loads it. */
@@ -290,6 +304,7 @@ export class ProductionOrderService {
     return serial(this.db, async tx => {
       const printer = await tx.printer.findUnique({ where: { id: data.printerId } });
       if (!printer?.active) throw new ConflictException('Escolha uma impressora ativa.');
+      await this.requireFreeSlot(tx, printer.id, data.plannedStart, data.estimatedMinutes);
       const payment = await this.paymentMethod(tx, data.paymentMethodId);
       const products = await tx.product.findMany({ where: { id: { in: ids } }, include: { type: true, recipe: { include: { input: true } } } });
       const items = data.items.map(item => {
@@ -345,6 +360,9 @@ export class ProductionOrderService {
       if (order.status !== 'PLANNED') throw new ConflictException('Só uma ordem planejada pode ser editada.');
       const printer = await tx.printer.findUnique({ where: { id: data.printerId } });
       if (!printer || (!printer.active && printer.id !== order.printerId)) throw new ConflictException('Escolha uma impressora ativa.');
+      // Orders saved before this rule may already overlap, and that must not stop an edit that keeps their time.
+      const moved = printer.id !== order.printerId || data.plannedStart.getTime() !== order.plannedStart.getTime() || data.estimatedMinutes !== order.estimatedMinutes;
+      if (moved) await this.requireFreeSlot(tx, printer.id, data.plannedStart, data.estimatedMinutes, order.id);
       const payment = data.paymentMethodId === undefined ? order.paymentMethod : await this.paymentMethod(tx, data.paymentMethodId, order.paymentMethodId);
       const products = await tx.product.findMany({ where: { id: { in: ids } }, include: { type: true, recipe: { include: { input: true } } } });
       const quantities = new Map(data.items.map(item => [item.productId, storedDecimal(item.quantity)]));
