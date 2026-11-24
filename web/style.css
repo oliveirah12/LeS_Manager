@@ -521,3 +521,20 @@ dialog.panel.closing::backdrop { animation: fade-out var(--fast) ease-in both; }
 .update-banner { position: fixed; top: calc(var(--topbar) + 8px); right: 16px; z-index: 40; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; max-width: calc(100vw - 32px); padding: 10px 12px; color: var(--text); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow-lg); }
 .release h3 { margin: 4px 0 8px; }
 .release ul { display: grid; gap: 6px; margin: 0; padding-left: 18px; }
+
+/* ---------- Production start calendar ---------- */
+.start-picker { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--sunken); min-width: 0; }
+.start-picker-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.start-picker-month { display: flex; align-items: center; gap: 4px; }
+.start-picker-month span { display: inline-block; min-width: 136px; text-align: center; }
+.start-picker-month span::first-letter { text-transform: uppercase; }
+.start-picker-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+.start-picker-weekday { padding: 2px 0; color: var(--muted); font-size: 12px; text-align: center; }
+.start-picker-day, .start-picker-time { min-height: 36px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease); }
+.start-picker-day:hover:not(:disabled), .start-picker-time:hover { background: var(--hover); }
+.start-picker-day:disabled { border-color: transparent; background: transparent; color: var(--muted); opacity: .55; cursor: not-allowed; }
+.start-picker-day.outside:not(:disabled) { color: var(--muted); }
+.start-picker-day.today { font-weight: 700; text-decoration: underline; }
+.start-picker-day.open { border-color: var(--brand); }
+.start-picker-day.chosen, .start-picker-time.chosen, .start-picker-time.chosen:hover { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-text); font-weight: 600; }
+.start-picker-times { display: grid; grid-template-columns: repeat(auto-fill, minmax(68px, 1fr)); gap: 4px; max-height: 176px; overflow-y: auto; }

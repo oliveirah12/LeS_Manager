@@ -5,8 +5,34 @@ const { require: load } = require('tsx/cjs/api');
 const {
   accessible, applyFilters, brl, compareDecimal, decimal, displayDate, fileSize, marginShortfall, nextSort, pageFromHash, sortParam, sortRows, suggestedConsumption, suggestedPrice, yesNo,
 } = load('../web/format.ts', __filename);
+const { freeSlots, localValue, monthDays, slotFits } = load('../web/slots.ts', __filename);
 const { Prisma } = require('@prisma/client');
 const { salePricing } = require('../dist/api/stock/cost.js');
+
+test('the calendar only offers starts where the whole print fits', () => {
+  const day = new Date(2026, 10, 24);
+  const busy = [{ number: 1, start: new Date(2026, 10, 24, 14).toISOString(), end: new Date(2026, 10, 24, 16).toISOString() }];
+  const times = freeSlots(day, 180, busy, null).map(value => value.slice(11));
+  assert.equal(times.length, 48 - 9);
+  assert.ok(times.includes('11:00') && times.includes('16:00'));
+  assert.ok(!times.includes('11:30') && !times.includes('15:30'));
+  assert.equal(freeSlots(day, 60, [], new Date(2026, 10, 24, 23, 10)).join(), '2026-11-24T23:30');
+});
+
+test('a chosen start stops fitting when the print grows or the time passes', () => {
+  const busy = [{ number: 1, start: new Date(2026, 10, 24, 14).toISOString(), end: new Date(2026, 10, 24, 16).toISOString() }];
+  const value = localValue(new Date(2026, 10, 24, 12));
+  assert.equal(slotFits(value, 120, busy, null), true);
+  assert.equal(slotFits(value, 121, busy, null), false);
+  assert.equal(slotFits(value, 60, [], new Date(2026, 10, 24, 13)), false);
+});
+
+test('the month grid has six weeks starting on Sunday', () => {
+  const days = monthDays(2026, 10);
+  assert.equal(days.length, 42);
+  assert.equal(days[0].getDay(), 0);
+  assert.ok(days.some(day => day.getMonth() === 10 && day.getDate() === 30));
+});
 
 test('file sizes are shown in the closest unit', () => {
   assert.deepEqual([512, 2048, 1536, 5 * 1024 * 1024, 100 * 1024 * 1024].map(fileSize), ['512 B', '2 KB', '1,5 KB', '5 MB', '100 MB']);
