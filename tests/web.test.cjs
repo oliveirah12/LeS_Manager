@@ -5,26 +5,29 @@ const { require: load } = require('tsx/cjs/api');
 const {
   accessible, applyFilters, brl, compareDecimal, decimal, displayDate, fileSize, marginShortfall, nextSort, pageFromHash, sortParam, sortRows, suggestedConsumption, suggestedPrice, yesNo,
 } = load('../web/format.ts', __filename);
-const { freeSlots, localValue, monthDays, slotFits } = load('../web/slots.ts', __filename);
+const { clashingPeriods, dayPeriods, localValue, monthDays } = load('../web/slots.ts', __filename);
 const { Prisma } = require('@prisma/client');
 const { salePricing } = require('../dist/api/stock/cost.js');
 
-test('the calendar only offers starts where the whole print fits', () => {
-  const day = new Date(2026, 10, 24);
-  const busy = [{ number: 1, start: new Date(2026, 10, 24, 14).toISOString(), end: new Date(2026, 10, 24, 16).toISOString() }];
-  const times = freeSlots(day, 180, busy, null).map(value => value.slice(11));
-  assert.equal(times.length, 48 - 9);
-  assert.ok(times.includes('11:00') && times.includes('16:00'));
-  assert.ok(!times.includes('11:30') && !times.includes('15:30'));
-  assert.equal(freeSlots(day, 60, [], new Date(2026, 10, 24, 23, 10)).join(), '2026-11-24T23:30');
+const period = (number, start, end) => ({ number, start: start.toISOString(), end: end.toISOString() });
+
+test('a day lists what holds the printer, including prints that cross midnight', () => {
+  const night = period(1, new Date(2026, 10, 23, 22), new Date(2026, 10, 24, 6));
+  const afternoon = period(2, new Date(2026, 10, 24, 14), new Date(2026, 10, 24, 16));
+  const nextDay = period(3, new Date(2026, 10, 25, 0), new Date(2026, 10, 25, 2));
+  assert.deepEqual(dayPeriods(new Date(2026, 10, 24), [night, afternoon, nextDay]).map(row => row.number), [1, 2]);
 });
 
-test('a chosen start stops fitting when the print grows or the time passes', () => {
-  const busy = [{ number: 1, start: new Date(2026, 10, 24, 14).toISOString(), end: new Date(2026, 10, 24, 16).toISOString() }];
-  const value = localValue(new Date(2026, 10, 24, 12));
-  assert.equal(slotFits(value, 120, busy, null), true);
-  assert.equal(slotFits(value, 121, busy, null), false);
-  assert.equal(slotFits(value, 60, [], new Date(2026, 10, 24, 13)), false);
+test('any minute is a valid start unless the print touches a busy period', () => {
+  const first = period(1, new Date(2026, 10, 24, 14), new Date(2026, 10, 24, 16));
+  const second = period(2, new Date(2026, 10, 24, 17), new Date(2026, 10, 24, 18));
+  const at = (hour, minute) => localValue(new Date(2026, 10, 24, hour, minute));
+  assert.deepEqual(clashingPeriods(at(11, 17), 163, [first, second]), []);
+  assert.deepEqual(clashingPeriods(at(11, 17), 164, [first, second]).map(row => row.number), [1]);
+  assert.deepEqual(clashingPeriods(at(16, 0), 60, [first, second]), []);
+  assert.deepEqual(clashingPeriods(at(15, 59), 120, [first, second]).map(row => row.number), [1, 2]);
+  assert.deepEqual(clashingPeriods(at(14, 0), 0, [first]).map(row => row.number), [1]);
+  assert.deepEqual(clashingPeriods('', 60, [first]), []);
 });
 
 test('the month grid has six weeks starting on Sunday', () => {
