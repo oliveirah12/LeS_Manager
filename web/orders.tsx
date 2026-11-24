@@ -1,10 +1,11 @@
-import { useState } from 'react';
-import { CheckCircle2, Eye, Pencil, Play, Plus, Wrench, X } from 'lucide-react';
-import { decimal, suggestedConsumption } from './format';
+import { useEffect, useId, useRef, useState } from 'react';
+import { CheckCircle2, ChevronDown, Eye, FileText, Pencil, Play, Plus, Wrench, X } from 'lucide-react';
+import { decimal, duration, productsSummary, suggestedConsumption } from './format';
 import { CorrectOrder, RevisionHistory } from './order-correction';
 import { OrderForm } from './order-form';
+import { OrderPdf } from './order-pdf';
 import {
-  api, Badge, brl, by, dateTime, Field, Form, Loading, message, Modal, ModalForm, notify, PageActions, quantity, Select, sortParam, SortState, Table, Title, useClosePanel, useData,
+  api, Badge, brl, by, dateTime, Field, Filters, Form, Loading, message, Modal, ModalForm, notify, PageActions, quantity, SearchInput, Select, sortParam, SortState, Table, Title, useClosePanel, useData,
 } from './ui';
 
 type Status = 'PLANNED' | 'PRINTING' | 'DONE' | 'CANCELED';
@@ -32,7 +33,7 @@ type Budget = {
   items: { productId: string; totalCost: string; unitCost: string; suggestedPrice: string | null; belowTargetMargin: boolean }[];
 };
 export type OrdersView = {
-  orders: Order[]; page: number; pageSize: number; total: number; printers: { id: string; name: string }[];
+  orders: Order[]; page: number; pageSize: number; total: number; printers: { id: string; name: string }[]; filterPrinters: { id: string; name: string }[];
   paymentMethods: { id: string; name: string; feePercent: string | null }[];
   inputs: { id: string; sku: string; name: string; symbol: string; familyId: string }[];
   products: { id: string; sku: string; name: string; symbol: string; salePrice?: string | null; marginPercent?: string | null }[];
@@ -43,21 +44,85 @@ type Preview = {
   printMinutes: number; machineCost?: string; expenseCost?: string; totalCost?: string; lossCost?: string; partialCost?: boolean; items: PreviewItem[];
   sale: (SaleValues & { feePercent: string; paymentName: string | null }) | null;
 };
-type Dialog = { kind: 'new' } | { kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct'; order: Order };
+type OrderDialog = 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct' | 'pdf';
+type Dialog = { kind: 'new' } | { kind: OrderDialog; order: Order };
 
 const statuses: Record<Status, { name: string; tone?: 'ok' | 'warn' | 'brand' }> = {
   PLANNED: { name: 'Planejada' }, PRINTING: { name: 'Em impressão', tone: 'brand' }, DONE: { name: 'Concluída', tone: 'ok' }, CANCELED: { name: 'Cancelada', tone: 'warn' },
 };
+const statusOptions = (Object.keys(statuses) as Status[]).map(id => ({ id, name: statuses[id].name }));
 const newestFirst = { key: 'start', direction: 'desc' } as const;
 const localValue = (date = new Date()) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 const iso = (value: FormDataEntryValue | null) => new Date(String(value)).toISOString();
-const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60 ? (minutes % 60) + ' min' : minutes >= 60 ? '' : '0 min');
+
+/** A short line that opens, in place, what each product of the order is. */
+function OrderProducts({ order }: { order: Order }) {
+  const [open, setOpen] = useState(false);
+  const list = useId();
+  return <div className={'order-products' + (open ? ' open' : '')}>
+    <button type="button" className="order-products-toggle" aria-expanded={open} aria-controls={list}
+      aria-label={(open ? 'Ocultar' : 'Mostrar') + ' produtos da ordem ' + order.number + ': ' + productsSummary(order.items)} onClick={() => setOpen(!open)}>
+      <span>{productsSummary(order.items)}</span><ChevronDown size={15} aria-hidden="true" />
+    </button>
+    <ul id={list} hidden={!open}>
+      {order.items.map(item => <li key={item.productId}>
+        <Title name={item.name} code={item.sku} />
+        <span className="order-product-values">
+          <span>{quantity(item.planned)} {item.symbol}</span>
+          <span>Preço: {item.salePrice === null ? '—' : brl(item.salePrice)}</span>
+          {item.good !== null && <span>Boas: {quantity(item.good)}</span>}
+          {item.lost !== null && <span>Perdidas: {quantity(item.lost)}</span>}
+        </span>
+      </li>)}
+    </ul>
+  </div>;
+}
+
+/** The next step of the order keeps its name, and the rest are icons in fixed places so the rows line up. */
+function OrderActions({ order, edit, correct, open }: {
+  order: Order; edit: boolean; correct: boolean; open: (kind: OrderDialog, order: Order) => void;
+}) {
+  const next = edit && order.status === 'PLANNED' ? { kind: 'start', label: 'Iniciar', Icon: Play } as const
+    : edit && order.status === 'PRINTING' ? { kind: 'finish', label: 'Concluir', Icon: CheckCircle2 } as const
+    : correct && order.status === 'DONE' ? { kind: 'correct', label: 'Corrigir', Icon: Wrench } as const : null;
+  const cancelable = edit && (order.status === 'PLANNED' || order.status === 'PRINTING');
+  const side = (kind: 'details' | 'pdf' | 'edit' | 'cancel', label: string, Icon: typeof Eye) => <button type="button" className={'btn ghost small order-action ' + kind} title={label}
+    aria-label={label + ' ordem ' + order.number} onClick={() => open(kind, order)}><Icon size={16} aria-hidden="true" /><span className="order-action-label">{label}</span></button>;
+  return <div className="order-actions">
+    {next && <button type="button" className="btn secondary small order-action-next" aria-label={next.label + ' ordem ' + order.number} onClick={() => open(next.kind, order)}>
+      <next.Icon size={15} aria-hidden="true" />{next.label}</button>}
+    {side('details', 'Ver', Eye)}
+    {side('pdf', 'PDF', FileText)}
+    {edit && order.status === 'PLANNED' && side('edit', 'Editar', Pencil)}
+    {cancelable && side('cancel', 'Cancelar', X)}
+  </div>;
+}
 
 export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; correct: boolean; seeCosts: boolean }) {
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>(newestFirst);
-  const query = new URLSearchParams({ page: String(page), sort: sortParam(sort)! });
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [filtersForm, setFiltersForm] = useState(0);
+  const [typed, setTyped] = useState('');
+  const [search, setSearch] = useState('');
+  // Waits for a pause in the typing, so the server is not asked once per letter.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (typed.trim() === search) return;
+      setSearch(typed.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [typed, search]);
+  const query = new URLSearchParams({ page: String(page), sort: sortParam(sort)!, ...filters, ...(search ? { search } : {}) });
   const { data, error, loading, reload } = useData<OrdersView>('production/orders?' + query);
+  // The list reloads with each filter, and the form must stay on screen with what was typed.
+  const printerOptions = useRef<OrdersView['filterPrinters']>([]);
+  if (data) printerOptions.current = data.filterPrinters;
+  const applyFilters = (values: Record<string, string>) => {
+    setFilters(Object.fromEntries(Object.entries(values).filter(([, value]) => value)));
+    setPage(1);
+  };
   const [dialog, setDialog] = useState<Dialog>();
   async function done(text: string) {
     notify(text);
@@ -65,18 +130,29 @@ export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; c
   }
   /** Returns to the default view, where the newest starts are on the first page. */
   async function created(text: string) {
-    if (page === 1 && sort?.key === newestFirst.key && sort.direction === newestFirst.direction) return done(text);
+    if (page === 1 && sort?.key === newestFirst.key && sort.direction === newestFirst.direction && !Object.keys(filters).length && !typed) return done(text);
     notify(text);
     setDialog(undefined);
     setPage(1);
     setSort(newestFirst);
+    setFilters({});
+    setFiltersForm(version => version + 1);
+    setTyped('');
+    setSearch('');
   }
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
-  const open = (kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct', order: Order) => setDialog({ kind, order });
+  const open = (kind: OrderDialog, order: Order) => setDialog({ kind, order });
   return <>
     {edit && <PageActions><button type="button" className="btn" onClick={() => setDialog({ kind: 'new' })}><Plus size={16} aria-hidden="true" />Nova ordem</button></PageActions>}
+    <div className="toolbar"><SearchInput value={typed} onChange={setTyped} label="Buscar ordens" placeholder="Buscar por produto, SKU ou nº da ordem" /></div>
+    <Filters key={filtersForm} active={Object.keys(filters).length} apply={applyFilters} clear={() => applyFilters({})}>
+      <Select name="status" label="Situação" required={false} placeholder="Todas" options={statusOptions} />
+      <Select name="printerId" label="Impressora" required={false} placeholder="Todas" options={printerOptions.current} />
+      <Field name="from" label="Início de" type="date" required={false} />
+      <Field name="to" label="Início até" type="date" required={false} />
+    </Filters>
     {message(error)}
-    {!data ? loading && <Loading label="Carregando ordens…" /> : <Table empty="Nenhuma ordem de produção."
+    {!data ? loading && <Loading label="Carregando ordens…" /> : <Table empty={search || Object.keys(filters).length ? 'Nenhuma ordem encontrada.' : 'Nenhuma ordem de produção.'}
       sort={sort} onSort={next => { setSort(next ?? (sort?.key === newestFirst.key ? { key: newestFirst.key, direction: 'asc' } : newestFirst)); setPage(1); }}
       footer={pages > 1 && <>
         <span>Página {data.page} de {pages} · {data.total} ordens</span>
@@ -89,21 +165,13 @@ export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; c
         ...(seeCosts ? [{ label: 'Custo', end: true }] : []), { label: 'Ações', actions: true }]}
       rows={data.orders.map(order => [
         <span className="cell-title">#{order.number}</span>,
-        <span>{order.items.map(item => quantity(item.planned) + ' ' + item.symbol + ' ' + item.sku).join(' · ')}</span>,
+        <OrderProducts key={order.id} order={order} />,
         order.printer.name, <Badge tone={statuses[order.status].tone}>{statuses[order.status].name}</Badge>,
         <span className="muted">{dateTime(order.startedAt ?? order.plannedStart)}</span>,
         <span className="muted">{dateTime(order.finishedAt ?? order.expectedEnd)}</span>,
         ...(seeCosts ? [order.budget ? <span title="Estimativa com os custos atuais. Nada é congelado até concluir.">≈ {brl(order.budget.totalCost)}
           <span className="hint" style={{ display: 'block' }}>{order.budget.partialCost ? 'Orçamento parcial' : 'Orçamento'}</span></span> : brl(order.totalCost)] : []),
-        <div className="actions">
-          <button type="button" className="btn ghost small" aria-label={'Ver ordem ' + order.number} onClick={() => open('details', order)}><Eye size={14} aria-hidden="true" />Ver</button>
-          {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" aria-label={'Editar ordem ' + order.number} onClick={() => open('edit', order)}><Pencil size={14} aria-hidden="true" />Editar</button>}
-          {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" onClick={() => open('start', order)}><Play size={14} aria-hidden="true" />Iniciar</button>}
-          {edit && order.status === 'PRINTING' && <button type="button" className="btn secondary small" onClick={() => open('finish', order)}><CheckCircle2 size={14} aria-hidden="true" />Concluir</button>}
-          {correct && order.status === 'DONE' && <button type="button" className="btn secondary small" aria-label={'Corrigir ordem ' + order.number} onClick={() => open('correct', order)}><Wrench size={14} aria-hidden="true" />Corrigir</button>}
-          {edit && (order.status === 'PLANNED' || order.status === 'PRINTING') &&
-            <button type="button" className="btn ghost small" onClick={() => open('cancel', order)}><X size={14} aria-hidden="true" />Cancelar</button>}
-        </div>,
+        <OrderActions order={order} edit={edit} correct={correct} open={open} />,
       ])} />}
 
     {data && dialog?.kind === 'new' && <Modal wide title="Nova ordem de produção" close={() => setDialog(undefined)}><OrderForm view={data} seeCosts={seeCosts} done={created} /></Modal>}
@@ -136,6 +204,7 @@ export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; c
       <CorrectOrder order={dialog.order} view={data} seeCosts={seeCosts} done={done} /></Modal>}
     {dialog?.kind === 'details' && <Modal wide title={'Ordem #' + dialog.order.number} subtitle={statuses[dialog.order.status].name} close={() => setDialog(undefined)}>
       <OrderDetails order={dialog.order} seeCosts={seeCosts} /></Modal>}
+    {dialog?.kind === 'pdf' && <OrderPdf order={dialog.order} statusName={statuses[dialog.order.status].name} seeCosts={seeCosts} close={() => setDialog(undefined)} />}
   </>;
 }
 

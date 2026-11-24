@@ -25,7 +25,6 @@ const order = (status = 'PRINTING') => ({
 const sensitive = /cost|energyRate|powerWatts/i;
 function service(stored) {
   const db = {
-    $queryRaw: async () => [{ id: stored.id }],
     productionOrder: { findUnique: async () => stored, findMany: async () => [stored], count: async () => 1 },
     productionSettings: { findUniqueOrThrow: async () => ({ energyRate: d(1) }) },
     printer: { findMany: async () => [] }, product: { findMany: async () => [] }, paymentMethod: { findMany: async () => [] },

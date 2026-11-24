@@ -10,6 +10,30 @@ export function decimal(value: string | null | undefined) {
   return sign + grouped + (trimmed ? ',' + trimmed : '');
 }
 export const quantity = decimal;
+/** Adds decimal strings with BigInt on the 12 places the database keeps, so a total never picks up a floating-point residue. */
+function exactSum(values: string[]) {
+  const total = values.reduce((sum, value) => {
+    const [integer, fraction = ''] = value.split('.');
+    return sum + BigInt(integer + fraction.padEnd(12, '0').slice(0, 12));
+  }, 0n).toString().padStart(13, '0');
+  return total.slice(0, -12) + '.' + total.slice(-12);
+}
+/** One line for the products of an order. Units are only added when they are all the same. */
+export function productsSummary(items: { sku: string; symbol: string; planned: string }[]) {
+  if (items.length === 1) return decimal(items[0].planned) + ' ' + items[0].symbol + ' ' + items[0].sku;
+  const sameUnit = items.every(item => item.symbol === items[0].symbol);
+  return items.length + ' produtos' + (sameUnit ? ' · ' + decimal(exactSum(items.map(item => item.planned))) + ' ' + items[0].symbol : '');
+}
+export const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60 ? (minutes % 60) + ' min' : minutes >= 60 ? '' : '0 min');
+
+/** Costs keep 12 places in the database. Reading them needs far fewer, so a residue of the division never looks like a change. */
+const readable = (text: string) => text.replace(/\d+\.\d{7,}/g, number => String(Number(Number(number).toFixed(6))));
+const shownValue = (value: unknown) => value === null || value === undefined || value === '' ? '—' : readable(Array.isArray(value) ? value.join(' · ') || '—' : String(value));
+/** Field, before and after for what a technical correction changed. */
+export function revisionChanges(before: Record<string, unknown>, after: Record<string, unknown>) {
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+    .map(key => [key, shownValue(before[key]), shownValue(after[key])] as [string, string, string]);
+}
 
 const currency = (digits: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: digits });
 /** Money in reais. Small unit costs keep up to four decimals so per-gram costs stay readable. */

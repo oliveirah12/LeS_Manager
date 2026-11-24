@@ -867,6 +867,31 @@ test('API REST com PostgreSQL', {
     assert.equal(editing.some(row => row.number === later.number), false);
     expectStatus(await agenda(admin, { to: window.from }), 400);
     expectStatus(await agenda(admin, { to: '2099-06-01T00:00:00.000Z' }), 400);
+
+    // Filters combine, and the total follows them so the pagination stays right.
+    const filtered = async values => expectStatus(await admin('/production/orders?' + new URLSearchParams({ printerId: printer.id, ...values })), 200);
+    const running = await filtered({ status: 'PRINTING' });
+    assert.deepEqual([running.orders.map(row => row.id), running.total], [[order.id], 1]);
+    const firstDay = await filtered({ from: '2099-01-01', to: '2099-01-01' });
+    assert.deepEqual([firstDay.orders.map(row => row.id), firstDay.total], [[earlier.id], 1]);
+    assert.equal((await filtered({ status: 'DONE' })).total, 0);
+    assert.equal((await filtered({ status: '', from: '', to: '' })).total, 5);
+    assert.ok(running.filterPrinters.some(row => row.id === printer.id));
+    expectStatus(await admin('/production/orders?status=OUTRA'), 400);
+    expectStatus(await admin('/production/orders?from=2099-01-02&to=2099-01-01'), 400);
+
+    // The search finds an order by SKU, by product name without accents, or by its number.
+    const found = async search => (await filtered({ search })).orders.map(row => row.id);
+    assert.deepEqual(await found(piece.sku.toLowerCase()), [order.id]);
+    const accentedName = 'Ação ' + sku('BUSCA');
+    await db.product.update({ where: { id: piece.id }, data: { name: accentedName } });
+    assert.deepEqual(await found(accentedName.replace('Ação', 'acao')), [order.id]);
+    // Plain digits may also match a SKU, while the # asks for the number alone.
+    assert.ok((await found(String(later.number))).includes(later.id));
+    assert.deepEqual(await found('#' + earlier.number), [earlier.id]);
+    assert.deepEqual(await found('%'), []);
+    assert.deepEqual((await filtered({ search: piece.sku, status: 'PLANNED' })).orders, []);
+    expectStatus(await admin('/production/orders?search=' + 'x'.repeat(121)), 400);
   });
 
   await t.test('correção técnica compensa por diferença e preserva o histórico', async () => {

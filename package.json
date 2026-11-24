@@ -1,6 +1,6 @@
 {
   "name": "les-manager",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "engines": {
     "node": ">=22.18"
@@ -27,6 +27,7 @@
     "exceljs": "^4.4.0",
     "lucide-react": "1.64.0",
     "multer": "^2.4.0",
+    "pdf-lib": "1.17.1",
     "prisma": "^6.19.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
