@@ -6,6 +6,18 @@ export type Release = { version: string; date: string; title: string; changes: s
  */
 export const releases: Release[] = [
   {
+    version: '0.4.0',
+    date: '2026-11-24',
+    title: 'Busca, filtros e PDF das ordens de produção',
+    changes: [
+      'Busque ordens pelo nome do produto, pelo SKU ou pelo número da ordem.',
+      'Filtre a lista por situação, impressora e período de início.',
+      'Cada ordem gera um PDF completo, que pode ser visto no app, baixado ou compartilhado.',
+      'A coluna de produtos mostra um resumo e abre os detalhes de cada item na própria lista.',
+      'Os botões das ordens foram reorganizados para computador, tablet e celular.',
+    ],
+  },
+  {
     version: '0.3.1',
     date: '2026-11-24',
     title: 'Agenda do dia na ordem de produção',
