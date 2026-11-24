@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { CheckCircle2, Eye, Pencil, Play, Plus, Wrench, X } from 'lucide-react';
 import { decimal, suggestedConsumption } from './format';
 import { CorrectOrder, RevisionHistory } from './order-correction';
 import { OrderForm } from './order-form';
 import {
-  api, Badge, brl, by, dateTime, Field, Form, Loading, message, Modal, ModalForm, notify, PageActions, quantity, Select, sortParam, SortState, Table, Title, useClosePanel, useData,
+  api, Badge, brl, by, dateTime, Field, Filters, Form, Loading, message, Modal, ModalForm, notify, PageActions, quantity, Select, sortParam, SortState, Table, Title, useClosePanel, useData,
 } from './ui';
 
 type Status = 'PLANNED' | 'PRINTING' | 'DONE' | 'CANCELED';
@@ -32,7 +32,7 @@ type Budget = {
   items: { productId: string; totalCost: string; unitCost: string; suggestedPrice: string | null; belowTargetMargin: boolean }[];
 };
 export type OrdersView = {
-  orders: Order[]; page: number; pageSize: number; total: number; printers: { id: string; name: string }[];
+  orders: Order[]; page: number; pageSize: number; total: number; printers: { id: string; name: string }[]; filterPrinters: { id: string; name: string }[];
   paymentMethods: { id: string; name: string; feePercent: string | null }[];
   inputs: { id: string; sku: string; name: string; symbol: string; familyId: string }[];
   products: { id: string; sku: string; name: string; symbol: string; salePrice?: string | null; marginPercent?: string | null }[];
@@ -48,6 +48,7 @@ type Dialog = { kind: 'new' } | { kind: 'edit' | 'start' | 'finish' | 'cancel' |
 const statuses: Record<Status, { name: string; tone?: 'ok' | 'warn' | 'brand' }> = {
   PLANNED: { name: 'Planejada' }, PRINTING: { name: 'Em impressão', tone: 'brand' }, DONE: { name: 'Concluída', tone: 'ok' }, CANCELED: { name: 'Cancelada', tone: 'warn' },
 };
+const statusOptions = (Object.keys(statuses) as Status[]).map(id => ({ id, name: statuses[id].name }));
 const newestFirst = { key: 'start', direction: 'desc' } as const;
 const localValue = (date = new Date()) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 const iso = (value: FormDataEntryValue | null) => new Date(String(value)).toISOString();
@@ -56,8 +57,17 @@ const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) 
 export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; correct: boolean; seeCosts: boolean }) {
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>(newestFirst);
-  const query = new URLSearchParams({ page: String(page), sort: sortParam(sort)! });
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [filtersForm, setFiltersForm] = useState(0);
+  const query = new URLSearchParams({ page: String(page), sort: sortParam(sort)!, ...filters });
   const { data, error, loading, reload } = useData<OrdersView>('production/orders?' + query);
+  // The list reloads with each filter, and the form must stay on screen with what was typed.
+  const printerOptions = useRef<OrdersView['filterPrinters']>([]);
+  if (data) printerOptions.current = data.filterPrinters;
+  const applyFilters = (values: Record<string, string>) => {
+    setFilters(Object.fromEntries(Object.entries(values).filter(([, value]) => value)));
+    setPage(1);
+  };
   const [dialog, setDialog] = useState<Dialog>();
   async function done(text: string) {
     notify(text);
@@ -65,18 +75,26 @@ export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; c
   }
   /** Returns to the default view, where the newest starts are on the first page. */
   async function created(text: string) {
-    if (page === 1 && sort?.key === newestFirst.key && sort.direction === newestFirst.direction) return done(text);
+    if (page === 1 && sort?.key === newestFirst.key && sort.direction === newestFirst.direction && !Object.keys(filters).length) return done(text);
     notify(text);
     setDialog(undefined);
     setPage(1);
     setSort(newestFirst);
+    setFilters({});
+    setFiltersForm(version => version + 1);
   }
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   const open = (kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct', order: Order) => setDialog({ kind, order });
   return <>
     {edit && <PageActions><button type="button" className="btn" onClick={() => setDialog({ kind: 'new' })}><Plus size={16} aria-hidden="true" />Nova ordem</button></PageActions>}
+    <Filters key={filtersForm} active={Object.keys(filters).length} apply={applyFilters} clear={() => applyFilters({})}>
+      <Select name="status" label="Situação" required={false} placeholder="Todas" options={statusOptions} />
+      <Select name="printerId" label="Impressora" required={false} placeholder="Todas" options={printerOptions.current} />
+      <Field name="from" label="Início de" type="date" required={false} />
+      <Field name="to" label="Início até" type="date" required={false} />
+    </Filters>
     {message(error)}
-    {!data ? loading && <Loading label="Carregando ordens…" /> : <Table empty="Nenhuma ordem de produção."
+    {!data ? loading && <Loading label="Carregando ordens…" /> : <Table empty={Object.keys(filters).length ? 'Nenhuma ordem com estes filtros.' : 'Nenhuma ordem de produção.'}
       sort={sort} onSort={next => { setSort(next ?? (sort?.key === newestFirst.key ? { key: newestFirst.key, direction: 'asc' } : newestFirst)); setPage(1); }}
       footer={pages > 1 && <>
         <span>Página {data.page} de {pages} · {data.total} ordens</span>

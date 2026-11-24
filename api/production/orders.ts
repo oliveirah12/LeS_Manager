@@ -1,13 +1,13 @@
 import {
   BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Patch, Post, Query, Req,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, ProductionStatus } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
 import { canAccess } from '../access/security';
 import { Audit, auditChange, auditContext } from '../audit/recorder';
 import { marginField, productInclude } from '../catalog/catalog';
-import { Database, idField, nonnegative, parse, positive, serial, sortField, storedDecimal } from '../shared';
+import { Database, dayRange, idField, nonnegative, parse, positive, serial, sortField, storedDecimal } from '../shared';
 import { printerHourCost, productionBudget, productionCosting, salePricing, sumValues } from '../stock/cost';
 import { StockService } from '../stock/stock';
 import { InputUse, resolveExpenses, suggestedExpense } from './expenses';
@@ -219,11 +219,24 @@ const planValues = (order: LoadedOrder) => ({
 });
 
 const orderPageSize = 50;
+const filterField = <T extends z.ZodType>(field: T) => z.preprocess(value => value === '' ? undefined : value, field.optional());
 const orderListFields = z.object({
   page: z.coerce.number().int().min(1).max(1_000_000).default(1),
   sort: sortField(['start', 'number', 'printer', 'status'] as const).optional(),
-});
-type OrderSort = z.infer<typeof orderListFields>['sort'];
+  status: filterField(z.enum(ProductionStatus)), printerId: filterField(idField),
+  from: filterField(z.iso.date()), to: filterField(z.iso.date()),
+}).refine(({ from, to }) => !from || !to || from <= to, 'O início do período não pode ser depois do fim');
+type OrderList = z.infer<typeof orderListFields>;
+type OrderSort = OrderList['sort'];
+
+/** The period follows the same start the list shows: the real one once printing began. */
+function orderWhere({ status, printerId, from, to }: OrderList): Prisma.ProductionOrderWhereInput {
+  const start = dayRange(from, to);
+  return {
+    ...(status ? { status } : {}), ...(printerId ? { printerId } : {}),
+    ...(start ? { OR: [{ startedAt: start }, { startedAt: null, plannedStart: start }] } : {}),
+  };
+}
 const panelDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
 const maxScheduleDays = 62;
 export const scheduleQuery = z.object({
@@ -266,28 +279,33 @@ export class ProductionOrderService {
     }
   }
 
-  /** The start is the real one once printing began. Prisma cannot sort by that fallback, so SQL picks the page and Prisma loads it. */
-  private async ordersPage(page: number, sort: OrderSort) {
+  /** The start is the real one once printing began. Prisma cannot sort by that fallback, so only the dates are read to pick the page. */
+  private async ordersPage(page: number, sort: OrderSort, where: Prisma.ProductionOrderWhereInput) {
     const skip = (page - 1) * orderPageSize;
     if (sort && sort.key !== 'start') {
       const orderBy: Prisma.ProductionOrderOrderByWithRelationInput[] = sort.key === 'number' ? [{ number: sort.direction }]
         : [sort.key === 'printer' ? { printer: { name: sort.direction } } : { status: sort.direction }, { number: 'desc' }];
-      return this.db.productionOrder.findMany({ include: orderInclude, orderBy, skip, take: orderPageSize });
+      return this.db.productionOrder.findMany({ where, include: orderInclude, orderBy, skip, take: orderPageSize });
     }
-    const direction = sort?.direction === 'asc' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
-    const rows = await this.db.$queryRaw<{ id: string }[]>`SELECT "id" FROM "ProductionOrder"
-      ORDER BY COALESCE("startedAt", "plannedStart") ${direction}, "number" DESC LIMIT ${orderPageSize} OFFSET ${skip}`;
-    const orders = await this.db.productionOrder.findMany({ where: { id: { in: rows.map(row => row.id) } }, include: orderInclude });
+    const sign = sort?.direction === 'asc' ? 1 : -1;
+    const startOf = (row: { startedAt: Date | null; plannedStart: Date }) => (row.startedAt ?? row.plannedStart).getTime();
+    const dates = await this.db.productionOrder.findMany({ where, select: { id: true, number: true, startedAt: true, plannedStart: true } });
+    const ids = dates.sort((a, b) => sign * (startOf(a) - startOf(b)) || b.number - a.number).slice(skip, skip + orderPageSize).map(row => row.id);
+    const orders = await this.db.productionOrder.findMany({ where: { id: { in: ids } }, include: orderInclude });
     const byId = new Map(orders.map(order => [order.id, order]));
-    return rows.flatMap(row => byId.get(row.id) ?? []);
+    return ids.flatMap(id => byId.get(id) ?? []);
   }
 
-  async overview({ page, sort }: z.infer<typeof orderListFields>, seeCosts: boolean) {
-    const [energyRate, orders, total, printers, products, paymentMethods, inputs] = await Promise.all([
+  async overview(filters: OrderList, seeCosts: boolean) {
+    const { page, sort } = filters;
+    const where = orderWhere(filters);
+    const [energyRate, orders, total, printers, filterPrinters, products, paymentMethods, inputs] = await Promise.all([
       this.energyRate(this.db),
-      this.ordersPage(page, sort),
-      this.db.productionOrder.count(),
+      this.ordersPage(page, sort, where),
+      this.db.productionOrder.count({ where }),
       this.db.printer.findMany({ where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+      // An inactive printer leaves the form, but its past orders can still be looked up.
+      this.db.printer.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
       this.db.product.findMany({
         where: { active: true, type: { isManufactured: true }, recipe: { some: {} } },
         select: { id: true, sku: true, name: true, salePrice: true, marginPercent: true, ...productInclude }, orderBy: { sku: 'asc' },
@@ -302,7 +320,7 @@ export class ProductionOrderService {
         const budget = seeCosts ? orderBudget(order, energyRate) : null;
         return { ...presentOrder(order, seeCosts, budget?.totalCost ?? null), budget };
       }),
-      page, pageSize: orderPageSize, total, printers, paymentMethods,
+      page, pageSize: orderPageSize, total, printers, filterPrinters, paymentMethods,
       inputs: inputs.map(input => ({ id: input.id, sku: input.sku, name: input.name, symbol: symbolOf(input), familyId: input.unit.familyId })),
       products: products.map(product => ({
         id: product.id, sku: product.sku, name: product.name, symbol: symbolOf(product),

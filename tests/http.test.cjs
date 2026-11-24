@@ -867,6 +867,18 @@ test('API REST com PostgreSQL', {
     assert.equal(editing.some(row => row.number === later.number), false);
     expectStatus(await agenda(admin, { to: window.from }), 400);
     expectStatus(await agenda(admin, { to: '2099-06-01T00:00:00.000Z' }), 400);
+
+    // Filters combine, and the total follows them so the pagination stays right.
+    const filtered = async values => expectStatus(await admin('/production/orders?' + new URLSearchParams({ printerId: printer.id, ...values })), 200);
+    const running = await filtered({ status: 'PRINTING' });
+    assert.deepEqual([running.orders.map(row => row.id), running.total], [[order.id], 1]);
+    const firstDay = await filtered({ from: '2099-01-01', to: '2099-01-01' });
+    assert.deepEqual([firstDay.orders.map(row => row.id), firstDay.total], [[earlier.id], 1]);
+    assert.equal((await filtered({ status: 'DONE' })).total, 0);
+    assert.equal((await filtered({ status: '', from: '', to: '' })).total, 5);
+    assert.ok(running.filterPrinters.some(row => row.id === printer.id));
+    expectStatus(await admin('/production/orders?status=OUTRA'), 400);
+    expectStatus(await admin('/production/orders?from=2099-01-02&to=2099-01-01'), 400);
   });
 
   await t.test('correção técnica compensa por diferença e preserva o histórico', async () => {
