@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
+import { revisionChanges } from './format';
 import type { Order, OrdersView } from './orders';
 import { api, brl, by, dateTime, Field, Form, Loading, message, quantity, Select, Table, Title, useClosePanel, useData } from './ui';
 
@@ -23,14 +24,10 @@ const plain = (value: string | null | undefined) => {
   return text.includes('.') ? text.replace(/0+$/, '').replace(/\.$/, '') : text;
 };
 const changed = (value: string, current: string | null | undefined) => plain(value) !== plain(current);
-/** Costs keep 12 places in the database. Reading them needs far fewer, so a residue of the division never looks like a change. */
-const readable = (text: string) => text.replace(/\d+\.\d{7,}/g, number => String(Number(Number(number).toFixed(6))));
-const shown = (value: unknown) => value === null || value === undefined || value === '' ? '—' : readable(Array.isArray(value) ? value.join(' · ') || '—' : String(value));
 
 function Differences({ before, after }: { before: Values; after: Values }) {
-  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
   return <Table responsive={false} empty="Nenhum valor visível mudou." columns={['Campo', 'Antes', 'Depois']}
-    rows={keys.map(key => [key, shown(before[key]), <strong>{shown(after[key])}</strong>])} />;
+    rows={revisionChanges(before, after).map(([key, old, next]) => [key, old, <strong>{next}</strong>])} />;
 }
 
 export function CorrectOrder({ order, view, seeCosts, done }: { order: Order; view: OrdersView; seeCosts: boolean; done: (text: string) => Promise<void> }) {

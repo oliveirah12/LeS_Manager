@@ -10,6 +10,16 @@ export function decimal(value: string | null | undefined) {
   return sign + grouped + (trimmed ? ',' + trimmed : '');
 }
 export const quantity = decimal;
+export const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60 ? (minutes % 60) + ' min' : minutes >= 60 ? '' : '0 min');
+
+/** Costs keep 12 places in the database. Reading them needs far fewer, so a residue of the division never looks like a change. */
+const readable = (text: string) => text.replace(/\d+\.\d{7,}/g, number => String(Number(Number(number).toFixed(6))));
+const shownValue = (value: unknown) => value === null || value === undefined || value === '' ? '—' : readable(Array.isArray(value) ? value.join(' · ') || '—' : String(value));
+/** Field, before and after for what a technical correction changed. */
+export function revisionChanges(before: Record<string, unknown>, after: Record<string, unknown>) {
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+    .map(key => [key, shownValue(before[key]), shownValue(after[key])] as [string, string, string]);
+}
 
 const currency = (digits: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: digits });
 /** Money in reais. Small unit costs keep up to four decimals so per-gram costs stay readable. */

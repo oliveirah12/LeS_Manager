@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Eye, Pencil, Play, Plus, Wrench, X } from 'lucide-react';
-import { decimal, suggestedConsumption } from './format';
+import { CheckCircle2, Eye, FileText, Pencil, Play, Plus, Wrench, X } from 'lucide-react';
+import { decimal, duration, suggestedConsumption } from './format';
 import { CorrectOrder, RevisionHistory } from './order-correction';
 import { OrderForm } from './order-form';
+import { OrderPdf } from './order-pdf';
 import {
   api, Badge, brl, by, dateTime, Field, Filters, Form, Loading, message, Modal, ModalForm, notify, PageActions, quantity, SearchInput, Select, sortParam, SortState, Table, Title, useClosePanel, useData,
 } from './ui';
@@ -43,7 +44,8 @@ type Preview = {
   printMinutes: number; machineCost?: string; expenseCost?: string; totalCost?: string; lossCost?: string; partialCost?: boolean; items: PreviewItem[];
   sale: (SaleValues & { feePercent: string; paymentName: string | null }) | null;
 };
-type Dialog = { kind: 'new' } | { kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct'; order: Order };
+type OrderDialog = 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct' | 'pdf';
+type Dialog = { kind: 'new' } | { kind: OrderDialog; order: Order };
 
 const statuses: Record<Status, { name: string; tone?: 'ok' | 'warn' | 'brand' }> = {
   PLANNED: { name: 'Planejada' }, PRINTING: { name: 'Em impressão', tone: 'brand' }, DONE: { name: 'Concluída', tone: 'ok' }, CANCELED: { name: 'Cancelada', tone: 'warn' },
@@ -52,22 +54,22 @@ const statusOptions = (Object.keys(statuses) as Status[]).map(id => ({ id, name:
 const newestFirst = { key: 'start', direction: 'desc' } as const;
 const localValue = (date = new Date()) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 const iso = (value: FormDataEntryValue | null) => new Date(String(value)).toISOString();
-const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60 ? (minutes % 60) + ' min' : minutes >= 60 ? '' : '0 min');
 
 /** The next step of the order keeps its name, and the rest are icons in fixed places so the rows line up. */
 function OrderActions({ order, edit, correct, open }: {
-  order: Order; edit: boolean; correct: boolean; open: (kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct', order: Order) => void;
+  order: Order; edit: boolean; correct: boolean; open: (kind: OrderDialog, order: Order) => void;
 }) {
   const next = edit && order.status === 'PLANNED' ? { kind: 'start', label: 'Iniciar', Icon: Play } as const
     : edit && order.status === 'PRINTING' ? { kind: 'finish', label: 'Concluir', Icon: CheckCircle2 } as const
     : correct && order.status === 'DONE' ? { kind: 'correct', label: 'Corrigir', Icon: Wrench } as const : null;
   const cancelable = edit && (order.status === 'PLANNED' || order.status === 'PRINTING');
-  const side = (kind: 'details' | 'edit' | 'cancel', label: string, Icon: typeof Eye) => <button type="button" className={'btn ghost small order-action ' + kind} title={label}
+  const side = (kind: 'details' | 'pdf' | 'edit' | 'cancel', label: string, Icon: typeof Eye) => <button type="button" className={'btn ghost small order-action ' + kind} title={label}
     aria-label={label + ' ordem ' + order.number} onClick={() => open(kind, order)}><Icon size={16} aria-hidden="true" /><span className="order-action-label">{label}</span></button>;
   return <div className="order-actions">
     {next && <button type="button" className="btn secondary small order-action-next" aria-label={next.label + ' ordem ' + order.number} onClick={() => open(next.kind, order)}>
       <next.Icon size={15} aria-hidden="true" />{next.label}</button>}
     {side('details', 'Ver', Eye)}
+    {side('pdf', 'PDF', FileText)}
     {edit && order.status === 'PLANNED' && side('edit', 'Editar', Pencil)}
     {cancelable && side('cancel', 'Cancelar', X)}
   </div>;
@@ -116,7 +118,7 @@ export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; c
     setSearch('');
   }
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
-  const open = (kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct', order: Order) => setDialog({ kind, order });
+  const open = (kind: OrderDialog, order: Order) => setDialog({ kind, order });
   return <>
     {edit && <PageActions><button type="button" className="btn" onClick={() => setDialog({ kind: 'new' })}><Plus size={16} aria-hidden="true" />Nova ordem</button></PageActions>}
     <div className="toolbar"><SearchInput value={typed} onChange={setTyped} label="Buscar ordens" placeholder="Buscar por produto, SKU ou nº da ordem" /></div>
@@ -179,6 +181,7 @@ export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; c
       <CorrectOrder order={dialog.order} view={data} seeCosts={seeCosts} done={done} /></Modal>}
     {dialog?.kind === 'details' && <Modal wide title={'Ordem #' + dialog.order.number} subtitle={statuses[dialog.order.status].name} close={() => setDialog(undefined)}>
       <OrderDetails order={dialog.order} seeCosts={seeCosts} /></Modal>}
+    {dialog?.kind === 'pdf' && <OrderPdf order={dialog.order} statusName={statuses[dialog.order.status].name} seeCosts={seeCosts} close={() => setDialog(undefined)} />}
   </>;
 }
 

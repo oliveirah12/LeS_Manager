@@ -9,7 +9,41 @@ const { clashingPeriods, dayPeriods, localValue, monthDays } = load('../web/slot
 const { Prisma } = require('@prisma/client');
 const { salePricing } = require('../dist/api/stock/cost.js');
 
+const { orderReport } = load('../web/order-report.ts', __filename);
+const { renderPdf, wrapText } = load('../web/pdf.ts', __filename);
+const { PDFDocument } = require('pdf-lib');
 const period = (number, start, end) => ({ number, start: start.toISOString(), end: end.toISOString() });
+const reportOrder = (values = {}) => ({
+  id: 'o', number: 12, revision: 0, status: 'DONE', notes: 'Cliente Ação 😀', printer: { id: 'p', name: 'Impressora A' }, user: { name: 'Pessoa' },
+  plannedStart: '2026-11-24T13:00:00.000Z', estimatedMinutes: 90, expectedEnd: '2026-11-24T14:30:00.000Z', startedAt: '2026-11-24T13:00:00.000Z', finishedAt: '2026-11-24T14:30:00.000Z', printMinutes: 90,
+  absorbLoss: false, machineCost: '3', expenseCost: '1', totalCost: '10', lossCost: '0', budget: null, expenses: [],
+  sale: { discountPercent: '0', paymentMethodId: null, paymentName: 'Pix', feePercent: '5', customFee: false, values: { gross: '50', discount: '0', total: '50', fee: '2.5', net: '47.5', partial: false, profit: '37.5', marginPercent: '75' } },
+  items: [{ productId: 'x', sku: 'PECA', name: 'Peça', symbol: 'un', planned: '2', good: '2', lost: '0', unitCost: '5', salePrice: '25' }],
+  inputs: [{ inputId: 'i', sku: 'PLA', name: 'Filamento', symbol: 'g', familyId: 'f', planned: '100', used: '98', parts: [], replaces: [] }],
+  ...values,
+});
+
+test('the order report carries costs only for who can see them', () => {
+  const full = JSON.stringify(orderReport(reportOrder(), 'Concluída', true, []));
+  assert.match(full, /Custo total/);
+  assert.match(full, /Resultado/);
+  const hidden = orderReport(reportOrder({ machineCost: undefined, expenseCost: undefined, totalCost: undefined, lossCost: undefined }), 'Concluída', false, []);
+  assert.doesNotMatch(JSON.stringify(hidden), /Custo|Resultado|Máquina/);
+  assert.ok(hidden.sections.some(section => section.heading === 'Insumos'));
+});
+
+test('the PDF keeps long orders on new pages and survives characters outside its font', async () => {
+  const items = Array.from({ length: 120 }, (_, index) => ({ ...reportOrder().items[0], productId: 'x' + index, sku: 'PECA-' + index }));
+  const bytes = await renderPdf(orderReport(reportOrder({ items }), 'Concluída', true, []));
+  assert.equal(Buffer.from(bytes.slice(0, 4)).toString(), '%PDF');
+  assert.ok((await PDFDocument.load(bytes)).getPageCount() > 1);
+});
+
+test('text wraps by words and breaks a word only when it is too long', () => {
+  const measure = text => text.length;
+  assert.deepEqual(wrapText('uma frase curta', 9, measure), ['uma frase', 'curta']);
+  assert.deepEqual(wrapText('abcdefghij', 4, measure), ['abcd', 'efgh', 'ij']);
+});
 
 test('a day lists what holds the printer, including prints that cross midnight', () => {
   const night = period(1, new Date(2026, 10, 23, 22), new Date(2026, 10, 24, 6));
