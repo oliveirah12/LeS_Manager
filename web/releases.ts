@@ -6,6 +6,16 @@ export type Release = { version: string; date: string; title: string; changes: s
  */
 export const releases: Release[] = [
   {
+    version: '0.3.1',
+    date: '2026-11-24',
+    title: 'Agenda do dia na ordem de produção',
+    changes: [
+      'Ao escolher o dia, a ordem mostra os horários em que a impressora já está ocupada.',
+      'O início pode ser qualquer minuto, inclusive em dias passados, para lançar uma ordem esquecida.',
+      'Se o horário colidir com outra ordem, a tela avisa e destaca a ordem que está bloqueando.',
+    ],
+  },
+  {
     version: '0.3.0',
     date: '2026-11-24',
     title: 'Agenda das ordens de produção',

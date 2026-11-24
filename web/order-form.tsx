@@ -19,6 +19,7 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
   const [plannedStart, setPlannedStart] = useState(() => order ? localValue(new Date(order.plannedStart)) : '');
   const [printerId, setPrinterId] = useState(order?.printer.id ?? '');
   const [agenda, setAgenda] = useState(0);
+  const [blocked, setBlocked] = useState('');
   const [hours, setHours] = useState(() => order && order.estimatedMinutes >= 60 ? String(Math.floor(order.estimatedMinutes / 60)) : '');
   const [minutes, setMinutes] = useState(() => order && order.estimatedMinutes % 60 ? String(order.estimatedMinutes % 60) : '');
   const [discount, setDiscount] = useState(() => order && Number(order.sale.discountPercent) > 0 ? order.sale.discountPercent : '');
@@ -57,7 +58,8 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
   </div>;
   return <Form label={order ? 'Salvar alterações' : 'Criar ordem'} cancel="Cancelar" action={async values => {
     if (!validTime) throw new Error('Informe o tempo de impressão em horas e minutos inteiros.');
-    if (!plannedStart) throw new Error('Escolha o início no calendário.');
+    if (!plannedStart) throw new Error('Escolha o dia e o horário de início.');
+    if (blocked) throw new Error(blocked);
     const edits = order ? {
       replacements: orderInputs.filter(input => substitutes[input.inputId] && substitutes[input.inputId] !== input.inputId)
         .map(input => ({ inputId: input.inputId, substituteId: substitutes[input.inputId] })),
@@ -87,8 +89,8 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
       <label>Tempo de impressão (horas)<input name="hours" inputMode="numeric" placeholder="10" value={hours} onChange={event => setHours(event.target.value)} /></label>
       <label>Minutos<input name="minutes" inputMode="numeric" placeholder="0" value={minutes} onChange={event => setMinutes(event.target.value)} /></label>
     </div>
-    <StartPicker key={agenda} printerId={printerId} minutes={validTime ? estimatedMinutes : 0} value={plannedStart} onChange={setPlannedStart}
-      ignoreOrderId={order?.id} allowPast={Boolean(order)} keepValue={sameSchedule} />
+    <StartPicker key={agenda} printerId={printerId} minutes={validTime ? estimatedMinutes : 0} value={plannedStart} onChange={setPlannedStart} onBlocked={setBlocked}
+      ignoreOrderId={order?.id} keepValue={sameSchedule} />
     <p className="hint" role="status">{expectedEnd ? <>Término previsto: <strong>{dateTime(expectedEnd)}</strong></> : 'Informe o início e o tempo para calcular o término.'}</p>
     <h3>Produtos da impressão</h3>
     {rows.map((row, index) => {
