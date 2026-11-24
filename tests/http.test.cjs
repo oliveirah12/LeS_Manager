@@ -632,8 +632,8 @@ test('API REST com PostgreSQL', {
     }), 200);
     expectStatus(await admin('/production/energy-rate', { method: 'PUT', body: { energyRate: '0.9' } }), 200);
     const printer = expectStatus(await post('/production/printers', { name: sku('ORDEM-IMPRESSORA'), powerWatts: '200', hourlyCost: '2' }), 201);
-    const newOrder = pieces => post('/production/orders', {
-      printerId: printer.id, plannedStart: '2026-11-21T10:00:00.000Z', estimatedMinutes: 600, items: [{ productId: printed.id, quantity: pieces }],
+    const newOrder = (pieces, plannedStart = '2026-11-21T10:00:00.000Z') => post('/production/orders', {
+      printerId: printer.id, plannedStart, estimatedMinutes: 600, items: [{ productId: printed.id, quantity: pieces }],
     });
     const action = (id, name, body) => post(`/production/orders/${id}/${name}`, body);
     const started = '2026-11-21T10:00:00.000Z';
@@ -672,7 +672,7 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/catalog/products/' + printed.id, { method: 'DELETE' }), 409);
 
     expectStatus(await movement(filament.id, unit.id, 'PURCHASE', '1000', '0.1'), 201);
-    const canceled = expectStatus(await newOrder('5'), 201);
+    const canceled = expectStatus(await newOrder('5', '2099-02-01T10:00:00.000Z'), 201);
     expectStatus(await action(canceled.id, 'start', { startedAt: started }), 200);
     const closed = expectStatus(await action(canceled.id, 'cancel', { inputs: [{ inputId: filament.id, used: '100' }] }), 200);
     assert.equal(closed.lossCost, '10');
@@ -692,7 +692,7 @@ test('API REST com PostgreSQL', {
     const operator = await session('ORDEM-OPERA', ['production:operate']);
     const send = (path, body) => operator('/production/orders' + path, { method: 'POST', body });
     const operated = expectStatus(await send('', {
-      printerId: printer.id, plannedStart: started, estimatedMinutes: 60, items: [{ productId: printed.id, quantity: '1' }],
+      printerId: printer.id, plannedStart: '2099-02-02T10:00:00.000Z', estimatedMinutes: 60, items: [{ productId: printed.id, quantity: '1' }],
     }), 201);
     noCosts(operated);
     noCosts(await listedOrder(operator, operated.id));
@@ -829,6 +829,44 @@ test('API REST com PostgreSQL', {
     expectStatus(await edit({ items: [{ productId: piece.id, quantity: '1' }], inputs: [{ inputId: substitute.id, planned: '10' }] }), 200);
     expectStatus(await post(`/production/orders/${order.id}/start`, { startedAt: plan.plannedStart }), 200);
     expectStatus(await edit({}), 409);
+
+    // The default list follows the start date, whatever the order number, and the real start replaces the planned one.
+    const items = [{ productId: other.id, quantity: '1' }];
+    const later = expectStatus(await post('/production/orders', { ...plan, plannedStart: '2099-01-02T10:00:00.000Z', items }), 201);
+    const earlier = expectStatus(await post('/production/orders', { ...plan, plannedStart: '2099-01-01T10:00:00.000Z', items }), 201);
+    const positions = async query => {
+      const ids = expectStatus(await admin('/production/orders' + query), 200).orders.map(row => row.id);
+      return [order.id, earlier.id, later.id].map(id => ids.indexOf(id));
+    };
+    const [startedRow, earlierRow, laterRow] = await positions('');
+    assert.ok(laterRow >= 0 && laterRow < earlierRow && earlierRow < startedRow);
+    const [startedAsc, earlierAsc, laterAsc] = await positions('?sort=start:asc');
+    assert.ok(startedAsc >= 0 && startedAsc < earlierAsc && earlierAsc < laterAsc);
+
+    // The same printer cannot hold two prints at once, on create, on edit or in a race.
+    const book = plannedStart => post('/production/orders', { ...plan, plannedStart, items });
+    expectStatus(await book('2099-01-02T10:30:00.000Z'), 409);
+    expectStatus(await book('2099-01-02T11:00:00.000Z'), 201);
+    const moveEarlier = plannedStart => admin('/production/orders/' + earlier.id, { method: 'PATCH', body: { ...plan, plannedStart, items } });
+    expectStatus(await moveEarlier('2099-01-02T09:30:00.000Z'), 409);
+    expectStatus(await moveEarlier('2099-01-01T10:00:00.000Z'), 200);
+    const race = await Promise.all([book('2099-01-05T10:00:00.000Z'), book('2099-01-05T10:00:00.000Z')]);
+    assert.deepEqual(race.map(response => response.status).sort(), [201, 409]);
+
+    // The agenda needs production:view and shows only numbers and times.
+    const window = { printerId: printer.id, from: '2099-01-02T00:00:00.000Z', to: '2099-01-03T00:00:00.000Z' };
+    const agenda = (client, values = {}) => client('/production/orders/schedule?' + new URLSearchParams({ ...window, ...values }));
+    expectStatus(await agenda(unrelated), 403);
+    const { busy } = expectStatus(await agenda(reader), 200);
+    assert.deepEqual(busy.map(row => [row.start, row.end]), [
+      ['2099-01-02T10:00:00.000Z', '2099-01-02T11:00:00.000Z'], ['2099-01-02T11:00:00.000Z', '2099-01-02T12:00:00.000Z'],
+    ]);
+    assert.equal(busy[0].number, later.number);
+    assert.deepEqual(Object.keys(busy[0]).sort(), ['end', 'number', 'start']);
+    const editing = expectStatus(await agenda(reader, { ignoreOrderId: later.id }), 200).busy;
+    assert.equal(editing.some(row => row.number === later.number), false);
+    expectStatus(await agenda(admin, { to: window.from }), 400);
+    expectStatus(await agenda(admin, { to: '2099-06-01T00:00:00.000Z' }), 400);
   });
 
   await t.test('correção técnica compensa por diferença e preserva o histórico', async () => {
@@ -844,9 +882,11 @@ test('API REST com PostgreSQL', {
     const printer = expectStatus(await post('/production/printers', { name: sku('CORRIGE-IMPRESSORA'), powerWatts: '100', hourlyCost: '0' }), 201);
     await db.productionSettings.update({ where: { id: 'default' }, data: { energyRate: 0 } });
     const started = '2026-11-21T10:00:00.000Z';
+    let day = 0;
+    const freeSlot = () => new Date(Date.UTC(2099, 2, ++day, 10)).toISOString();
     const produce = async (quantity, lost, salePrice) => {
       const order = expectStatus(await post('/production/orders', {
-        printerId: printer.id, plannedStart: started, estimatedMinutes: 60, items: [{ productId: piece.id, quantity, ...(salePrice ? { salePrice } : {}) }],
+        printerId: printer.id, plannedStart: freeSlot(), estimatedMinutes: 60, items: [{ productId: piece.id, quantity, ...(salePrice ? { salePrice } : {}) }],
       }), 201);
       expectStatus(await post(`/production/orders/${order.id}/start`, { startedAt: started }), 200);
       return expectStatus(await post(`/production/orders/${order.id}/finish`, {
@@ -874,7 +914,7 @@ test('API REST com PostgreSQL', {
     expectStatus(await corrector(path + '/preview', { method: 'POST', body: { ...more, hourlyCost: '1' } }), 403);
     expectStatus(await post(path + '/preview', { inputs: more.inputs }), 400);
     expectStatus(await post(path + '/preview', { reason: 'Sem mudança' }), 400);
-    const planned = expectStatus(await post(`/production/orders`, { printerId: printer.id, plannedStart: started, estimatedMinutes: 60, items: [{ productId: piece.id, quantity: '1' }] }), 201);
+    const planned = expectStatus(await post(`/production/orders`, { printerId: printer.id, plannedStart: freeSlot(), estimatedMinutes: 60, items: [{ productId: piece.id, quantity: '1' }] }), 201);
     expectStatus(await post(`/production/orders/${planned.id}/correction/preview`, more), 409);
 
     // Partial balance: 20 g more at the average of 2.8 raises the piece from 10 to 15.6, and only the 6 still in stock reach the average.
@@ -896,7 +936,7 @@ test('API REST com PostgreSQL', {
     assert.deepEqual([adjust.quantity.toString(), adjust.unitCost.toString()], ['-20', '2.8']);
 
     // Reserved balance cannot pay for extra consumption.
-    const reserving = expectStatus(await post('/production/orders', { printerId: printer.id, plannedStart: started, estimatedMinutes: 60, items: [{ productId: piece.id, quantity: '17' }] }), 201);
+    const reserving = expectStatus(await post('/production/orders', { printerId: printer.id, plannedStart: freeSlot(), estimatedMinutes: 60, items: [{ productId: piece.id, quantity: '17' }] }), 201);
     expectStatus(await post(`/production/orders/${reserving.id}/start`, { startedAt: started }), 200);
     expectStatus(await post(path + '/preview', { reason: 'Mais insumo', inputs: [{ inputId: input.id, used: '140' }] }), 409);
     expectStatus(await post(`/production/orders/${reserving.id}/cancel`, {}), 200);

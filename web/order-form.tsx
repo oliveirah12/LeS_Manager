@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { saleEstimate } from './format';
 import type { Order, OrdersView } from './orders';
+import { localValue } from './slots';
+import { StartPicker } from './start-picker';
 import { api, brl, dateTime, Field, Form, quantity, Select, useClosePanel } from './ui';
 
-const localValue = (date = new Date()) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 type Row = { key: number; productId: string; quantity: string; salePrice: string; marginPercent: string };
 const blankRow = (key: number): Row => ({ key, productId: '', quantity: '', salePrice: '', marginPercent: '' });
 
@@ -15,7 +16,9 @@ const orderRows = (order: Order): Row[] => order.items.map((item, key) => ({
 /** Creates an order or, when one is given, edits it while it is still planned. */
 export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; order?: Order; seeCosts: boolean; done: (text: string) => Promise<void> }) {
   const [rows, setRows] = useState<Row[]>(() => order ? orderRows(order) : [blankRow(0)]);
-  const [plannedStart, setPlannedStart] = useState(() => localValue(order ? new Date(order.plannedStart) : undefined));
+  const [plannedStart, setPlannedStart] = useState(() => order ? localValue(new Date(order.plannedStart)) : '');
+  const [printerId, setPrinterId] = useState(order?.printer.id ?? '');
+  const [agenda, setAgenda] = useState(0);
   const [hours, setHours] = useState(() => order && order.estimatedMinutes >= 60 ? String(Math.floor(order.estimatedMinutes / 60)) : '');
   const [minutes, setMinutes] = useState(() => order && order.estimatedMinutes % 60 ? String(order.estimatedMinutes % 60) : '');
   const [discount, setDiscount] = useState(() => order && Number(order.sale.discountPercent) > 0 ? order.sale.discountPercent : '');
@@ -31,6 +34,8 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
   const validTime = Number.isInteger(estimatedMinutes) && estimatedMinutes > 0;
   const startTime = new Date(plannedStart).getTime();
   const expectedEnd = validTime && Number.isFinite(startTime) ? new Date(startTime + estimatedMinutes * 60000).toISOString() : null;
+  // The field has no seconds, so an untouched schedule sends the stored start and the API does not read it as a move.
+  const sameSchedule = Boolean(order && printerId === order.printer.id && estimatedMinutes === order.estimatedMinutes && plannedStart === localValue(new Date(order.plannedStart)));
   // An order may keep a printer, method or product that has since left the active lists.
   const printers = order && !view.printers.some(row => row.id === order.printer.id) ? [...view.printers, order.printer] : view.printers;
   const payments = order?.sale.paymentMethodId && !view.paymentMethods.some(row => row.id === order.sale.paymentMethodId)
@@ -52,6 +57,7 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
   </div>;
   return <Form label={order ? 'Salvar alterações' : 'Criar ordem'} cancel="Cancelar" action={async values => {
     if (!validTime) throw new Error('Informe o tempo de impressão em horas e minutos inteiros.');
+    if (!plannedStart) throw new Error('Escolha o início no calendário.');
     const edits = order ? {
       replacements: orderInputs.filter(input => substitutes[input.inputId] && substitutes[input.inputId] !== input.inputId)
         .map(input => ({ inputId: input.inputId, substituteId: substitutes[input.inputId] })),
@@ -60,7 +66,7 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
     } : {};
     await api('production/orders' + (order ? '/' + order.id : ''), {
       ...edits,
-      printerId: values.get('printerId'), plannedStart: new Date(plannedStart).toISOString(), estimatedMinutes, notes: String(values.get('notes') ?? ''),
+      printerId: values.get('printerId'), plannedStart: sameSchedule ? order!.plannedStart : new Date(plannedStart).toISOString(), estimatedMinutes, notes: String(values.get('notes') ?? ''),
       manualExpenses: expenses.map(({ title, value }) => ({ title, value })),
       discountPercent: discount.trim() || '0', paymentMethodId: paymentId || null, feePercent: fee.trim() || null,
       items: rows.map(row => ({
@@ -68,18 +74,21 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
         ...(row.salePrice.trim() ? { salePrice: row.salePrice.trim() } : seeCosts || order ? { salePrice: null } : {}),
         ...(seeCosts ? { marginPercent: row.marginPercent.trim() || null } : {}),
       })),
-    }, order ? 'PATCH' : 'POST');
+    }, order ? 'PATCH' : 'POST').catch(error => {
+      // Someone may have taken this time after the calendar loaded, so it reads the agenda again.
+      setAgenda(version => version + 1);
+      throw error;
+    });
     await done(order ? 'Ordem atualizada.' : 'Ordem criada.');
     closePanel?.();
   }}>
-    <div className="form-grid">
-      <Select name="printerId" label="Impressora" options={printers} defaultValue={order?.printer.id} />
-      <label>Início previsto<input name="plannedStart" type="datetime-local" required value={plannedStart} onChange={event => setPlannedStart(event.target.value)} /></label>
-    </div>
+    <Select name="printerId" label="Impressora" options={printers} defaultValue={order?.printer.id} onChange={setPrinterId} />
     <div className="form-grid">
       <label>Tempo de impressão (horas)<input name="hours" inputMode="numeric" placeholder="10" value={hours} onChange={event => setHours(event.target.value)} /></label>
       <label>Minutos<input name="minutes" inputMode="numeric" placeholder="0" value={minutes} onChange={event => setMinutes(event.target.value)} /></label>
     </div>
+    <StartPicker key={agenda} printerId={printerId} minutes={validTime ? estimatedMinutes : 0} value={plannedStart} onChange={setPlannedStart}
+      ignoreOrderId={order?.id} allowPast={Boolean(order)} keepValue={sameSchedule} />
     <p className="hint" role="status">{expectedEnd ? <>Término previsto: <strong>{dateTime(expectedEnd)}</strong></> : 'Informe o início e o tempo para calcular o término.'}</p>
     <h3>Produtos da impressão</h3>
     {rows.map((row, index) => {

@@ -13,6 +13,7 @@ import { StockService } from '../stock/stock';
 import { InputUse, resolveExpenses, suggestedExpense } from './expenses';
 import { PlanRow, planExpenses, setInputTotals, substituteInputs } from './plan';
 import { orderSale, saleFields, saleResult } from './sale';
+import { busyWithin, findClash, Period, possibleClashes, scheduleFields } from './schedule';
 
 const dateField = z.iso.datetime().transform(value => new Date(value));
 export const minutesField = z.number().int().positive().max(1000000);
@@ -220,8 +221,14 @@ const planValues = (order: LoadedOrder) => ({
 const orderPageSize = 50;
 const orderListFields = z.object({
   page: z.coerce.number().int().min(1).max(1_000_000).default(1),
-  sort: sortField(['number', 'printer', 'status'] as const).optional(),
+  sort: sortField(['start', 'number', 'printer', 'status'] as const).optional(),
 });
+type OrderSort = z.infer<typeof orderListFields>['sort'];
+const panelDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
+const maxScheduleDays = 62;
+export const scheduleQuery = z.object({
+  printerId: idField, from: dateField, to: dateField, ignoreOrderId: idField.optional(),
+}).refine(({ from, to }) => to > from && to.getTime() - from.getTime() <= maxScheduleDays * 86_400_000, 'Período inválido para a agenda.');
 
 @Injectable()
 export class ProductionOrderService {
@@ -238,13 +245,47 @@ export class ProductionOrderService {
     return tx.productionSettings.findUniqueOrThrow({ where: { id: 'default' } }).then(settings => settings.energyRate);
   }
 
+  private ordersAround(tx: Prisma.TransactionClient, printerId: string, period: Period, ignoreId?: string) {
+    return tx.productionOrder.findMany({
+      where: { printerId, ...(ignoreId ? { id: { not: ignoreId } } : {}), ...possibleClashes(period) }, select: scheduleFields, orderBy: { number: 'asc' },
+    });
+  }
+
+  /** Only numbers and times leave here, so the calendar reveals nothing about costs, products or customers. */
+  async schedule({ printerId, from, to, ignoreOrderId }: z.infer<typeof scheduleQuery>) {
+    const window = { start: from, end: to };
+    return { busy: busyWithin(await this.ordersAround(this.db, printerId, window, ignoreOrderId), window, new Date()) };
+  }
+
+  /** Runs inside the serializable transaction, so two people cannot book the same time at once. */
+  private async requireFreeSlot(tx: Prisma.TransactionClient, printerId: string, start: Date, minutes: number, ignoreId?: string) {
+    const period = { start, end: new Date(start.getTime() + minutes * 60000) };
+    const clash = findClash(await this.ordersAround(tx, printerId, period, ignoreId), period, new Date());
+    if (clash) {
+      throw new ConflictException('A impressora está ocupada pela ordem #' + clash.order.number + ', de ' + panelDate.format(clash.busy.start) + ' até ' + panelDate.format(clash.busy.end) + '.');
+    }
+  }
+
+  /** The start is the real one once printing began. Prisma cannot sort by that fallback, so SQL picks the page and Prisma loads it. */
+  private async ordersPage(page: number, sort: OrderSort) {
+    const skip = (page - 1) * orderPageSize;
+    if (sort && sort.key !== 'start') {
+      const orderBy: Prisma.ProductionOrderOrderByWithRelationInput[] = sort.key === 'number' ? [{ number: sort.direction }]
+        : [sort.key === 'printer' ? { printer: { name: sort.direction } } : { status: sort.direction }, { number: 'desc' }];
+      return this.db.productionOrder.findMany({ include: orderInclude, orderBy, skip, take: orderPageSize });
+    }
+    const direction = sort?.direction === 'asc' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+    const rows = await this.db.$queryRaw<{ id: string }[]>`SELECT "id" FROM "ProductionOrder"
+      ORDER BY COALESCE("startedAt", "plannedStart") ${direction}, "number" DESC LIMIT ${orderPageSize} OFFSET ${skip}`;
+    const orders = await this.db.productionOrder.findMany({ where: { id: { in: rows.map(row => row.id) } }, include: orderInclude });
+    const byId = new Map(orders.map(order => [order.id, order]));
+    return rows.flatMap(row => byId.get(row.id) ?? []);
+  }
+
   async overview({ page, sort }: z.infer<typeof orderListFields>, seeCosts: boolean) {
-    const orderBy: Prisma.ProductionOrderOrderByWithRelationInput[] = !sort ? [{ number: 'desc' }]
-      : sort.key === 'number' ? [{ number: sort.direction }]
-      : [sort.key === 'printer' ? { printer: { name: sort.direction } } : { status: sort.direction }, { number: 'desc' }];
     const [energyRate, orders, total, printers, products, paymentMethods, inputs] = await Promise.all([
       this.energyRate(this.db),
-      this.db.productionOrder.findMany({ include: orderInclude, orderBy, skip: (page - 1) * orderPageSize, take: orderPageSize }),
+      this.ordersPage(page, sort),
       this.db.productionOrder.count(),
       this.db.printer.findMany({ where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
       this.db.product.findMany({
@@ -276,6 +317,7 @@ export class ProductionOrderService {
     return serial(this.db, async tx => {
       const printer = await tx.printer.findUnique({ where: { id: data.printerId } });
       if (!printer?.active) throw new ConflictException('Escolha uma impressora ativa.');
+      await this.requireFreeSlot(tx, printer.id, data.plannedStart, data.estimatedMinutes);
       const payment = await this.paymentMethod(tx, data.paymentMethodId);
       const products = await tx.product.findMany({ where: { id: { in: ids } }, include: { type: true, recipe: { include: { input: true } } } });
       const items = data.items.map(item => {
@@ -331,6 +373,9 @@ export class ProductionOrderService {
       if (order.status !== 'PLANNED') throw new ConflictException('Só uma ordem planejada pode ser editada.');
       const printer = await tx.printer.findUnique({ where: { id: data.printerId } });
       if (!printer || (!printer.active && printer.id !== order.printerId)) throw new ConflictException('Escolha uma impressora ativa.');
+      // Orders saved before this rule may already overlap, and that must not stop an edit that keeps their time.
+      const moved = printer.id !== order.printerId || data.plannedStart.getTime() !== order.plannedStart.getTime() || data.estimatedMinutes !== order.estimatedMinutes;
+      if (moved) await this.requireFreeSlot(tx, printer.id, data.plannedStart, data.estimatedMinutes, order.id);
       const payment = data.paymentMethodId === undefined ? order.paymentMethod : await this.paymentMethod(tx, data.paymentMethodId, order.paymentMethodId);
       const products = await tx.product.findMany({ where: { id: { in: ids } }, include: { type: true, recipe: { include: { input: true } } } });
       const quantities = new Map(data.items.map(item => [item.productId, storedDecimal(item.quantity)]));
@@ -561,6 +606,10 @@ export class ProductionOrderController {
   @Require('production:view')
   @Get()
   overview(@Req() request: Authenticated, @Query() query: unknown) { return this.orders.overview(parse(orderListFields, query), seesCosts(request)); }
+
+  @Require('production:view')
+  @Get('schedule')
+  schedule(@Query() query: unknown) { return this.orders.schedule(parse(scheduleQuery, query)); }
 
   @Require('production:operate')
   @Audit('Criar ordem de produção')
