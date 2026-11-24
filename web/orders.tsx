@@ -48,27 +48,28 @@ type Dialog = { kind: 'new' } | { kind: 'edit' | 'start' | 'finish' | 'cancel' |
 const statuses: Record<Status, { name: string; tone?: 'ok' | 'warn' | 'brand' }> = {
   PLANNED: { name: 'Planejada' }, PRINTING: { name: 'Em impressão', tone: 'brand' }, DONE: { name: 'Concluída', tone: 'ok' }, CANCELED: { name: 'Cancelada', tone: 'warn' },
 };
+const newestFirst = { key: 'start', direction: 'desc' } as const;
 const localValue = (date = new Date()) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 const iso = (value: FormDataEntryValue | null) => new Date(String(value)).toISOString();
 const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60 ? (minutes % 60) + ' min' : minutes >= 60 ? '' : '0 min');
 
 export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; correct: boolean; seeCosts: boolean }) {
   const [page, setPage] = useState(1);
-  const [sort, setSort] = useState<SortState>(null);
-  const query = new URLSearchParams({ page: String(page), ...(sort ? { sort: sortParam(sort)! } : {}) });
+  const [sort, setSort] = useState<SortState>(newestFirst);
+  const query = new URLSearchParams({ page: String(page), sort: sortParam(sort)! });
   const { data, error, loading, reload } = useData<OrdersView>('production/orders?' + query);
   const [dialog, setDialog] = useState<Dialog>();
   async function done(text: string) {
     notify(text);
     await reload();
   }
-  /** A new order is the highest number, so the default view's first page is where it shows up. */
+  /** Returns to the default view, where the newest starts are on the first page. */
   async function created(text: string) {
-    if (page === 1 && !sort) return done(text);
+    if (page === 1 && sort?.key === newestFirst.key && sort.direction === newestFirst.direction) return done(text);
     notify(text);
     setDialog(undefined);
     setPage(1);
-    setSort(null);
+    setSort(newestFirst);
   }
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   const open = (kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct', order: Order) => setDialog({ kind, order });
@@ -76,7 +77,7 @@ export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; c
     {edit && <PageActions><button type="button" className="btn" onClick={() => setDialog({ kind: 'new' })}><Plus size={16} aria-hidden="true" />Nova ordem</button></PageActions>}
     {message(error)}
     {!data ? loading && <Loading label="Carregando ordens…" /> : <Table empty="Nenhuma ordem de produção."
-      sort={sort} onSort={next => { setSort(next); setPage(1); }}
+      sort={sort} onSort={next => { setSort(next ?? (sort?.key === newestFirst.key ? { key: newestFirst.key, direction: 'asc' } : newestFirst)); setPage(1); }}
       footer={pages > 1 && <>
         <span>Página {data.page} de {pages} · {data.total} ordens</span>
         <div className="actions">
@@ -84,12 +85,13 @@ export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; c
           <button type="button" className="btn secondary small" disabled={page >= pages} onClick={() => setPage(page + 1)}>Próxima</button>
         </div>
       </>}
-      columns={[{ label: 'Ordem', sortKey: 'number' }, 'Produtos', { label: 'Impressora', sortKey: 'printer' }, { label: 'Situação', sortKey: 'status' }, 'Previsão',
+      columns={[{ label: 'Ordem', sortKey: 'number' }, 'Produtos', { label: 'Impressora', sortKey: 'printer' }, { label: 'Situação', sortKey: 'status' }, { label: 'Início', sortKey: 'start' }, 'Previsão',
         ...(seeCosts ? [{ label: 'Custo', end: true }] : []), { label: 'Ações', actions: true }]}
       rows={data.orders.map(order => [
         <span className="cell-title">#{order.number}</span>,
         <span>{order.items.map(item => quantity(item.planned) + ' ' + item.symbol + ' ' + item.sku).join(' · ')}</span>,
         order.printer.name, <Badge tone={statuses[order.status].tone}>{statuses[order.status].name}</Badge>,
+        <span className="muted">{dateTime(order.startedAt ?? order.plannedStart)}</span>,
         <span className="muted">{dateTime(order.finishedAt ?? order.expectedEnd)}</span>,
         ...(seeCosts ? [order.budget ? <span title="Estimativa com os custos atuais. Nada é congelado até concluir.">≈ {brl(order.budget.totalCost)}
           <span className="hint" style={{ display: 'block' }}>{order.budget.partialCost ? 'Orçamento parcial' : 'Orçamento'}</span></span> : brl(order.totalCost)] : []),

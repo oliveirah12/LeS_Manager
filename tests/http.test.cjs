@@ -829,6 +829,19 @@ test('API REST com PostgreSQL', {
     expectStatus(await edit({ items: [{ productId: piece.id, quantity: '1' }], inputs: [{ inputId: substitute.id, planned: '10' }] }), 200);
     expectStatus(await post(`/production/orders/${order.id}/start`, { startedAt: plan.plannedStart }), 200);
     expectStatus(await edit({}), 409);
+
+    // The default list follows the start date, whatever the order number, and the real start replaces the planned one.
+    const items = [{ productId: other.id, quantity: '1' }];
+    const later = expectStatus(await post('/production/orders', { ...plan, plannedStart: '2099-01-02T10:00:00.000Z', items }), 201);
+    const earlier = expectStatus(await post('/production/orders', { ...plan, plannedStart: '2099-01-01T10:00:00.000Z', items }), 201);
+    const positions = async query => {
+      const ids = expectStatus(await admin('/production/orders' + query), 200).orders.map(row => row.id);
+      return [order.id, earlier.id, later.id].map(id => ids.indexOf(id));
+    };
+    const [startedRow, earlierRow, laterRow] = await positions('');
+    assert.ok(laterRow >= 0 && laterRow < earlierRow && earlierRow < startedRow);
+    const [startedAsc, earlierAsc, laterAsc] = await positions('?sort=start:asc');
+    assert.ok(startedAsc >= 0 && startedAsc < earlierAsc && earlierAsc < laterAsc);
   });
 
   await t.test('correção técnica compensa por diferença e preserva o histórico', async () => {

@@ -220,8 +220,9 @@ const planValues = (order: LoadedOrder) => ({
 const orderPageSize = 50;
 const orderListFields = z.object({
   page: z.coerce.number().int().min(1).max(1_000_000).default(1),
-  sort: sortField(['number', 'printer', 'status'] as const).optional(),
+  sort: sortField(['start', 'number', 'printer', 'status'] as const).optional(),
 });
+type OrderSort = z.infer<typeof orderListFields>['sort'];
 
 @Injectable()
 export class ProductionOrderService {
@@ -238,13 +239,26 @@ export class ProductionOrderService {
     return tx.productionSettings.findUniqueOrThrow({ where: { id: 'default' } }).then(settings => settings.energyRate);
   }
 
+  /** The start is the real one once printing began. Prisma cannot sort by that fallback, so SQL picks the page and Prisma loads it. */
+  private async ordersPage(page: number, sort: OrderSort) {
+    const skip = (page - 1) * orderPageSize;
+    if (sort && sort.key !== 'start') {
+      const orderBy: Prisma.ProductionOrderOrderByWithRelationInput[] = sort.key === 'number' ? [{ number: sort.direction }]
+        : [sort.key === 'printer' ? { printer: { name: sort.direction } } : { status: sort.direction }, { number: 'desc' }];
+      return this.db.productionOrder.findMany({ include: orderInclude, orderBy, skip, take: orderPageSize });
+    }
+    const direction = sort?.direction === 'asc' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+    const rows = await this.db.$queryRaw<{ id: string }[]>`SELECT "id" FROM "ProductionOrder"
+      ORDER BY COALESCE("startedAt", "plannedStart") ${direction}, "number" DESC LIMIT ${orderPageSize} OFFSET ${skip}`;
+    const orders = await this.db.productionOrder.findMany({ where: { id: { in: rows.map(row => row.id) } }, include: orderInclude });
+    const byId = new Map(orders.map(order => [order.id, order]));
+    return rows.flatMap(row => byId.get(row.id) ?? []);
+  }
+
   async overview({ page, sort }: z.infer<typeof orderListFields>, seeCosts: boolean) {
-    const orderBy: Prisma.ProductionOrderOrderByWithRelationInput[] = !sort ? [{ number: 'desc' }]
-      : sort.key === 'number' ? [{ number: sort.direction }]
-      : [sort.key === 'printer' ? { printer: { name: sort.direction } } : { status: sort.direction }, { number: 'desc' }];
     const [energyRate, orders, total, printers, products, paymentMethods, inputs] = await Promise.all([
       this.energyRate(this.db),
-      this.db.productionOrder.findMany({ include: orderInclude, orderBy, skip: (page - 1) * orderPageSize, take: orderPageSize }),
+      this.ordersPage(page, sort),
       this.db.productionOrder.count(),
       this.db.printer.findMany({ where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
       this.db.product.findMany({
