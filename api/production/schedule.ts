@@ -30,6 +30,14 @@ export const possibleClashes = ({ start, end }: Period): Prisma.ProductionOrderW
   ],
 });
 
+/** Whole periods, even past the window, so the calendar knows whether a print started near its edge still fits. */
+export const busyWithin = (orders: ScheduledOrder[], window: Period, now: Date) => orders
+  .flatMap(order => {
+    const busy = busyPeriod(order, now);
+    return busy && overlaps(busy, window) ? [{ number: order.number, start: busy.start, end: busy.end }] : [];
+  })
+  .sort((a, b) => a.start.getTime() - b.start.getTime());
+
 export function findClash<T extends ScheduledOrder>(orders: T[], period: Period, now: Date) {
   for (const order of orders) {
     const busy = busyPeriod(order, now);

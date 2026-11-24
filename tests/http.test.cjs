@@ -852,6 +852,21 @@ test('API REST com PostgreSQL', {
     expectStatus(await moveEarlier('2099-01-01T10:00:00.000Z'), 200);
     const race = await Promise.all([book('2099-01-05T10:00:00.000Z'), book('2099-01-05T10:00:00.000Z')]);
     assert.deepEqual(race.map(response => response.status).sort(), [201, 409]);
+
+    // The agenda needs production:view and shows only numbers and times.
+    const window = { printerId: printer.id, from: '2099-01-02T00:00:00.000Z', to: '2099-01-03T00:00:00.000Z' };
+    const agenda = (client, values = {}) => client('/production/orders/schedule?' + new URLSearchParams({ ...window, ...values }));
+    expectStatus(await agenda(unrelated), 403);
+    const { busy } = expectStatus(await agenda(reader), 200);
+    assert.deepEqual(busy.map(row => [row.start, row.end]), [
+      ['2099-01-02T10:00:00.000Z', '2099-01-02T11:00:00.000Z'], ['2099-01-02T11:00:00.000Z', '2099-01-02T12:00:00.000Z'],
+    ]);
+    assert.equal(busy[0].number, later.number);
+    assert.deepEqual(Object.keys(busy[0]).sort(), ['end', 'number', 'start']);
+    const editing = expectStatus(await agenda(reader, { ignoreOrderId: later.id }), 200).busy;
+    assert.equal(editing.some(row => row.number === later.number), false);
+    expectStatus(await agenda(admin, { to: window.from }), 400);
+    expectStatus(await agenda(admin, { to: '2099-06-01T00:00:00.000Z' }), 400);
   });
 
   await t.test('correção técnica compensa por diferença e preserva o histórico', async () => {

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { busyPeriod, findClash, overlaps } = require('../dist/api/production/schedule.js');
+const { busyPeriod, busyWithin, findClash, overlaps } = require('../dist/api/production/schedule.js');
 
 const at = hour => new Date(Date.UTC(2026, 10, 23, hour));
 const order = values => ({ number: 1, status: 'PLANNED', plannedStart: at(10), expectedEnd: at(12), startedAt: null, finishedAt: null, ...values });
@@ -25,6 +25,19 @@ test('a late print stays busy until now', () => {
   assert.deepEqual(busyPeriod(late, at(13)), period(9, 13));
   assert.equal(findClash([late], period(12, 14), at(13)).order.number, 1);
   assert.equal(findClash([late], period(13, 14), at(13)), null);
+});
+
+test('the agenda lists whole periods in time order and only what touches the window', () => {
+  const orders = [
+    order({ number: 3, plannedStart: at(14), expectedEnd: at(20) }),
+    order({ number: 2, plannedStart: at(8), expectedEnd: at(11) }),
+    order({ number: 4, plannedStart: at(1), expectedEnd: at(2) }),
+    order({ number: 5, status: 'CANCELED' }),
+  ];
+  assert.deepEqual(busyWithin(orders, period(10, 15), at(9)), [
+    { number: 2, start: at(8), end: at(11) },
+    { number: 3, start: at(14), end: at(20) },
+  ]);
 });
 
 test('a canceled order never clashes', () => {

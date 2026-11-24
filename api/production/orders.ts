@@ -13,7 +13,7 @@ import { StockService } from '../stock/stock';
 import { InputUse, resolveExpenses, suggestedExpense } from './expenses';
 import { PlanRow, planExpenses, setInputTotals, substituteInputs } from './plan';
 import { orderSale, saleFields, saleResult } from './sale';
-import { findClash, possibleClashes, scheduleFields } from './schedule';
+import { busyWithin, findClash, Period, possibleClashes, scheduleFields } from './schedule';
 
 const dateField = z.iso.datetime().transform(value => new Date(value));
 export const minutesField = z.number().int().positive().max(1000000);
@@ -225,6 +225,10 @@ const orderListFields = z.object({
 });
 type OrderSort = z.infer<typeof orderListFields>['sort'];
 const panelDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
+const maxScheduleDays = 62;
+export const scheduleQuery = z.object({
+  printerId: idField, from: dateField, to: dateField, ignoreOrderId: idField.optional(),
+}).refine(({ from, to }) => to > from && to.getTime() - from.getTime() <= maxScheduleDays * 86_400_000, 'Período inválido para a agenda.');
 
 @Injectable()
 export class ProductionOrderService {
@@ -241,13 +245,22 @@ export class ProductionOrderService {
     return tx.productionSettings.findUniqueOrThrow({ where: { id: 'default' } }).then(settings => settings.energyRate);
   }
 
+  private ordersAround(tx: Prisma.TransactionClient, printerId: string, period: Period, ignoreId?: string) {
+    return tx.productionOrder.findMany({
+      where: { printerId, ...(ignoreId ? { id: { not: ignoreId } } : {}), ...possibleClashes(period) }, select: scheduleFields, orderBy: { number: 'asc' },
+    });
+  }
+
+  /** Only numbers and times leave here, so the calendar reveals nothing about costs, products or customers. */
+  async schedule({ printerId, from, to, ignoreOrderId }: z.infer<typeof scheduleQuery>) {
+    const window = { start: from, end: to };
+    return { busy: busyWithin(await this.ordersAround(this.db, printerId, window, ignoreOrderId), window, new Date()) };
+  }
+
   /** Runs inside the serializable transaction, so two people cannot book the same time at once. */
   private async requireFreeSlot(tx: Prisma.TransactionClient, printerId: string, start: Date, minutes: number, ignoreId?: string) {
     const period = { start, end: new Date(start.getTime() + minutes * 60000) };
-    const orders = await tx.productionOrder.findMany({
-      where: { printerId, ...(ignoreId ? { id: { not: ignoreId } } : {}), ...possibleClashes(period) }, select: scheduleFields, orderBy: { number: 'asc' },
-    });
-    const clash = findClash(orders, period, new Date());
+    const clash = findClash(await this.ordersAround(tx, printerId, period, ignoreId), period, new Date());
     if (clash) {
       throw new ConflictException('A impressora está ocupada pela ordem #' + clash.order.number + ', de ' + panelDate.format(clash.busy.start) + ' até ' + panelDate.format(clash.busy.end) + '.');
     }
@@ -593,6 +606,10 @@ export class ProductionOrderController {
   @Require('production:view')
   @Get()
   overview(@Req() request: Authenticated, @Query() query: unknown) { return this.orders.overview(parse(orderListFields, query), seesCosts(request)); }
+
+  @Require('production:view')
+  @Get('schedule')
+  schedule(@Query() query: unknown) { return this.orders.schedule(parse(scheduleQuery, query)); }
 
   @Require('production:operate')
   @Audit('Criar ordem de produção')
