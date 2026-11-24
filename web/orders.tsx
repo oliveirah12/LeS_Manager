@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Eye, FileText, Pencil, Play, Plus, Wrench, X } from 'lucide-react';
-import { decimal, duration, suggestedConsumption } from './format';
+import { useEffect, useId, useRef, useState } from 'react';
+import { CheckCircle2, ChevronDown, Eye, FileText, Pencil, Play, Plus, Wrench, X } from 'lucide-react';
+import { decimal, duration, productsSummary, suggestedConsumption } from './format';
 import { CorrectOrder, RevisionHistory } from './order-correction';
 import { OrderForm } from './order-form';
 import { OrderPdf } from './order-pdf';
@@ -54,6 +54,29 @@ const statusOptions = (Object.keys(statuses) as Status[]).map(id => ({ id, name:
 const newestFirst = { key: 'start', direction: 'desc' } as const;
 const localValue = (date = new Date()) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 const iso = (value: FormDataEntryValue | null) => new Date(String(value)).toISOString();
+
+/** A short line that opens, in place, what each product of the order is. */
+function OrderProducts({ order }: { order: Order }) {
+  const [open, setOpen] = useState(false);
+  const list = useId();
+  return <div className={'order-products' + (open ? ' open' : '')}>
+    <button type="button" className="order-products-toggle" aria-expanded={open} aria-controls={list}
+      aria-label={(open ? 'Ocultar' : 'Mostrar') + ' produtos da ordem ' + order.number + ': ' + productsSummary(order.items)} onClick={() => setOpen(!open)}>
+      <span>{productsSummary(order.items)}</span><ChevronDown size={15} aria-hidden="true" />
+    </button>
+    <ul id={list} hidden={!open}>
+      {order.items.map(item => <li key={item.productId}>
+        <Title name={item.name} code={item.sku} />
+        <span className="order-product-values">
+          <span>{quantity(item.planned)} {item.symbol}</span>
+          <span>Preço: {item.salePrice === null ? '—' : brl(item.salePrice)}</span>
+          {item.good !== null && <span>Boas: {quantity(item.good)}</span>}
+          {item.lost !== null && <span>Perdidas: {quantity(item.lost)}</span>}
+        </span>
+      </li>)}
+    </ul>
+  </div>;
+}
 
 /** The next step of the order keeps its name, and the rest are icons in fixed places so the rows line up. */
 function OrderActions({ order, edit, correct, open }: {
@@ -142,7 +165,7 @@ export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; c
         ...(seeCosts ? [{ label: 'Custo', end: true }] : []), { label: 'Ações', actions: true }]}
       rows={data.orders.map(order => [
         <span className="cell-title">#{order.number}</span>,
-        <span>{order.items.map(item => quantity(item.planned) + ' ' + item.symbol + ' ' + item.sku).join(' · ')}</span>,
+        <OrderProducts key={order.id} order={order} />,
         order.printer.name, <Badge tone={statuses[order.status].tone}>{statuses[order.status].name}</Badge>,
         <span className="muted">{dateTime(order.startedAt ?? order.plannedStart)}</span>,
         <span className="muted">{dateTime(order.finishedAt ?? order.expectedEnd)}</span>,

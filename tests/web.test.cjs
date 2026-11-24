@@ -9,6 +9,16 @@ const { clashingPeriods, dayPeriods, localValue, monthDays } = load('../web/slot
 const { Prisma } = require('@prisma/client');
 const { salePricing } = require('../dist/api/stock/cost.js');
 
+const { productsSummary } = load('../web/format.ts', __filename);
+
+test('the products line adds exact quantities only within one unit', () => {
+  const item = (sku, planned, symbol = 'un') => ({ sku, planned, symbol });
+  assert.equal(productsSummary([item('PECA', '2.500000000000')]), '2,5 un PECA');
+  assert.equal(productsSummary([item('A', '0.1'), item('B', '0.2')]), '2 produtos · 0,3 un');
+  assert.equal(productsSummary([item('A', '123456789012345678.000000000001'), item('B', '1')]), '2 produtos · 123.456.789.012.345.679,000000000001 un');
+  assert.equal(productsSummary([item('A', '1'), item('B', '5', 'g')]), '2 produtos');
+});
+
 const { orderReport } = load('../web/order-report.ts', __filename);
 const { renderPdf, wrapText } = load('../web/pdf.ts', __filename);
 const { PDFDocument } = require('pdf-lib');

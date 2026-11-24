@@ -565,12 +565,32 @@ dialog.panel.closing::backdrop { animation: fade-out var(--fast) ease-in both; }
 /* The expected end stays in the order's details, so a small tablet shows the list without side scrolling. */
 @media (min-width: 761px) and (max-width: 960px) {
   .table-card:has(.order-actions) :is(th, td):nth-child(6) { display: none; }
+  .table-card:has(.order-actions) :is(th, td) { padding-left: 8px; padding-right: 8px; }
+  .table-card .order-products.open { min-width: 148px; }
 }
 @media (max-width: 760px) {
   .order-actions { display: flex; flex-wrap: wrap; width: 100%; gap: 6px; }
   .order-action-next { flex: 1 1 100%; height: 40px; }
   .order-action { flex: 1 1 40%; width: auto; height: 40px; gap: 6px; border: 1px solid var(--line); }
   .order-action-label { display: inline; }
+}
+
+/* ---------- Products of a production order ---------- */
+.order-products { display: grid; gap: 6px; min-width: 0; text-align: left; }
+.order-products.open { min-width: 210px; }
+.order-products-toggle { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 32px; padding: 3px 8px; margin-left: -8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.order-products-toggle:hover { border-color: var(--line); background: var(--hover); }
+.order-products-toggle svg { flex: none; color: var(--muted); transition: transform var(--fast) var(--ease); }
+.order-products.open .order-products-toggle svg { transform: rotate(180deg); }
+.order-products ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.order-products ul[hidden] { display: none; }
+.order-products li { display: grid; gap: 3px; padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--sunken); }
+.order-product-values { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--muted); font-size: .85rem; }
+@media (max-width: 760px) {
+  .responsive td:has(> .order-products) { display: block; text-align: left; }
+  .responsive td:has(> .order-products)::before { display: block; margin-bottom: 2px; }
+  .order-products-toggle { width: calc(100% + 16px); min-height: 40px; }
+  .order-products.open { min-width: 0; }
 }
 
 /* ---------- PDF viewer ---------- */
