@@ -879,6 +879,19 @@ test('API REST com PostgreSQL', {
     assert.ok(running.filterPrinters.some(row => row.id === printer.id));
     expectStatus(await admin('/production/orders?status=OUTRA'), 400);
     expectStatus(await admin('/production/orders?from=2099-01-02&to=2099-01-01'), 400);
+
+    // The search finds an order by SKU, by product name without accents, or by its number.
+    const found = async search => (await filtered({ search })).orders.map(row => row.id);
+    assert.deepEqual(await found(piece.sku.toLowerCase()), [order.id]);
+    const accentedName = 'Ação ' + sku('BUSCA');
+    await db.product.update({ where: { id: piece.id }, data: { name: accentedName } });
+    assert.deepEqual(await found(accentedName.replace('Ação', 'acao')), [order.id]);
+    // Plain digits may also match a SKU, while the # asks for the number alone.
+    assert.ok((await found(String(later.number))).includes(later.id));
+    assert.deepEqual(await found('#' + earlier.number), [earlier.id]);
+    assert.deepEqual(await found('%'), []);
+    assert.deepEqual((await filtered({ search: piece.sku, status: 'PLANNED' })).orders, []);
+    expectStatus(await admin('/production/orders?search=' + 'x'.repeat(121)), 400);
   });
 
   await t.test('correção técnica compensa por diferença e preserva o histórico', async () => {

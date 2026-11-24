@@ -1,6 +1,16 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { busyPeriod, busyWithin, findClash, overlaps } = require('../dist/api/production/schedule.js');
+const { orderSearch } = require('../dist/api/production/order-search.js');
+
+test('the order search reads numbers, drops accents and keeps wildcards literal', () => {
+  assert.deepEqual(orderSearch(' Peça '), { pattern: '%Peca%', number: null });
+  assert.equal(orderSearch('12').number, 12);
+  assert.equal(orderSearch('#12').number, 12);
+  assert.equal(orderSearch('12A').number, null);
+  assert.equal(orderSearch('1234567890').number, null);
+  assert.equal(orderSearch('50%_a').pattern, '%50\\%\\_a%');
+});
 
 const at = hour => new Date(Date.UTC(2026, 10, 23, hour));
 const order = values => ({ number: 1, status: 'PLANNED', plannedStart: at(10), expectedEnd: at(12), startedAt: null, finishedAt: null, ...values });

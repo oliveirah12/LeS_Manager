@@ -11,6 +11,7 @@ import { Database, dayRange, idField, nonnegative, parse, positive, serial, sort
 import { printerHourCost, productionBudget, productionCosting, salePricing, sumValues } from '../stock/cost';
 import { StockService } from '../stock/stock';
 import { InputUse, resolveExpenses, suggestedExpense } from './expenses';
+import { matchingProductIds, orderSearch } from './order-search';
 import { PlanRow, planExpenses, setInputTotals, substituteInputs } from './plan';
 import { orderSale, saleFields, saleResult } from './sale';
 import { busyWithin, findClash, Period, possibleClashes, scheduleFields } from './schedule';
@@ -224,17 +225,23 @@ const orderListFields = z.object({
   page: z.coerce.number().int().min(1).max(1_000_000).default(1),
   sort: sortField(['start', 'number', 'printer', 'status'] as const).optional(),
   status: filterField(z.enum(ProductionStatus)), printerId: filterField(idField),
-  from: filterField(z.iso.date()), to: filterField(z.iso.date()),
+  from: filterField(z.iso.date()), to: filterField(z.iso.date()), search: filterField(z.string().trim().max(120)),
 }).refine(({ from, to }) => !from || !to || from <= to, 'O início do período não pode ser depois do fim');
 type OrderList = z.infer<typeof orderListFields>;
 type OrderSort = OrderList['sort'];
 
 /** The period follows the same start the list shows: the real one once printing began. */
-function orderWhere({ status, printerId, from, to }: OrderList): Prisma.ProductionOrderWhereInput {
+function orderWhere({ status, printerId, from, to }: OrderList, found: { number: number | null; productIds: string[] } | null): Prisma.ProductionOrderWhereInput {
   const start = dayRange(from, to);
   return {
     ...(status ? { status } : {}), ...(printerId ? { printerId } : {}),
-    ...(start ? { OR: [{ startedAt: start }, { startedAt: null, plannedStart: start }] } : {}),
+    AND: [
+      ...(start ? [{ OR: [{ startedAt: start }, { startedAt: null, plannedStart: start }] }] : []),
+      ...(found ? [{ OR: [
+        { items: { some: { productId: { in: found.productIds } } } },
+        ...(found.number === null ? [] : [{ number: found.number }]),
+      ] }] : []),
+    ],
   };
 }
 const panelDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
@@ -298,7 +305,8 @@ export class ProductionOrderService {
 
   async overview(filters: OrderList, seeCosts: boolean) {
     const { page, sort } = filters;
-    const where = orderWhere(filters);
+    const term = filters.search ? orderSearch(filters.search) : null;
+    const where = orderWhere(filters, term && { number: term.number, productIds: await matchingProductIds(this.db, term.pattern) });
     const [energyRate, orders, total, printers, filterPrinters, products, paymentMethods, inputs] = await Promise.all([
       this.energyRate(this.db),
       this.ordersPage(page, sort, where),
