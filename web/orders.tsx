@@ -54,6 +54,25 @@ const localValue = (date = new Date()) => new Date(date.getTime() - date.getTime
 const iso = (value: FormDataEntryValue | null) => new Date(String(value)).toISOString();
 const duration = (minutes: number) => (minutes >= 60 ? Math.floor(minutes / 60) + ' h ' : '') + (minutes % 60 ? (minutes % 60) + ' min' : minutes >= 60 ? '' : '0 min');
 
+/** The next step of the order keeps its name, and the rest are icons in fixed places so the rows line up. */
+function OrderActions({ order, edit, correct, open }: {
+  order: Order; edit: boolean; correct: boolean; open: (kind: 'edit' | 'start' | 'finish' | 'cancel' | 'details' | 'correct', order: Order) => void;
+}) {
+  const next = edit && order.status === 'PLANNED' ? { kind: 'start', label: 'Iniciar', Icon: Play } as const
+    : edit && order.status === 'PRINTING' ? { kind: 'finish', label: 'Concluir', Icon: CheckCircle2 } as const
+    : correct && order.status === 'DONE' ? { kind: 'correct', label: 'Corrigir', Icon: Wrench } as const : null;
+  const cancelable = edit && (order.status === 'PLANNED' || order.status === 'PRINTING');
+  const side = (kind: 'details' | 'edit' | 'cancel', label: string, Icon: typeof Eye) => <button type="button" className={'btn ghost small order-action ' + kind} title={label}
+    aria-label={label + ' ordem ' + order.number} onClick={() => open(kind, order)}><Icon size={16} aria-hidden="true" /><span className="order-action-label">{label}</span></button>;
+  return <div className="order-actions">
+    {next && <button type="button" className="btn secondary small order-action-next" aria-label={next.label + ' ordem ' + order.number} onClick={() => open(next.kind, order)}>
+      <next.Icon size={15} aria-hidden="true" />{next.label}</button>}
+    {side('details', 'Ver', Eye)}
+    {edit && order.status === 'PLANNED' && side('edit', 'Editar', Pencil)}
+    {cancelable && side('cancel', 'Cancelar', X)}
+  </div>;
+}
+
 export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; correct: boolean; seeCosts: boolean }) {
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>(newestFirst);
@@ -127,15 +146,7 @@ export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; c
         <span className="muted">{dateTime(order.finishedAt ?? order.expectedEnd)}</span>,
         ...(seeCosts ? [order.budget ? <span title="Estimativa com os custos atuais. Nada é congelado até concluir.">≈ {brl(order.budget.totalCost)}
           <span className="hint" style={{ display: 'block' }}>{order.budget.partialCost ? 'Orçamento parcial' : 'Orçamento'}</span></span> : brl(order.totalCost)] : []),
-        <div className="actions">
-          <button type="button" className="btn ghost small" aria-label={'Ver ordem ' + order.number} onClick={() => open('details', order)}><Eye size={14} aria-hidden="true" />Ver</button>
-          {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" aria-label={'Editar ordem ' + order.number} onClick={() => open('edit', order)}><Pencil size={14} aria-hidden="true" />Editar</button>}
-          {edit && order.status === 'PLANNED' && <button type="button" className="btn secondary small" onClick={() => open('start', order)}><Play size={14} aria-hidden="true" />Iniciar</button>}
-          {edit && order.status === 'PRINTING' && <button type="button" className="btn secondary small" onClick={() => open('finish', order)}><CheckCircle2 size={14} aria-hidden="true" />Concluir</button>}
-          {correct && order.status === 'DONE' && <button type="button" className="btn secondary small" aria-label={'Corrigir ordem ' + order.number} onClick={() => open('correct', order)}><Wrench size={14} aria-hidden="true" />Corrigir</button>}
-          {edit && (order.status === 'PLANNED' || order.status === 'PRINTING') &&
-            <button type="button" className="btn ghost small" onClick={() => open('cancel', order)}><X size={14} aria-hidden="true" />Cancelar</button>}
-        </div>,
+        <OrderActions order={order} edit={edit} correct={correct} open={open} />,
       ])} />}
 
     {data && dialog?.kind === 'new' && <Modal wide title="Nova ordem de produção" close={() => setDialog(undefined)}><OrderForm view={data} seeCosts={seeCosts} done={created} /></Modal>}

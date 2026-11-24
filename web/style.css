@@ -540,3 +540,33 @@ dialog.panel.closing::backdrop { animation: fade-out var(--fast) ease-in both; }
 .start-picker-busy { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .start-picker-busy li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
 .start-picker-busy li.blocking { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); font-weight: 600; }
+
+/* ---------- Production order actions ---------- */
+.order-actions { display: inline-grid; grid-template-columns: 104px repeat(3, 34px); align-items: center; justify-content: end; gap: 4px; }
+.order-action-next { grid-column: 1; width: 100%; justify-content: center; }
+.order-action { grid-column: 2; width: 34px; height: 34px; padding: 0; justify-content: center; }
+.order-action.edit { grid-column: 3; }
+.order-action.cancel { grid-column: 4; }
+.order-action.cancel:hover { background: var(--danger-soft); color: var(--danger); }
+.order-action-label { display: none; }
+/* On tablets the table may scroll sideways, and the actions stay in reach on the right edge. */
+@media (min-width: 761px) and (max-width: 1180px) {
+  .order-actions { grid-template-columns: repeat(3, 34px); }
+  .order-action-next { grid-column: 1 / -1; }
+  .order-action { grid-column: 1; }
+  .order-action.edit { grid-column: 2; }
+  .order-action.cancel { grid-column: 3; }
+  .table-card:has(.order-actions) :is(th, td):last-child { position: sticky; right: 0; z-index: 1; box-shadow: -1px 0 0 var(--line); }
+  .table-card:has(.order-actions) td:last-child { background: var(--surface); }
+  .table-card:has(.order-actions) tbody tr:hover td:last-child { background: var(--hover); }
+}
+/* The expected end stays in the order's details, so a small tablet shows the list without side scrolling. */
+@media (min-width: 761px) and (max-width: 960px) {
+  .table-card:has(.order-actions) :is(th, td):nth-child(6) { display: none; }
+}
+@media (max-width: 760px) {
+  .order-actions { display: flex; flex-wrap: wrap; width: 100%; gap: 6px; }
+  .order-action-next { flex: 1 1 100%; height: 40px; }
+  .order-action { flex: 1 1 0; width: auto; height: 40px; gap: 6px; border: 1px solid var(--line); }
+  .order-action-label { display: inline; }
+}
