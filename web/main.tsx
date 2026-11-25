@@ -18,10 +18,10 @@ import { Printers } from './production';
 import { PurchaseDocuments } from './purchase-documents';
 import { Purchases } from './purchases';
 import { InstallApp } from './pwa';
-import { referenceKinds, Registrations } from './registrations';
+import { referenceKinds, RegistrationPage, Registrations } from './registrations';
 import { Stock } from './stock';
 import { Suppliers } from './suppliers';
-import { accessible, api, Identity, Loading, ModalForm, PageActionsProvider, sessionExpired, Toaster } from './ui';
+import { accessible, api, Identity, Loading, ModalForm, PageActionsProvider, sessionExpired, Tabs, Toaster } from './ui';
 import './style.css';
 
 const groups = [
@@ -38,9 +38,7 @@ const groups = [
     { id: 'production-orders', label: 'Ordens' }, { id: 'printers', label: 'Impressoras' },
   ] },
   { id: 'registrations', label: 'Cadastros', icon: Layers, section: 'admin', permission: 'registrations:view', pages: [
-    { id: 'register-products', label: 'Produtos' }, { id: 'register-kits', label: 'Kits' }, { id: 'suppliers', label: 'Fornecedores' }, { id: 'payment-methods', label: 'Formas de pagamento' }, { id: 'product-types', label: 'Tipos de produto' },
-    ...referenceKinds.map(({ id, label }) => ({ id, label })),
-    { id: 'families', label: 'Famílias de medida' }, { id: 'units', label: 'Unidades de medida' },
+    { id: 'register-catalog', label: 'Produtos' }, { id: 'register-classification', label: 'Classificação' }, { id: 'register-commercial', label: 'Comercial' },
   ] },
   { id: 'audit', label: 'Auditoria', icon: ShieldCheck, section: 'admin', permission: 'admin', pages: [{ id: 'audit', label: 'Auditoria' }] },
   { id: 'admin', label: 'Acessos', icon: Users, section: 'admin', permission: 'admin', pages: [
@@ -48,10 +46,32 @@ const groups = [
   ] },
 ] as const;
 type Group = typeof groups[number];
-export type Page = Group['pages'][number]['id'] | 'account';
+type TabId = RegistrationPage | 'register-products' | 'register-kits' | 'suppliers' | 'payment-methods';
+type SectionId = 'register-catalog' | 'register-classification' | 'register-commercial';
+type SectionTab = { id: TabId; label: string; path: string; permission?: string };
+export type Page = Group['pages'][number]['id'] | TabId | 'account';
+
+// A section is one menu item whose screens are tabs. Each tab keeps its own address under the section's.
+const sections: Record<SectionId, { path: string; tabs: SectionTab[] }> = {
+  'register-catalog': { path: 'cadastros/produtos', tabs: [
+    { id: 'register-products', label: 'Produtos', path: 'produtos', permission: 'catalog:operate' },
+    { id: 'register-kits', label: 'Kits', path: 'kits', permission: 'catalog:operate' },
+    { id: 'product-types', label: 'Tipos', path: 'tipos' },
+    { id: 'families', label: 'Famílias', path: 'familias' },
+    { id: 'units', label: 'Unidades', path: 'unidades' },
+  ] },
+  'register-classification': { path: 'cadastros/classificacao', tabs: referenceKinds.map(({ id, label }) => ({ id, label, path: label.toLowerCase() })) },
+  'register-commercial': { path: 'cadastros/comercial', tabs: [
+    { id: 'suppliers', label: 'Fornecedores', path: 'fornecedores' },
+    { id: 'payment-methods', label: 'Formas de pagamento', path: 'formas-de-pagamento' },
+  ] },
+};
+const isSection = (page: Page): page is SectionId => page in sections;
+const sectionOf = (page: Page) => (Object.keys(sections) as SectionId[]).find(id => sections[id].tabs.some(tab => tab.id === page));
 
 const pageDescriptions: Record<Page, string> = {
   home: '', products: 'Consulte os produtos do catálogo.', inputs: 'Materiais usados nas fichas técnicas e na produção.', kits: 'Consulte os kits e suas composições.',
+  'register-catalog': '', 'register-classification': '', 'register-commercial': '',
   'register-products': 'Cadastre, edite e inative produtos.', 'register-kits': 'Monte e edite a composição dos kits.',
   suppliers: 'Empresas e pessoas de quem você compra.',
   'payment-methods': 'Formas de pagamento e taxas usadas na venda das ordens.',
@@ -72,27 +92,37 @@ const pageDescriptions: Record<Page, string> = {
 };
 
 // Each screen has its own address so reload, back/forward and shared links keep the page.
-const paths: Record<Page, string> = {
+const paths = {
   home: '', products: 'catalogo/produtos', inputs: 'catalogo/insumos', kits: 'catalogo/kits',
-  'register-products': 'cadastros/produtos', 'register-kits': 'cadastros/kits', suppliers: 'cadastros/fornecedores', 'payment-methods': 'cadastros/formas-de-pagamento', 'product-types': 'cadastros/tipos-de-produto',
-  GRUPO: 'cadastros/grupos', MARCA: 'cadastros/marcas', COR: 'cadastros/cores', DEPARTAMENTO: 'cadastros/departamentos',
-  families: 'cadastros/familias', units: 'cadastros/unidades', stock: 'estoque', purchases: 'compras', 'purchase-documents': 'compras/documentos',
+  stock: 'estoque', purchases: 'compras', 'purchase-documents': 'compras/documentos',
   balance: 'financeiro/saldo', statement: 'financeiro/extrato', reconciliation: 'financeiro/conciliacao', integration: 'financeiro/integracao',
   'production-orders': 'producao/ordens', printers: 'producao/impressoras',
   audit: 'auditoria', admin: 'acessos/usuarios', 'admin-account': 'acessos/minha-conta', account: 'conta',
-};
+  ...Object.fromEntries(Object.entries(sections).flatMap(([id, section]) => [
+    [id, section.path], ...section.tabs.map(tab => [tab.id, section.path + '/' + tab.path]),
+  ])),
+} as Record<Page, string>;
+// Addresses from before Cadastros had tabs, so old links and bookmarks still open the same screen.
+// The old "cadastros/produtos" is now the section address, which opens its first tab.
+const legacyPaths = {
+  'register-kits': 'cadastros/kits', suppliers: 'cadastros/fornecedores', 'payment-methods': 'cadastros/formas-de-pagamento',
+  'product-types': 'cadastros/tipos-de-produto', GRUPO: 'cadastros/grupos', MARCA: 'cadastros/marcas', COR: 'cadastros/cores',
+  DEPARTAMENTO: 'cadastros/departamentos', families: 'cadastros/familias', units: 'cadastros/unidades',
+} satisfies Partial<Record<TabId, string>>;
 const hashOf = (page: Page) => '#/' + paths[page];
 
-const currentPage = () => pageFromHash(location.hash, paths);
+const pageOf = (hash: string): Page | undefined => pageFromHash(hash, paths) ?? pageFromHash(hash, legacyPaths);
 
-function useHashPage() {
-  const [page, setPage] = useState(currentPage);
+// A new object on every hash change, so an address that maps to the page already shown still re-renders
+// and gets redirected, even after a replaceState left the stored value behind.
+function useHash() {
+  const [hash, setHash] = useState(() => ({ value: location.hash }));
   useEffect(() => {
-    const changed = () => setPage(currentPage());
+    const changed = () => setHash({ value: location.hash });
     addEventListener('hashchange', changed);
     return () => removeEventListener('hashchange', changed);
   }, []);
-  return page;
+  return hash;
 }
 
 function readPreference(key: string) {
@@ -146,7 +176,8 @@ function AccountMenu({ identity, theme, toggleTheme, openAccount, signOut }: {
 
 function App() {
   const [identity, setIdentity] = useState<Identity | null>();
-  const requested = useHashPage();
+  const hash = useHash();
+  const requested = pageOf(hash.value);
   const [expanded, setExpanded] = useState<Partial<Record<Group['id'], boolean>>>({});
   const [notice, setNotice] = useState('');
   const [logout, setLogout] = useState(false);
@@ -182,34 +213,42 @@ function App() {
 
   const can = (permission: string) => accessible(identity?.permissions ?? [], permission);
   const admin = can('admin');
+  const allowedTabs = (section: SectionId) => sections[section].tabs.filter(tab => !tab.permission || can(tab.permission));
   const allowed = groups.map(group => ({
     ...group,
     pages: [...group.pages].filter(page => {
-      if (page.id === 'register-products' || page.id === 'register-kits') return can('catalog:operate');
+      if (group.permission && !can(group.permission)) return false;
+      if (isSection(page.id)) return allowedTabs(page.id).length > 0;
       if (page.id === 'integration') return can('admin');
-      return !group.permission || can(group.permission);
+      return true;
     }),
   })).filter(group => group.pages.length);
   const allowedPages = allowed.flatMap(group => [...group.pages]);
   // Administrators keep their account page under Acessos; everyone else uses the standalone page.
   const selected = requested === 'account' && admin ? 'admin-account' : requested === 'admin-account' && !admin ? 'account' : requested;
-  const screen = allowedPages.find(page => page.id === selected) ??
+  const target = selected && (sectionOf(selected) ?? selected);
+  const screen = allowedPages.find(page => page.id === target) ??
     (selected === 'account' && !admin ? { id: 'account' as const, label: 'Minha conta' } : allowedPages[0]);
   const currentGroup = allowed.find(group => group.pages.some(page => page.id === screen?.id));
+  // A section shows its allowed tabs; an unknown or forbidden tab falls back to the first one.
+  const tabs = screen && isSection(screen.id) ? allowedTabs(screen.id) : [];
+  const tab = tabs.find(item => item.id === selected) ?? tabs.at(0);
+  const active = tab?.id ?? screen?.id;
 
-  // Unknown or unauthorized addresses fall back to the first allowed screen without a new history entry.
+  // Unknown, old or unauthorized addresses fall back to the canonical one without a new history entry.
   useEffect(() => {
-    if (!identity || !screen) return;
-    if (location.hash !== hashOf(screen.id)) history.replaceState(null, '', hashOf(screen.id));
+    if (!identity || !screen || !active) return;
+    if (location.hash !== hashOf(active)) history.replaceState(null, '', hashOf(active));
     if (shownPage.current && shownPage.current !== screen.id) {
       heading.current?.focus({ preventScroll: true });
       scrollTo({ top: 0 });
     }
     shownPage.current = screen.id;
-  }, [identity, screen?.id]);
+  }, [identity, screen?.id, active, hash]);
 
   function navigate(page: Page) {
-    const group = allowed.find(item => item.pages.some(itemPage => itemPage.id === page));
+    const shown = sectionOf(page) ?? page;
+    const group = allowed.find(item => item.pages.some(itemPage => itemPage.id === shown));
     if (group && group.pages.length > 1) setExpanded(previous => ({ ...previous, [group.id]: true }));
     setMenuOpen(false);
     if (location.hash === hashOf(page)) requestAnimationFrame(() => heading.current?.focus());
@@ -266,7 +305,7 @@ function App() {
 
   // Phone bottom bar: the main operational areas plus "Mais", which opens the full menu.
   const bottomItems = allowed.filter(group => group.section === 'ops').slice(0, 4);
-  const page = screen?.id;
+  const page = active;
   const content: ReactNode = <>
     {page === 'home' && <Home identity={identity} can={can} navigate={navigate} />}
     {(page === 'products' || page === 'inputs' || page === 'kits') && <Catalog key={page} page={page} edit={false} seeStock={can('stock:view')} />}
@@ -324,11 +363,14 @@ function App() {
             <div>
               {currentGroup && currentGroup.label !== screen.label && <span className="eyebrow">{currentGroup.label}</span>}
               <h1 ref={heading} tabIndex={-1}>{screen.id === 'home' ? greeting(identity.name) : screen.label}</h1>
-              {pageDescriptions[screen.id] && <p>{pageDescriptions[screen.id]}</p>}
+              {page && pageDescriptions[page] && <p>{pageDescriptions[page]}</p>}
             </div>
             <div className="actions" ref={setActionsSlot} />
           </div>
-          <PageActionsProvider value={actionsSlot}>{content}</PageActionsProvider>
+          <PageActionsProvider value={actionsSlot}>{tab ? <>
+            <Tabs label={screen.label} value={tab.id} onChange={navigate} tabs={tabs.map(item => ({ id: item.id, name: item.label }))} />
+            <div className="tab-panel" role="tabpanel" key={tab.id}>{content}</div>
+          </> : content}</PageActionsProvider>
         </div>}
       </main>
     </div>

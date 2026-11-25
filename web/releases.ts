@@ -6,6 +6,17 @@ export type Release = { version: string; date: string; title: string; changes: s
  */
 export const releases: Release[] = [
   {
+    version: '0.4.1',
+    date: '2026-11-25',
+    title: 'Cadastros organizados em abas',
+    changes: [
+      'O menu Cadastros agora tem três páginas: Produtos, Classificação e Comercial.',
+      'Produtos reúne produtos, kits, tipos, famílias e unidades de medida em abas.',
+      'Classificação reúne grupos, marcas, cores e departamentos, e Comercial reúne fornecedores e formas de pagamento.',
+      'Cada aba tem seu próprio endereço, e os links antigos continuam abrindo a tela certa.',
+    ],
+  },
+  {
     version: '0.4.0',
     date: '2026-11-24',
     title: 'Busca, filtros e PDF das ordens de produção',
