@@ -6,6 +6,19 @@ export type Release = { version: string; date: string; title: string; changes: s
  */
 export const releases: Release[] = [
   {
+    version: '0.5.0',
+    date: '2026-11-25',
+    title: 'Cadastro de custos',
+    changes: [
+      'Cadastros › Comercial ganhou a aba Custos, para guardar custos como embalagem, frete e impostos.',
+      'Cada custo pode ser um valor fixo ou um percentual, e o percentual pode valer sobre o custo ou sobre o preço de venda.',
+      'Na compra, os custos adicionais podem ser escolhidos da lista. O título, o tipo e o valor são preenchidos e podem ser ajustados.',
+      'A compra guarda os valores do dia, então mudar um custo cadastrado não altera compras já lançadas.',
+      'Um custo já usado em compras não pode ser excluído, apenas inativado.',
+      'A planilha de carga inicial ganhou a aba Custos.',
+    ],
+  },
+  {
     version: '0.4.1',
     date: '2026-11-25',
     title: 'Cadastros organizados em abas',
