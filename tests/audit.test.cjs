@@ -39,6 +39,13 @@ test('purchase document routes read with purchases:view and write with purchases
   for (const name of ['search', 'filters']) assert.deepEqual(Reflect.getMetadata('permissions', search.prototype[name]), ['purchases:view'], name);
 });
 
+test('the price panel reads and saves with stock:operate, and only the save is audited', () => {
+  const controller = require('../dist/api/stock/controller.js').StockController;
+  for (const name of ['pricingView', 'settings']) assert.deepEqual(Reflect.getMetadata('permissions', controller.prototype[name]), ['stock:operate'], name);
+  assert.equal(Reflect.getMetadata(AUDIT, controller.prototype.pricingView), undefined);
+  assert.equal(Reflect.getMetadata(AUDIT, controller.prototype.settings), 'Alterar parâmetros de estoque');
+});
+
 test('production routes require the production permission', () => {
   const productionControllers = [
     require('../dist/api/production/production.js').ProductionController, require('../dist/api/production/orders.js').ProductionOrderController,

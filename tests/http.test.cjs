@@ -614,8 +614,15 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/catalog/product-types/' + filamentType, {
       method: 'PATCH', body: { name: 'Filamento', isInput: false, isManufactured: false },
     }), 409);
-    expectStatus(await saveRecipe(printed.id, '0', []), 200);
+    // Without inputs the recipe keeps its time and printer, which leave the product when it stops being manufactured.
+    expectStatus(await admin(`/catalog/products/${printed.id}/recipe`, {
+      method: 'PUT', body: { wastePercent: '0', inputs: [], printMinutes: '10', printerId: recipePrinter.id },
+    }), 200);
     expectStatus(await admin('/catalog/products/' + filament.id, { method: 'DELETE' }), 200);
+    expectStatus(await admin('/production/printers/' + recipePrinter.id, { method: 'DELETE' }), 409);
+    expectStatus(await patch(printed.id, 'Impresso', standard), 200);
+    const plain = await productRow(printed.id);
+    assert.deepEqual([plain.printMinutes, plain.printerId], [null, null]);
     expectStatus(await admin('/production/printers/' + recipePrinter.id, { method: 'DELETE' }), 200);
   });
 

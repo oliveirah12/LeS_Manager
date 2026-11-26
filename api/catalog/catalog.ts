@@ -5,9 +5,9 @@ import { Prisma, ProductionStatus, ReferenceKind } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
 import { canAccess } from '../access/security';
-import { Audit, auditChange, auditContext } from '../audit/recorder';
+import { Audit, auditChange } from '../audit/recorder';
 import { FileService } from '../files/files';
-import { Database, idField, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal } from '../shared';
+import { Database, idField, nameField, parse, positive, serial, skuField, storedDecimal } from '../shared';
 import { belowMinimum, kitCosting, recipeEstimate, saleMargin, stockValue, sumValues } from '../stock/cost';
 import { currentEnergyRate, pricingSelect, productPricing } from './pricing';
 
@@ -461,11 +461,14 @@ export class CatalogService {
         where: { id }, select: { ...productAudit, typeId: true, unitId: true, unit: { select: { symbol: true, familyId: true } }, ...productUsage },
       });
       if (!before) throw new NotFoundException('Produto não encontrado.');
+      // Print time and printer only price a manufactured product, so they leave with the type.
+      let leavesManufacturing = false;
       if (data.typeId && data.typeId !== before.typeId) {
         const type = await tx.productType.findUnique({ where: { id: data.typeId } });
         if (!type) throw new NotFoundException('Tipo de produto não encontrado.');
         if (before._count.recipe && !type.isManufactured) throw new ConflictException('O produto tem ficha técnica, então o tipo precisa ser fabricado.');
         if (before._count.usedInRecipes && !type.isInput) throw new ConflictException('O produto está em fichas técnicas, então o tipo precisa ser usado como insumo.');
+        leavesManufacturing = !type.isManufactured;
       }
       const newUnitId = data.unitId && data.unitId !== before.unitId ? data.unitId : undefined;
       if (newUnitId) {
@@ -482,6 +485,7 @@ export class CatalogService {
         data: {
           ...fields, ...(measures ? { measures: { deleteMany: {}, create: measures } } : {}),
           ...(newUnitId ? { revision: { increment: 1 } } : {}),
+          ...(leavesManufacturing ? { printMinutes: null, printerId: null } : {}),
         },
       });
       auditChange(productValues(before), productValues(await tx.product.findUniqueOrThrow({ where: { id }, select: productAudit })));
