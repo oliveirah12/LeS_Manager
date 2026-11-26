@@ -834,6 +834,19 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/costs/' + pack.id, { method: 'DELETE' }), 200);
     const { events } = expectStatus(await admin('/audit?' + new URLSearchParams({ action: 'Alterar parâmetros de estoque' })), 200);
     assert.ok(events.some(row => row.targetId === product.id && row.details?.after?.['Custos vinculados']?.length === 2));
+
+    // The purchase may update the sale price in its own transaction, which takes stock:operate.
+    const buyer = await session('PRECO-COMPRA', ['purchases:operate']);
+    const item = { productId: product.id, unitId: unit.id, quantity: '1', totalCost: '70', salePrice: '120' };
+    expectStatus(await buyer('/purchases', { method: 'POST', body: { purchaseDate: '2026-01-02', items: [item] } }), 403);
+    const hidden = expectStatus(await buyer('/purchases/options'), 200).products.find(row => row.id === product.id);
+    assert.deepEqual(['marginPercent' in hidden, 'salePrice' in hidden, 'costs' in hidden], [false, false, false]);
+    const shown = expectStatus(await admin('/purchases/options'), 200).products.find(row => row.id === product.id);
+    assert.deepEqual([shown.marginPercent, shown.salePrice, shown.costs], ['30', '90', []]);
+    const purchase = expectStatus(await post('/purchases', { purchaseDate: '2026-01-02', items: [item] }), 201);
+    assert.equal((await productRow(product.id)).salePrice.toFixed(), '120');
+    const registered = expectStatus(await admin('/audit?' + new URLSearchParams({ action: 'Registrar compra' })), 200).events.find(row => row.targetId === purchase.id);
+    assert.deepEqual(registered.details.after['Preços de venda atualizados'], [product.sku + ': 90 → 120']);
   });
 
   await t.test('despesas entram uma única vez no custo e na média do fabricado', async () => {

@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Eye, Pencil, Plus, Trash2, Undo2 } from 'lucide-react';
 import { CostItem, costModes, costValue } from './costs';
+import { PricingCost, suggestedPrice } from './format';
 import { PurchaseAttachments } from './purchase-documents';
 import {
-  api, Badge, brl, by, dateTime, Field, fields, Loading, message, Modal, ModalForm, notify, PageActions, Product, productOptions, quantity, Select, Table, Title, today, Unit, unitOptions, useData,
+  api, Badge, baseUnit, brl, by, dateTime, Field, fields, Loading, message, Modal, ModalForm, notify, PageActions, Product, productOptions, quantity, Select, Table, Title, today, Unit, unitOptions, useData,
 } from './ui';
 
 type Row = {
@@ -11,7 +12,11 @@ type Row = {
   supplier: { name: string } | null; user: { name: string }; _count: { items: number };
 };
 type Page = { purchases: Row[]; nextCursor: string | null };
-type Options = { suppliers: { id: string; name: string }[]; products: Product[]; units: Unit[]; costs: Pick<CostItem, 'id' | 'name' | 'mode' | 'value'>[] };
+/** Price, margin and linked costs only come with stock:operate, which the price update also requires. */
+type PricedProduct = Product & { salePrice?: string | null; marginPercent?: string | null; costs?: PricingCost[] };
+type Options = { suppliers: { id: string; name: string }[]; products: PricedProduct[]; units: Unit[]; costs: Pick<CostItem, 'id' | 'name' | 'mode' | 'value'>[] };
+type ItemRow = { key: number; productId: string; quantity: string; unitId: string; total: string; reprice: boolean; salePrice: string };
+const blankItem = (key: number): ItemRow => ({ key, productId: '', quantity: '', unitId: '', total: '', reprice: false, salePrice: '' });
 type CostRow = { key: number; costItemId: string; title: string; mode: string; value: string; filled: number };
 type Details = Omit<Row, 'supplier' | '_count'> & {
   supplierId: string | null; supplier: { id: string; name: string } | null; notes: string | null; createdAt: string; reversalReason: string | null; reversedBy: { name: string } | null;
@@ -65,10 +70,10 @@ export function Purchases({ edit }: { edit: boolean }) {
 
 function NewPurchase({ close, saved }: { close: () => void; saved: (text: string) => Promise<void> }) {
   const { data, error } = useData<Options>('purchases/options');
-  const [items, setItems] = useState([{ key: 0, productId: '', total: '' }]);
+  const [items, setItems] = useState<ItemRow[]>([blankItem(0)]);
   const [costs, setCosts] = useState<CostRow[]>([]);
   if (!data) return <Modal wide title="Nova compra" close={close}>{message(error)}{!error && <Loading label="Carregando…" />}</Modal>;
-  const patchItem = (key: number, patch: Partial<typeof items[number]>) => setItems(rows => rows.map(row => row.key === key ? { ...row, ...patch } : row));
+  const patchItem = (key: number, patch: Partial<ItemRow>) => setItems(rows => rows.map(row => row.key === key ? { ...row, ...patch } : row));
   const patchCost = (key: number, patch: Partial<CostRow>) => setCosts(rows => rows.map(row => row.key === key ? { ...row, ...patch } : row));
   // A registered cost fills a copy of its values. They stay editable, and the purchase keeps what was typed.
   const pickCost = (row: CostRow, costItemId: string) => {
@@ -82,7 +87,10 @@ function NewPurchase({ close, saved }: { close: () => void; saved: (text: string
     const input = fields(values);
     await api('purchases', {
       supplierId: input.supplierId, documentNumber: input.documentNumber, purchaseDate: input.purchaseDate, notes: input.notes,
-      items: items.map(({ key }) => ({ productId: input['product' + key], unitId: input['unit' + key], quantity: input['quantity' + key], totalCost: input['total' + key] })),
+      items: items.map(({ key, reprice, salePrice }) => ({
+        productId: input['product' + key], unitId: input['unit' + key], quantity: input['quantity' + key], totalCost: input['total' + key],
+        ...(reprice && salePrice.trim() ? { salePrice: salePrice.trim() } : {}),
+      })),
       costs: costs.map(({ key, costItemId }) => ({ costItemId: costItemId || null, title: input['title' + key], mode: input['mode' + key], value: input['value' + key], split: input['split' + key] })),
       ...(manufactured.length ? { acknowledgeNoInputs: values.has('acknowledgeNoInputs') } : {}),
     });
@@ -95,18 +103,23 @@ function NewPurchase({ close, saved }: { close: () => void; saved: (text: string
       <Field name="notes" label="Observações" required={false} />
     </div>
     <h3>Itens</h3>
-    {items.map(({ key, productId, total }, index) => {
+    {items.map((row, index) => {
+      const { key, productId, total } = row;
       const product = data.products.find(item => item.id === productId);
-      return <div className="component-row purchase-row" key={key}>
-        <Select name={'product' + key} label={'Produto ' + (index + 1)} options={productOptions(data.products)} onChange={value => patchItem(key, { productId: value })} />
-        <Field name={'quantity' + key} label="Quantidade" inputMode="decimal" />
-        <Select key={productId} name={'unit' + key} label="Unidade" defaultValue={product?.unit.id}
-          options={unitOptions(data.units.filter(unit => unit.familyId === product?.unit.familyId))} />
-        <label>Total da mercadoria (R$)<input name={'total' + key} inputMode="decimal" required value={total} onChange={event => patchItem(key, { total: event.target.value })} /></label>
-        {items.length > 1 && <button type="button" className="btn ghost small" aria-label={'Remover produto ' + (index + 1)} onClick={() => setItems(items.filter(row => row.key !== key))}><Trash2 size={14} aria-hidden="true" /></button>}
+      return <div className="stack" style={{ gap: 4 }} key={key}>
+        <div className="component-row purchase-row">
+          <Select name={'product' + key} label={'Produto ' + (index + 1)} options={productOptions(data.products)}
+            onChange={value => patchItem(key, { productId: value, unitId: '', reprice: false, salePrice: '' })} />
+          <label>Quantidade<input name={'quantity' + key} inputMode="decimal" required value={row.quantity} onChange={event => patchItem(key, { quantity: event.target.value })} /></label>
+          <Select key={productId} name={'unit' + key} label="Unidade" defaultValue={product?.unit.id} onChange={unitId => patchItem(key, { unitId })}
+            options={unitOptions(data.units.filter(unit => unit.familyId === product?.unit.familyId))} />
+          <label>Total da mercadoria (R$)<input name={'total' + key} inputMode="decimal" required value={total} onChange={event => patchItem(key, { total: event.target.value })} /></label>
+          {items.length > 1 && <button type="button" className="btn ghost small" aria-label={'Remover produto ' + (index + 1)} onClick={() => setItems(items.filter(item => item.key !== key))}><Trash2 size={14} aria-hidden="true" /></button>}
+        </div>
+        {product?.costs && <ItemPricing row={row} product={product} units={data.units} patch={patch => patchItem(key, patch)} />}
       </div>;
     })}
-    <div><button type="button" className="btn secondary small" onClick={() => setItems([...items, { key: Math.max(...items.map(row => row.key)) + 1, productId: '', total: '' }])}>
+    <div><button type="button" className="btn secondary small" onClick={() => setItems([...items, blankItem(Math.max(...items.map(row => row.key)) + 1)])}>
       <Plus size={14} aria-hidden="true" />Adicionar item</button></div>
     <h3>Custos adicionais</h3>
     <p className="hint">Frete, taxas e outras despesas ficam fora do custo médio e aparecem nos valores da última compra. O percentual vale sobre o total das mercadorias.</p>
@@ -127,6 +140,27 @@ function NewPurchase({ close, saved }: { close: () => void; saved: (text: string
       <label className="check"><input name="acknowledgeNoInputs" type="checkbox" required />Estou ciente e quero registrar mesmo assim</label>
     </div>}
   </ModalForm>;
+}
+
+/**
+ * Unit cost of this purchase and the price it suggests with the product's margin and linked costs.
+ * The expenses stay out, as they stay out of the average cost. Display only: the API stores the price the person confirms.
+ */
+function ItemPricing({ row, product, units, patch }: { row: ItemRow; product: PricedProduct; units: Unit[]; patch: (patch: Partial<ItemRow>) => void }) {
+  const unit = units.find(item => item.id === (row.unitId || product.unit.id));
+  const amount = typed(row.quantity) * Number(unit?.factor ?? 0);
+  const cost = amount > 0 && row.total.trim() ? typed(row.total) / amount : null;
+  const suggestion = cost === null ? null : suggestedPrice(cost.toFixed(12), product.marginPercent ?? '', product.costs ?? []);
+  const symbol = baseUnit(product).symbol;
+  return <div className="hint purchase-pricing">
+    <span>Custo unitário: <strong className="num">{cost === null ? '—' : brl(cost) + ' / ' + symbol}</strong>
+      {' · preço atual: ' + (product.salePrice ? brl(product.salePrice) : 'sem preço')}
+      {' · sugerido: '}{suggestion ? <strong className="num">{brl(suggestion)}</strong> : product.marginPercent ? '—' : 'sem margem desejada'}</span>
+    <label className="check"><input type="checkbox" checked={row.reprice}
+      onChange={event => patch({ reprice: event.target.checked, salePrice: row.salePrice || suggestion || product.salePrice || '' })} />Atualizar preço de venda</label>
+    {row.reprice && <label>{'Novo preço por ' + symbol + ' (R$)'}<input inputMode="decimal" required value={row.salePrice}
+      onChange={event => patch({ salePrice: event.target.value })} /></label>}
+  </div>;
 }
 
 function PurchaseDialog({ dialog, edit, setDialog, close, saved }: {

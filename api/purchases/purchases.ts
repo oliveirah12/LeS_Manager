@@ -1,9 +1,10 @@
 import {
-  BadRequestException, Body, ConflictException, Controller, Get, Inject, Injectable, NotFoundException, Param, Patch, Post, Query, Req,
+  BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, Inject, Injectable, NotFoundException, Param, Patch, Post, Query, Req,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
+import { canAccess } from '../access/security';
 import { Audit, auditChange, auditContext } from '../audit/recorder';
 import { inBase, productInclude } from '../catalog/catalog';
 import { costPerBaseUnit } from '../stock/cost';
@@ -24,7 +25,8 @@ const costRow = z.object({
 }).refine(cost => cost.mode === 'VALUE' || cost.value.lte(100), 'O percentual precisa ficar entre 0 e 100');
 export const purchaseFields = z.object({
   ...informative,
-  items: z.array(z.object({ productId: idField, unitId: idField, quantity: positive, totalCost: nonnegative })).min(1).max(200),
+  // The sale price is optional: it updates the product in the same transaction and needs stock:operate.
+  items: z.array(z.object({ productId: idField, unitId: idField, quantity: positive, totalCost: nonnegative, salePrice: positive.optional() })).min(1).max(200),
   costs: z.array(costRow).max(20).default([]),
   acknowledgeNoInputs: z.boolean().optional(),
 });
@@ -60,17 +62,29 @@ export class PurchaseService {
     return { purchases: rows.slice(0, pageSize), nextCursor: rows.length > pageSize ? rows[pageSize - 1].id : null };
   }
 
-  /** What the purchase form needs. It carries no costs, so operating purchases does not reveal the stock values. */
-  async options() {
+  /**
+   * What the purchase form needs. It carries no stock values, so operating purchases does not reveal them.
+   * Margin, price and linked costs only come to whoever may change the price.
+   */
+  async options(canPrice: boolean) {
     const [suppliers, products, units, costs] = await Promise.all([
       this.db.supplier.findMany({ where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
       this.db.product.findMany({
-        where: { active: true }, select: { id: true, sku: true, name: true, ...productInclude, type: { select: { isManufactured: true } } }, orderBy: { sku: 'asc' },
+        where: { active: true },
+        select: {
+          id: true, sku: true, name: true, ...productInclude, type: { select: { isManufactured: true } },
+          salePrice: true, marginPercent: true, costs: { where: { costItem: { active: true } }, select: { costItem: { select: { mode: true, base: true, value: true } } } },
+        },
+        orderBy: { sku: 'asc' },
       }),
       this.db.unit.findMany({ orderBy: { symbol: 'asc' } }),
       this.db.costItem.findMany({ where: { active: true }, select: { id: true, name: true, mode: true, value: true }, orderBy: { name: 'asc' } }),
     ]);
-    return { suppliers, products, units, costs };
+    return {
+      suppliers, units, costs,
+      products: products.map(({ costs: links, salePrice, marginPercent, ...product }) =>
+        canPrice ? { ...product, salePrice, marginPercent, costs: links.map(link => link.costItem) } : product),
+    };
   }
 
   async details(id: string) {
@@ -139,6 +153,9 @@ export class PurchaseService {
         throw new ConflictException('Esta entrada não baixa insumos de ' + manufactured.join(', ') + '. Confirme que está ciente ou use uma ordem de produção.');
       }
       if (manufactured.length) auditContext({ 'Entrada sem baixa de insumos': 'Confirmada' });
+      // The last price typed for a product wins when it appears in more than one line.
+      const prices = new Map(data.items.flatMap(item => item.salePrice ? [[item.productId, storedDecimal(item.salePrice)] as const] : []));
+      const repriced: string[] = [];
       const split = splitCosts(lines, data.costs);
       const purchaseDate = storedDate(data.purchaseDate);
       const purchase = await tx.purchase.create({
@@ -158,8 +175,13 @@ export class PurchaseService {
         const unitCost = storedDecimal(costPerBaseUnit(line.total, quantity));
         const unitExpense = storedDecimal(costPerBaseUnit(split.expenses[index], quantity));
         const movement = await this.stock.record(tx, product, quantity, 'PURCHASE', userId, 'Compra nº ' + purchase.number, unitCost);
+        const salePrice = prices.get(product.id);
+        if (salePrice && !salePrice.equals(product.salePrice ?? -1)) {
+          repriced.push(product.sku + ': ' + (product.salePrice?.toFixed() ?? 'sem preço') + ' → ' + salePrice.toFixed());
+        }
         await tx.product.update({
-          where: { id: product.id }, data: { lastPurchaseAt: purchaseDate, lastPurchaseExpense: unitExpense, lastSupplierId: supplier?.id ?? null },
+          where: { id: product.id },
+          data: { lastPurchaseAt: purchaseDate, lastPurchaseExpense: unitExpense, lastSupplierId: supplier?.id ?? null, ...(salePrice ? { salePrice } : {}) },
         });
         await tx.purchaseItem.create({
           data: {
@@ -173,7 +195,7 @@ export class PurchaseService {
       }
       auditChange(null, {
         Compra: purchase.number, Fornecedor: supplier?.name ?? null, Documento: data.documentNumber, 'Data da compra': data.purchaseDate,
-        Mercadorias: split.goods, 'Custos adicionais': split.costsTotal,
+        Mercadorias: split.goods, 'Custos adicionais': split.costsTotal, ...(repriced.length ? { 'Preços de venda atualizados': repriced } : {}),
       });
       return purchase;
     });
@@ -249,7 +271,7 @@ export class PurchaseController {
 
   @Require('purchases:operate')
   @Get('options')
-  options() { return this.purchases.options(); }
+  options(@Req() request: Authenticated) { return this.purchases.options(canAccess(request.identity.permissions, 'stock:operate')); }
 
   @Require('purchases:view')
   @Get(':id')
@@ -258,7 +280,13 @@ export class PurchaseController {
   @Require('purchases:operate')
   @Audit('Registrar compra')
   @Post()
-  create(@Req() request: Authenticated, @Body() body: unknown) { return this.purchases.create(parse(purchaseFields, body), request.identity.id); }
+  create(@Req() request: Authenticated, @Body() body: unknown) {
+    const data = parse(purchaseFields, body);
+    if (data.items.some(item => item.salePrice) && !canAccess(request.identity.permissions, 'stock:operate')) {
+      throw new ForbiddenException('Atualizar o preço de venda exige a permissão de operar o estoque.');
+    }
+    return this.purchases.create(data, request.identity.id);
+  }
 
   @Require('purchases:operate')
   @Audit('Alterar compra')
