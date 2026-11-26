@@ -743,6 +743,27 @@ test('API REST com PostgreSQL', {
     assert.deepEqual([frozen.sale.paymentName, frozen.sale.feePercent, frozen.sale.values.net], [name, '5', '42.75']);
   });
 
+  await t.test('custos cadastrados respeitam acessos e só são excluídos sem uso', async () => {
+    const reader = await session('CUSTO-LEITURA', ['registrations:view']);
+    const operator = await session('CUSTO-OPERA', ['registrations:operate']);
+    const stranger = await session('CUSTO-SEM', ['purchases:view']);
+    const name = sku('EMBALAGEM');
+    expectStatus(await stranger('/costs'), 403);
+    expectStatus(await reader('/costs'), 200);
+    expectStatus(await reader('/costs', { method: 'POST', body: { name, mode: 'VALUE', value: '2' } }), 403);
+    expectStatus(await operator('/costs', { method: 'POST', body: { name, mode: 'PERCENT', base: 'SALE', value: '100' } }), 400);
+    const cost = expectStatus(await operator('/costs', { method: 'POST', body: { name, mode: 'VALUE', base: 'SALE', value: '2.5' } }), 201);
+    assert.equal(cost.base, 'COST');
+    expectStatus(await operator('/costs/' + cost.id, { method: 'PATCH', body: { name, mode: 'PERCENT', base: 'SALE', value: '6' } }), 400);
+    const edited = expectStatus(await operator('/costs/' + cost.id, { method: 'PATCH', body: { name, mode: 'PERCENT', base: 'SALE', value: '6', active: false } }), 200);
+    assert.deepEqual([edited.base, edited.value, edited.active], ['SALE', '6', false]);
+    const listed = expectStatus(await reader('/costs'), 200).find(row => row.id === cost.id);
+    assert.deepEqual([listed.purchases, listed.deleteBlock], [0, null]);
+    expectStatus(await reader('/costs/' + cost.id, { method: 'DELETE' }), 403);
+    expectStatus(await operator('/costs/' + cost.id, { method: 'DELETE' }), 200);
+    expectStatus(await operator('/costs/' + cost.id, { method: 'DELETE' }), 404);
+  });
+
   await t.test('despesas entram uma única vez no custo e na média do fabricado', async () => {
     const input = await createProduct('DESPESA-INSUMO', unit.id);
     const piece = await createProduct('DESPESA-PECA', unit.id);

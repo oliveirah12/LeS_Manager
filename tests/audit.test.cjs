@@ -21,6 +21,7 @@ const controllers = [
   require('../dist/api/purchases/documents.js').PurchaseDocumentSearchController,
   require('../dist/api/purchases/purchases.js').PurchaseController,
   require('../dist/api/purchases/suppliers.js').SupplierController,
+  require('../dist/api/registrations/costs.js').CostItemController,
   require('../dist/api/stock/controller.js').StockController,
 ];
 
@@ -89,6 +90,16 @@ test('supplier routes read with registrations:view and write with registrations:
 
 test('payment method routes read with registrations:view and write with registrations:operate', () => {
   const controller = require('../dist/api/production/payments.js').PaymentMethodController;
+  for (const name of ['list', 'create', 'update', 'remove']) {
+    const handler = controller.prototype[name];
+    const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
+    assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'registrations:view' : 'registrations:operate'], name);
+    assert.equal(typeof Reflect.getMetadata(AUDIT, handler), reads ? 'undefined' : 'string', name);
+  }
+});
+
+test('registered cost routes read with registrations:view and write with registrations:operate', () => {
+  const controller = require('../dist/api/registrations/costs.js').CostItemController;
   for (const name of ['list', 'create', 'update', 'remove']) {
     const handler = controller.prototype[name];
     const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
