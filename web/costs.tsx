@@ -3,7 +3,7 @@ import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { api, Badge, brl, by, decimal, Field, fields, Loading, matches, message, Modal, ModalForm, notify, PageActions, SearchInput, Select, Table, useData } from './ui';
 
 export type CostItem = { id: string; name: string; mode: 'VALUE' | 'PERCENT'; base: 'COST' | 'SALE'; value: string; active: boolean };
-type Row = CostItem & { purchases: number; deleteBlock: string | null };
+type Row = CostItem & { purchases: number; products: number; deleteBlock: string | null };
 
 export const costModes = [{ id: 'VALUE', name: 'Valor (R$)' }, { id: 'PERCENT', name: 'Percentual (%)' }];
 const bases = [{ id: 'COST', name: 'Sobre o custo' }, { id: 'SALE', name: 'Sobre o preço de venda' }];
@@ -24,7 +24,7 @@ export function Costs({ edit }: { edit: boolean }) {
     {!data ? loading && <Loading label="Carregando custos…" /> : <>
       <div className="toolbar"><SearchInput value={query} onChange={setQuery} placeholder="Buscar custo" /></div>
       <Table empty={query ? 'Nenhum custo encontrado.' : 'Nenhum custo cadastrado.'}
-        columns={['Custo', 'Tipo', 'Base do %', { label: 'Valor', end: true }, 'Situação', { label: 'Compras', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
+        columns={['Custo', 'Tipo', 'Base do %', { label: 'Valor', end: true }, 'Situação', { label: 'Compras', end: true }, { label: 'Produtos', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
         rows={data.filter(row => matches(query, row.name)).map(row => [
           by(row.name, <span className="cell-title">{row.name}</span>),
           costTypeLabel(row),
@@ -32,6 +32,7 @@ export function Costs({ edit }: { edit: boolean }) {
           by(Number(row.value), <span className="num">{costValue(row)}</span>),
           by(row.active ? 'Ativo' : 'Inativo', row.active ? <Badge tone="ok">Ativo</Badge> : <Badge>Inativo</Badge>),
           by(row.purchases, <span className="num">{row.purchases}</span>),
+          by(row.products, <span className="num">{row.products}</span>),
           ...(edit ? [<div className="actions">
             <button type="button" className="btn secondary small" onClick={() => open(row)}><Pencil size={14} aria-hidden="true" />Editar</button>
             <button type="button" className={'btn ghost small' + (row.deleteBlock ? ' unavailable' : '')} title={row.deleteBlock ?? undefined}

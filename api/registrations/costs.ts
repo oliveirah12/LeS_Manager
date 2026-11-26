@@ -35,8 +35,12 @@ export const costItemFields = costShape.superRefine(checkPercent).transform(norm
 export const costItemUpdateFields = costShape.extend({ active: z.boolean() }).superRefine(checkPercent).transform(normalize);
 type CostItemData = z.infer<typeof costItemFields>;
 
-const usage = { _count: { select: { purchaseCosts: true } } } as const;
-const usedBlock = 'O custo já foi usado em compras. Inative-o para tirá-lo das listas.';
+const usage = { _count: { select: { purchaseCosts: true, products: true } } } as const;
+/** A cost used by a purchase or priced into a product stays in the history, so it is only inactivated. */
+function usedBlock(usage: { purchaseCosts: number; products: number }) {
+  if (usage.purchaseCosts) return 'O custo já foi usado em compras. Inative-o para tirá-lo das listas.';
+  return usage.products ? 'O custo compõe o preço de ' + usage.products + (usage.products === 1 ? ' produto' : ' produtos') + '. Desvincule-o ou inative-o.' : null;
+}
 const values = (cost: Pick<CostItem, 'name' | 'mode' | 'base' | 'value' | 'active'>) => ({
   Nome: cost.name, Tipo: costModeLabels[cost.mode], 'Base do percentual': cost.mode === 'PERCENT' ? costBaseLabels[cost.base] : null,
   Valor: cost.value.toFixed(), Situação: cost.active ? 'Ativo' : 'Inativo',
@@ -48,7 +52,7 @@ export class CostItemService {
 
   async list() {
     const rows = await this.db.costItem.findMany({ include: usage, orderBy: { name: 'asc' } });
-    return rows.map(({ _count, ...cost }) => ({ ...cost, purchases: _count.purchaseCosts, deleteBlock: _count.purchaseCosts ? usedBlock : null }));
+    return rows.map(({ _count, ...cost }) => ({ ...cost, purchases: _count.purchaseCosts, products: _count.products, deleteBlock: usedBlock(_count) }));
   }
 
   async create(data: CostItemData) {
@@ -71,7 +75,8 @@ export class CostItemService {
     return serial(this.db, async tx => {
       const cost = await tx.costItem.findUnique({ where: { id }, include: usage });
       if (!cost) throw new NotFoundException('Custo não encontrado.');
-      if (cost._count.purchaseCosts) throw new ConflictException(usedBlock);
+      const block = usedBlock(cost._count);
+      if (block) throw new ConflictException(block);
       await tx.costItem.delete({ where: { id } });
       auditChange(values(cost), null);
       return { id };
