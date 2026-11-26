@@ -1333,6 +1333,13 @@ test('API REST com PostgreSQL', {
     recipes.getRow(2).values = [printed, filament, '120', gram.symbol];
     const packing = sku('CARGA-EMBALAGEM');
     workbook.getWorksheet('Custos').getRow(2).values = [packing, 'Percentual', 'Venda', '6'];
+    // The piece takes its print time, printer and a cost of this same batch, and the margin must leave room for it.
+    const loadPrinter = expectStatus(await post('/production/printers', { name: sku('CARGA-IMPRESSORA'), powerWatts: '100', hourlyCost: '1' }), 201);
+    const column = header => sheet.getRow(1).values.indexOf(header);
+    sheet.getCell(3, column('Tempo por peça (min)')).value = '30';
+    sheet.getCell(3, column('Impressora')).value = loadPrinter.name;
+    sheet.getCell(3, column('Custos vinculados')).value = packing;
+    sheet.getCell(3, column('Margem (%)')).value = '95';
     const upload = () => uploadWorkbook('/stock/initial/preview', workbook);
     const stored = () => db.product.count({ where: { sku: { in: [filament, printed] } } });
     // Costs are registrations, so loading them also needs registrations:operate.
@@ -1344,6 +1351,8 @@ test('API REST com PostgreSQL', {
     recipes.getCell('B2').value = printed;
     expectStatus(await upload(), 400);
     recipes.getCell('B2').value = filament;
+    expectStatus(await upload(), 400);
+    sheet.getCell(3, column('Margem (%)')).value = '30';
     const batch = expectStatus(await upload(), 201);
     assert.equal(batch.rows[0].declaredCost, '100');
     assert.equal(batch.rows[1].typeName, 'Impresso 3D');
@@ -1356,8 +1365,9 @@ test('API REST com PostgreSQL', {
     assert.deepEqual([cost.mode, cost.base, cost.value.toString(), cost.active], ['PERCENT', 'SALE', '6', true]);
     const [input, product] = await Promise.all([
       db.product.findUniqueOrThrow({ where: { sku: filament } }),
-      db.product.findUniqueOrThrow({ where: { sku: printed }, include: { recipe: true } }),
+      db.product.findUniqueOrThrow({ where: { sku: printed }, include: { recipe: true, costs: true } }),
     ]);
+    assert.deepEqual([product.printMinutes.toString(), product.printerId, product.costs.map(row => row.costItemId)], ['30', loadPrinter.id, [cost.id]]);
     assert.equal(input.quantity.toString(), '3000');
     assert.equal(input.currentCost.toString(), '0.1');
     assert.equal(product.wastePercent.toString(), '5');

@@ -123,13 +123,15 @@ export class StockController {
   @Require('catalog:operate', 'stock:operate')
   @Get('initial/template')
   async initialTemplate() {
-    const [{ productTypes, units, references }, suppliers] = await Promise.all([
+    const [{ productTypes, units, references }, suppliers, printers] = await Promise.all([
       this.catalog.registrations(), this.db.supplier.findMany({ where: { active: true }, select: { name: true }, orderBy: { name: 'asc' } }),
+      this.db.printer.findMany({ where: { active: true }, select: { name: true }, orderBy: { name: 'asc' } }),
     ]);
     const names = (kind: string) => references.filter(item => item.kind === kind).map(item => item.name);
     return template('initial', {
       Tipo: productTypes.map(type => type.name), Unidade: units.map(unit => unit.symbol), Grupo: names('GRUPO'),
       Marca: names('MARCA'), Cor: names('COR'), Departamento: names('DEPARTAMENTO'), Fornecedor: suppliers.map(supplier => supplier.name),
+      Impressora: printers.map(printer => printer.name),
     });
   }
 

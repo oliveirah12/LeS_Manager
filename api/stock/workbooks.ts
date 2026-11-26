@@ -11,6 +11,7 @@ const formats = {
     ['Estoque mínimo', 'minStock'], ['Margem (%)', 'marginPercent'], ['Preço de venda', 'salePrice'],
     ['Comprimento (mm)', 'lengthMm'], ['Largura (mm)', 'widthMm'], ['Altura (mm)', 'heightMm'], ['Diâmetro (mm)', 'diameterMm'], ['URL de compra', 'purchaseUrl'],
     ['Data da compra', 'purchaseDate'], ['Fornecedor', 'supplier'], ['Despesas da compra', 'purchaseExpenses'],
+    ['Tempo por peça (min)', 'printMinutes'], ['Impressora', 'printer'], ['Custos vinculados', 'linkedCosts'],
   ],
   inventory: [['SKU', 'sku'], ['Quantidade', 'quantity'], ['Unidade', 'unit']],
 } as const satisfies Record<string, readonly Column[]>;
@@ -27,7 +28,7 @@ const costColumns: readonly Column[] = [['Descrição', 'name'], ['Tipo do custo
 const costLists: WorkbookLists = { 'Tipo do custo': ['Valor', 'Percentual'], 'Base do %': ['Custo', 'Venda'] };
 const requiredInitial = ['SKU', 'Nome', 'Unidade', 'Quantidade'];
 const decimalKeys = new Set([
-  'quantity', 'unitCost', 'totalCost', 'wastePercent', 'minStock', 'marginPercent', 'salePrice', 'lengthMm', 'widthMm', 'heightMm', 'diameterMm', 'value', 'purchaseExpenses',
+  'quantity', 'unitCost', 'totalCost', 'wastePercent', 'minStock', 'marginPercent', 'salePrice', 'lengthMm', 'widthMm', 'heightMm', 'diameterMm', 'value', 'purchaseExpenses', 'printMinutes',
 ]);
 const lastRow = 501;
 /** Current registrations offered as dropdowns, by column header. */

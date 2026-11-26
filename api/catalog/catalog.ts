@@ -443,6 +443,7 @@ export class CatalogService {
   /** The commercial fields come only from the initial load, whose route also requires stock:operate. */
   async createProduct(tx: Prisma.TransactionClient, data: z.infer<typeof productFields> & {
     wastePercent?: Prisma.Decimal; minStock?: Prisma.Decimal; salePrice?: Prisma.Decimal; marginPercent?: Prisma.Decimal;
+    printMinutes?: Prisma.Decimal; printerId?: string;
   }) {
     await this.assertReferences(tx, data);
     const { measures, ...fields } = data;

@@ -6,6 +6,7 @@ import { Database, idField, nonnegative, positive, serial, storedDecimal } from 
 import { pricingBreakdown, printerHourCost, recipeEstimate, sumValues } from '../stock/cost';
 
 export const marginField = nonnegative.refine(value => value.lt(100) && value.decimalPlaces() <= 2, 'Informe a margem abaixo de 100, com até 2 casas');
+export const printMinutesField = positive.refine(value => value.lt(1000000) && value.decimalPlaces() <= 2, 'Informe o tempo por peça abaixo de 1.000.000 minutos, com até 2 casas');
 export const costLinksField = z.array(idField).max(30).refine(ids => new Set(ids).size === ids.length, 'Vincule cada custo apenas uma vez.');
 /** Minimum, price and margin, and the registered costs that price the product. Omitted margin or costs keep the stored ones. */
 export const stockSettingsFields = z.strictObject({

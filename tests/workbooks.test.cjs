@@ -24,7 +24,9 @@ test('the template has the load, technical sheet and list tabs with dropdowns', 
   const [load, recipes, measures, costs, lists] = workbook.worksheets;
   assert.deepEqual(measures.getRow(1).values.slice(1), ['SKU', 'Nome', 'Valor', 'Unidade']);
   assert.equal(measures.getCell('D2').dataValidation, undefined);
-  assert.deepEqual(load.getRow(1).values.slice(20), ['Data da compra', 'Fornecedor', 'Despesas da compra']);
+  assert.deepEqual(load.getRow(1).values.slice(20), [
+    'Data da compra', 'Fornecedor', 'Despesas da compra', 'Tempo por peça (min)', 'Impressora', 'Custos vinculados',
+  ]);
   assert.deepEqual(load.getRow(1).values.slice(12, 20), [
     'Estoque mínimo', 'Margem (%)', 'Preço de venda', 'Comprimento (mm)', 'Largura (mm)', 'Altura (mm)', 'Diâmetro (mm)', 'URL de compra',
   ]);
@@ -54,6 +56,24 @@ test('reads the new columns and the technical sheet', async () => {
   assert.equal(data.rows[1].wastePercent, '5');
   assert.deepEqual(data.recipes, [{ product: 'peca', input: 'pla', quantity: '120', unit: 'g' }]);
   assert.equal(initialFields.safeParse(data).success, true);
+});
+
+test('reads print time, printer and linked costs, also from a stored preview', async () => {
+  const workbook = await template({ Tipo: ['Impresso 3D'], Unidade: ['un'], Impressora: ['Bambu A1'] });
+  const load = workbook.worksheets[0];
+  const column = header => load.getRow(1).values.indexOf(header);
+  load.getRow(2).values = ['peca', 'Peça', 'Impresso 3D', 'un', 0];
+  load.getCell(2, column('Tempo por peça (min)')).value = 45.5;
+  load.getCell(2, column('Impressora')).value = 'Bambu A1';
+  load.getCell(2, column('Custos vinculados')).value = 'Embalagem; Taxa da loja ;';
+  assert.deepEqual(load.getCell(2, column('Impressora')).dataValidation.formulae.length, 1);
+  const data = await workbookRows('initial', await asFile(workbook));
+  assert.deepEqual([data.rows[0].printMinutes, data.rows[0].printer, data.rows[0].linkedCosts], ['45.5', 'Bambu A1', 'Embalagem; Taxa da loja ;']);
+  const parsed = initialFields.parse(data);
+  assert.deepEqual([parsed.rows[0].printMinutes.toFixed(), parsed.rows[0].linkedCosts], ['45.5', ['Embalagem', 'Taxa da loja']]);
+  const stored = JSON.parse(JSON.stringify({ ...data, rows: [{ ...data.rows[0], linkedCosts: parsed.rows[0].linkedCosts }] }));
+  assert.deepEqual(initialFields.parse(stored).rows[0].linkedCosts, ['Embalagem', 'Taxa da loja']);
+  assert.equal(initialFields.safeParse({ rows: [{ ...data.rows[0], printMinutes: '0' }] }).success, false);
 });
 
 test('reads the cost tab by its labels and applies the cost rules', async () => {

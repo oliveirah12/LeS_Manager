@@ -357,7 +357,7 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
   </div>;
   return <div className="stack">
     <div className="info">Use SKUs novos e os tipos, unidades e classificações da aba Listas. Informe o custo total da linha, e o sistema calcula o valor por unidade.
-      Para produtos fabricados, preencha a aba Ficha técnica com o consumo de uma unidade. Mínimo, margem, preço, dimensões, URL, dados da compra e a aba Medidas são opcionais. As despesas da compra ficam fora do custo médio. Na aba Custos, cadastre custos reutilizáveis, como embalagem e impostos, com descrições novas.</div>
+      Para produtos fabricados, preencha a aba Ficha técnica com o consumo de uma unidade. Mínimo, margem, preço, dimensões, URL, dados da compra e a aba Medidas são opcionais. As despesas da compra ficam fora do custo médio. Na aba Custos, cadastre custos reutilizáveis, como embalagem e impostos, com descrições novas. Para fabricados, informe também o tempo por peça e a impressora. Em Custos vinculados, liste os custos do produto separados por ponto e vírgula.</div>
     <a className="btn secondary" style={{ alignSelf: 'flex-start' }} href="/api/stock/initial/template"><Download size={16} aria-hidden="true" />Baixar modelo</a>
     <Upload action={async file => { setPreview(undefined); setPreview(await api<InitialPreview>('stock/initial/preview', file)); }} />
   </div>;

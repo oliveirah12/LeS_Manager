@@ -9,12 +9,12 @@ import { Audit, auditChange } from '../audit/recorder';
 import { Database, idField, nonnegative, parse, positive, serial } from '../shared';
 import { printerHourCost } from '../stock/cost';
 import { inBase, productInclude } from './catalog';
-import { currentEnergyRate } from './pricing';
+import { currentEnergyRate, printMinutesField } from './pricing';
 
 export const recipeFields = z.object({
   wastePercent: nonnegative.refine(value => value.lte(100) && value.decimalPlaces() <= 2, 'Informe a perda entre 0 e 100, com até 2 casas'),
   inputs: z.array(z.object({ inputId: idField, unitId: idField, quantity: positive })).max(100),
-  printMinutes: positive.refine(value => value.lt(1000000) && value.decimalPlaces() <= 2, 'Informe o tempo por peça abaixo de 1.000.000 minutos, com até 2 casas').nullable().default(null),
+  printMinutes: printMinutesField.nullable().default(null),
   printerId: idField.nullable().default(null),
 });
 type Recipe = z.infer<typeof recipeFields>;
