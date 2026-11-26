@@ -1,7 +1,7 @@
 import { ChangeEvent, useCallback, useRef, useState } from 'react';
 import { FileText, ImageIcon, Trash2, Undo2, Upload } from 'lucide-react';
-import { PdfViewer } from './order-pdf';
 import { loadReportImage, Report, ReportBrand } from './pdf';
+import { PdfViewer } from './pdf-viewer';
 import { maxImageBytes, usePreview } from './product-image';
 import { api, brl, dateTime, Field, fields, Form, Loading, message, notify, PageActions, Section, useData } from './ui';
 
