@@ -20,7 +20,7 @@ test('the products line adds exact quantities only within one unit', () => {
 });
 
 const { orderReport } = load('../web/order-report.ts', __filename);
-const { renderPdf, wrapText } = load('../web/pdf.ts', __filename);
+const { fitImage, imageKind, renderPdf, wrapText } = load('../web/pdf.ts', __filename);
 const { PDFDocument } = require('pdf-lib');
 const period = (number, start, end) => ({ number, start: start.toISOString(), end: end.toISOString() });
 const reportOrder = (values = {}) => ({
@@ -47,6 +47,40 @@ test('the PDF keeps long orders on new pages and survives characters outside its
   const bytes = await renderPdf(orderReport(reportOrder({ items }), 'Concluída', true, []));
   assert.equal(Buffer.from(bytes.slice(0, 4)).toString(), '%PDF');
   assert.ok((await PDFDocument.load(bytes)).getPageCount() > 1);
+});
+
+test('report images are told apart by their bytes and fit without stretching', () => {
+  const bytes = text => new Uint8Array(Buffer.from(text, 'latin1'));
+  assert.equal(imageKind(bytes('\x89PNG\r\n\x1a\n')), 'png');
+  assert.equal(imageKind(bytes('\xff\xd8\xff\xe0')), 'jpg');
+  assert.equal(imageKind(bytes('RIFF\0\0\0\0WEBPVP8 ')), 'webp');
+  assert.equal(imageKind(bytes('GIF89a')), null);
+  assert.deepEqual(fitImage(200, 50, 120, 56), { width: 120, height: 30 });
+  assert.deepEqual(fitImage(28, 112, 120, 56), { width: 14, height: 56 });
+  assert.deepEqual(fitImage(20, 10, 120, 56), { width: 20, height: 10 });
+});
+
+test('the branded PDF carries the logo, section images, the highlighted total and the footer', async () => {
+  const png = { kind: 'png', bytes: new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')) };
+  const broken = { kind: 'jpg', bytes: new Uint8Array([0xff, 0xd8, 0xff, 0]) };
+  const report = {
+    title: 'Orçamento', status: 'Exemplo', generated: 'Hoje', footer: 'Obrigado pela preferência\nPix: 00.000.000/0001-00',
+    brand: { name: 'Lar&Stock3D', tagline: 'Impressão 3D', contact: '(11) 90000-0000\ncontato@exemplo.com', logo: png },
+    sections: [
+      { heading: 'Produto', image: png, notes: ['Estatueta'] },
+      { heading: 'Imagem danificada', image: broken },
+      { heading: 'Valores', total: { lines: [['Valor por unidade', 'R$ 16,00'], ['Quantidade', '32']], label: 'VALOR TOTAL', value: 'R$ 512,00' } },
+    ],
+  };
+  const bytes = await renderPdf(report);
+  const doc = await PDFDocument.load(bytes);
+  assert.equal(doc.getPageCount(), 1);
+  // The image appears twice, in the letterhead and in the section; its transparency travels as a mask. The damaged one is skipped.
+  const { PDFName } = require('pdf-lib');
+  const images = doc.context.enumerateIndirectObjects().filter(([, object]) => object.dict?.get(PDFName.of('Subtype'))?.toString() === '/Image' && object.dict.has(PDFName.of('SMask')));
+  assert.equal(images.length, 2);
+  // Without a brand the plain internal header stays as it was.
+  assert.equal(Buffer.from((await renderPdf({ ...report, brand: undefined, sections: [] })).slice(0, 4)).toString(), '%PDF');
 });
 
 test('text wraps by words and breaks a word only when it is too long', () => {

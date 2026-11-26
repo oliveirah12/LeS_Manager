@@ -1,15 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Download, Share2 } from 'lucide-react';
 import { orderReport, ReportRevision } from './order-report';
 import type { Order } from './orders';
-import { renderPdf } from './pdf';
+import { renderPdf, Report } from './pdf';
 import { api, Loading, message, Modal } from './ui';
 
-/** Builds the order's PDF in the browser and shows it here. Without a built-in viewer, as on many phones, the buttons still deliver the file. */
-export function OrderPdf({ order, statusName, seeCosts, close }: { order: Order; statusName: string; seeCosts: boolean; close: () => void }) {
+/**
+ * Builds a report's PDF in the browser and shows it here. Without a built-in viewer, as on many phones, the buttons still deliver the file.
+ * The document is built again whenever `build` changes, so wrap it in `useCallback`.
+ */
+export function PdfViewer({ title, subtitle, fileName, build, close }: {
+  title: string; subtitle?: string; fileName: string; build: () => Promise<Report>; close: () => void;
+}) {
   const [pdf, setPdf] = useState<{ url: string; file: File }>();
   const [error, setError] = useState('');
-  const fileName = 'ordem-producao-' + order.number + '.pdf';
   const canShow = navigator.pdfViewerEnabled !== false;
   const canShare = Boolean(pdf && navigator.canShare?.({ files: [pdf.file] }));
 
@@ -17,8 +21,7 @@ export function OrderPdf({ order, statusName, seeCosts, close }: { order: Order;
     let active = true;
     let created = '';
     (async () => {
-      const revisions = order.revision > 0 ? await api<ReportRevision[]>('production/orders/' + order.id + '/revisions') : [];
-      const bytes = await renderPdf(orderReport(order, statusName, seeCosts, revisions));
+      const bytes = await renderPdf(await build());
       if (!active) return;
       const file = new File([bytes as BlobPart], fileName, { type: 'application/pdf' });
       created = URL.createObjectURL(file);
@@ -28,19 +31,19 @@ export function OrderPdf({ order, statusName, seeCosts, close }: { order: Order;
       active = false;
       if (created) URL.revokeObjectURL(created);
     };
-  }, [order, statusName, seeCosts, fileName]);
+  }, [build, fileName]);
 
   /** The file is ready before the click, because browsers only open the share menu right after a tap. */
   async function share() {
     setError('');
     try {
-      await navigator.share({ files: [pdf!.file], title: 'Ordem de produção #' + order.number });
+      await navigator.share({ files: [pdf!.file], title });
     } catch (err) {
       if ((err as Error).name !== 'AbortError') setError('Não foi possível compartilhar. Baixe o PDF e envie o arquivo.');
     }
   }
 
-  return <Modal wide title={'PDF da ordem #' + order.number} subtitle={statusName} close={close}>
+  return <Modal wide title={title} subtitle={subtitle} close={close}>
     <div className="pdf-viewer">
       {message(error)}
       {!pdf && !error && <Loading label="Gerando PDF…" />}
@@ -51,9 +54,17 @@ export function OrderPdf({ order, statusName, seeCosts, close }: { order: Order;
             <Share2 size={16} aria-hidden="true" />Compartilhar</button>
         </div>
         {!canShare && <p className="hint">Este navegador não abre o menu de compartilhamento. Baixe o PDF para enviar.</p>}
-        {canShow ? <iframe className="pdf-frame" src={pdf.url} title={'PDF da ordem ' + order.number} />
+        {canShow ? <iframe className="pdf-frame" src={pdf.url} title={title} />
           : <p className="hint">Este navegador não mostra PDF dentro da página. Use os botões acima para abrir o arquivo.</p>}
       </>}
     </div>
   </Modal>;
+}
+
+export function OrderPdf({ order, statusName, seeCosts, close }: { order: Order; statusName: string; seeCosts: boolean; close: () => void }) {
+  const build = useCallback(async () => {
+    const revisions = order.revision > 0 ? await api<ReportRevision[]>('production/orders/' + order.id + '/revisions') : [];
+    return orderReport(order, statusName, seeCosts, revisions);
+  }, [order, statusName, seeCosts]);
+  return <PdfViewer title={'PDF da ordem #' + order.number} subtitle={statusName} fileName={'ordem-producao-' + order.number + '.pdf'} build={build} close={close} />;
 }
