@@ -56,6 +56,13 @@ enum ProductionStatus {
   CANCELED
 }
 
+enum QuoteStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
+}
+
 model Profile {
   id          String   @id @default(uuid())
   name        String   @unique
@@ -84,6 +91,7 @@ model User {
   purchases         Purchase[]       @relation("PurchaseAuthor")
   purchaseReversals Purchase[]       @relation("PurchaseReverser")
   productionRevisions ProductionRevision[]
+  quotes            Quote[]
 }
 
 model Session {
@@ -183,6 +191,7 @@ model Product {
   files         ProductFile[]
   purchaseItems PurchaseItem[]
   costs         ProductCost[]
+  quoteItems    QuoteItem[]
 }
 
 /// Registered cost that prices a product. The product reads its current value, so editing the cost reprices every product.
@@ -255,6 +264,7 @@ model Printer {
   active     Boolean @default(true)
   orders     ProductionOrder[]
   products   Product[]
+  quotes     Quote[]
 }
 
 /// Single row with the values shared by every production order.
@@ -317,6 +327,7 @@ model ProductionOrder {
   expenses         ProductionExpense[]
   items            ProductionItem[]
   movements        Movement[]
+  quote            Quote?
   @@index([status])
   @@index([printerId])
   @@index([paymentMethodId])
@@ -324,6 +335,66 @@ model ProductionOrder {
 
 /// One audited correction of a finished order. Original movements never change: differences become new movements.
 /// costInStock went into the current average, and costIssued belongs to pieces that had already left and stays here.
+/// A proposal to a customer. Nothing moves in stock or in the agenda until it is approved, when a planned order is created from it.
+/// Costs are never stored here: they are estimated on every read, like the budget of a planned order.
+model Quote {
+  id                String        @id @default(uuid())
+  number            Int           @unique @default(autoincrement())
+  status            QuoteStatus   @default(DRAFT)
+  customerName      String
+  customerContact   String?
+  title             String
+  description       String?
+  /// Free label and value lines shown to the customer, such as size, colors and personalization.
+  details           Json          @default("[]")
+  printPlates       Int?
+  estimatedMinutes  Int
+  deliveryDays      Int?
+  validUntil        DateTime      @db.Date
+  printerId         String
+  printer           Printer       @relation(fields: [printerId], references: [id])
+  discountPercent   Decimal       @default(0) @db.Decimal(5, 2)
+  paymentMethodId   String?
+  paymentMethod     PaymentMethod? @relation(fields: [paymentMethodId], references: [id])
+  feePercent        Decimal?      @db.Decimal(5, 2)
+  notes             String?
+  userId            String
+  user              User          @relation(fields: [userId], references: [id])
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  sentAt            DateTime?
+  decidedAt         DateTime?
+  /// Set on approval. The quote is locked from then on.
+  productionOrderId String?       @unique
+  productionOrder   ProductionOrder? @relation(fields: [productionOrderId], references: [id])
+  items             QuoteItem[]
+  expenses          QuoteExpense[]
+  @@index([status])
+  @@index([createdAt])
+}
+
+model QuoteItem {
+  quoteId       String
+  quote         Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id])
+  quantity      Decimal  @db.Decimal(30, 12)
+  salePrice     Decimal  @db.Decimal(30, 12)
+  marginPercent Decimal? @db.Decimal(5, 2)
+  @@id([quoteId, productId])
+  @@index([productId])
+}
+
+/// Expenses typed for this quote only. Purchase expenses of the inputs are suggested by the consumption, as in the order.
+model QuoteExpense {
+  id      String  @id @default(uuid())
+  quoteId String
+  quote   Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  title   String
+  value   Decimal @db.Decimal(30, 12)
+  @@index([quoteId])
+}
+
 model ProductionRevision {
   id          String          @id @default(uuid())
   orderId     String
@@ -360,6 +431,7 @@ model PaymentMethod {
   feePercent Decimal?          @db.Decimal(5, 2)
   active     Boolean           @default(true)
   orders     ProductionOrder[]
+  quotes     Quote[]
 }
 
 model ProductionItem {
