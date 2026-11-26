@@ -33,6 +33,12 @@ enum PurchaseCostMode {
   PERCENT
 }
 
+/// What a percentage cost is applied to when pricing a product. A fixed value ignores it.
+enum CostBase {
+  COST
+  SALE
+}
+
 enum PurchaseCostSplit {
   VALUE
   QUANTITY
@@ -307,6 +313,17 @@ model ProductionRevision {
 }
 
 /// How a sale is paid. The optional fee lowers the net value and the margin, never the cost.
+/// A reusable extra cost. Purchases copy its title, mode and value; products will read its current value.
+model CostItem {
+  id            String           @id @default(uuid())
+  name          String           @unique
+  mode          PurchaseCostMode
+  base          CostBase         @default(COST)
+  value         Decimal          @db.Decimal(30, 12)
+  active        Boolean          @default(true)
+  purchaseCosts PurchaseCost[]
+}
+
 model PaymentMethod {
   id         String            @id @default(uuid())
   name       String            @unique
@@ -481,6 +498,9 @@ model PurchaseCost {
   id         String             @id @default(uuid())
   purchaseId String
   purchase   Purchase           @relation(fields: [purchaseId], references: [id])
+  /// Reference only: the values below are copies, so editing the registered cost never changes the purchase.
+  costItemId String?
+  costItem   CostItem?          @relation(fields: [costItemId], references: [id], onDelete: Restrict)
   title      String
   mode       PurchaseCostMode
   value      Decimal            @db.Decimal(30, 12)
@@ -488,6 +508,7 @@ model PurchaseCost {
   amount     Decimal            @db.Decimal(30, 12)
   shares     PurchaseItemCost[]
   @@index([purchaseId])
+  @@index([costItemId])
 }
 
 /// How much of one extra cost fell on one item.
