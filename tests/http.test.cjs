@@ -92,12 +92,12 @@ test('API REST com PostgreSQL', {
     await workbook.xlsx.load(Buffer.from(bytes));
     return workbook;
   }
-  async function uploadWorkbook(path, workbook) {
+  async function uploadWorkbook(path, workbook, caller = admin) {
     const bytes = await workbook.xlsx.writeBuffer();
     const file = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const body = new FormData();
     body.append('file', file, 'estoque.xlsx');
-    return post(path, body);
+    return caller(path, { method: 'POST', body });
   }
   const createFamily = (name, baseSymbol) => post('/catalog/families', { name: sku(name), baseSymbol }).then(response => expectStatus(response, 201));
   const createProduct = (name, unitId) => post('/catalog/products', {
@@ -1264,8 +1264,13 @@ test('API REST com PostgreSQL', {
     sheet.getRow(2).values = [filament, 'PLA da carga', 'Filamento', kilogram.symbol, '3', '300'];
     sheet.getRow(3).values = [printed, 'Peça da carga', 'Produto normal', unit.symbol, '0', '', '5'];
     recipes.getRow(2).values = [printed, filament, '120', gram.symbol];
+    const packing = sku('CARGA-EMBALAGEM');
+    workbook.getWorksheet('Custos').getRow(2).values = [packing, 'Percentual', 'Venda', '6'];
     const upload = () => uploadWorkbook('/stock/initial/preview', workbook);
     const stored = () => db.product.count({ where: { sku: { in: [filament, printed] } } });
+    // Costs are registrations, so loading them also needs registrations:operate.
+    const loader = await session('CARGA-SEM-CUSTOS', ['catalog:operate', 'stock:operate']);
+    expectStatus(await uploadWorkbook('/stock/initial/preview', workbook, loader), 403);
 
     expectStatus(await upload(), 400);
     sheet.getCell('C3').value = 'Impresso 3D';
@@ -1275,9 +1280,13 @@ test('API REST com PostgreSQL', {
     const batch = expectStatus(await upload(), 201);
     assert.equal(batch.rows[0].declaredCost, '100');
     assert.equal(batch.rows[1].typeName, 'Impresso 3D');
+    assert.deepEqual(batch.costs, [{ name: packing, mode: 'PERCENT', base: 'SALE', value: '6', active: true }]);
     assert.equal(await stored(), 0);
+    assert.equal(await db.costItem.count({ where: { name: packing } }), 0);
 
     expectStatus(await post(`/stock/initial/${batch.id}/confirm`), [200, 201]);
+    const cost = await db.costItem.findUniqueOrThrow({ where: { name: packing } });
+    assert.deepEqual([cost.mode, cost.base, cost.value.toString(), cost.active], ['PERCENT', 'SALE', '6', true]);
     const [input, product] = await Promise.all([
       db.product.findUniqueOrThrow({ where: { sku: filament } }),
       db.product.findUniqueOrThrow({ where: { sku: printed }, include: { recipe: true } }),

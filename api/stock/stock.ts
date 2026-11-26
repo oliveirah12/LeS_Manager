@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { MovementKind, Prisma, Product } from '@prisma/client';
 import { z } from 'zod';
 import {
@@ -7,12 +7,14 @@ import {
 import { formsCycle } from '../catalog/recipe';
 import { auditChange, auditContext } from '../audit/recorder';
 import { purchaseDateField, storedDate } from '../purchases/rules';
+import { costItemFields, costSummary } from '../registrations/costs';
 import { averageCost, costPerBaseUnit } from './cost';
 import {
   DailyTask, Database, decimalField, idField, money, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal,
 } from '../shared';
 
 const previewAge = 7 * 24 * 60 * 60 * 1000;
+const costAccess = 'Seu perfil não cadastra custos. Remova a aba Custos da planilha ou peça o acesso de operação em Cadastros.';
 
 export const movementFields = z.object({
   productId: idField, unitId: idField, kind: z.enum(['OUT', 'ADJUSTMENT']),
@@ -35,8 +37,14 @@ const initialRow = z.object({
   .refine(row => row.purchaseExpenses === undefined || row.quantity.gt(0), 'As despesas da compra exigem quantidade maior que zero.');
 const initialRecipe = z.object({ product: skuField, input: skuField, quantity: positive, unit: nameField });
 const initialMeasure = z.object({ sku: skuField, name: nameField, value: positive, unit: symbolField });
+// The spreadsheet uses labels, and a stored preview uses the ids, so both read the same way.
+const costLabels: Record<string, string> = { Valor: 'VALUE', Percentual: 'PERCENT', Custo: 'COST', Venda: 'SALE' };
+const costChoice = (value: unknown) => typeof value === 'string' ? costLabels[value.trim()] ?? value : value;
+const initialCost = z.preprocess(row => row && typeof row === 'object' && 'mode' in row
+  ? { ...row, mode: costChoice(row.mode), ...('base' in row ? { base: costChoice(row.base) } : {}) } : row, costItemFields);
 export const initialFields = z.object({
   rows: z.array(initialRow).min(1).max(500), recipes: z.array(initialRecipe).max(500).default([]), measures: z.array(initialMeasure).max(500).default([]),
+  costs: z.array(initialCost).max(100).default([]),
 });
 type Count = z.infer<typeof countFields>;
 type Initial = z.infer<typeof initialFields>;
@@ -185,15 +193,18 @@ export class StockService {
   }
 
   private async initialLookups(tx: Prisma.TransactionClient, data: Initial) {
-    const [existing, units, references, types, storedInputs, suppliers] = await Promise.all([
+    const [existing, units, references, types, storedInputs, suppliers, storedCosts] = await Promise.all([
       tx.product.findMany({ where: { sku: { in: data.rows.map(row => row.sku) } }, select: { sku: true } }),
       tx.unit.findMany({ where: { symbol: { in: [...data.rows, ...data.recipes].map(row => row.unit) } } }),
       tx.reference.findMany(),
       tx.productType.findMany(),
       tx.product.findMany({ where: { sku: { in: data.recipes.map(row => row.input) } }, include: { unit: true, type: true } }),
       tx.supplier.findMany({ where: { active: true, name: { in: data.rows.flatMap(row => row.supplier ? [row.supplier] : []) } }, select: { id: true, name: true } }),
+      tx.costItem.findMany({ where: { name: { in: data.costs.map(cost => cost.name) } }, select: { name: true } }),
     ]);
     if (existing.length) throw new ConflictException('SKUs já cadastrados: ' + existing.map(product => product.sku).join(', '));
+    if (storedCosts.length) throw new ConflictException('Custos já cadastrados: ' + storedCosts.map(cost => cost.name).join(', '));
+    if (new Set(data.costs.map(cost => cost.name)).size !== data.costs.length) throw new BadRequestException('Há custos repetidos no lote.');
     const measures = measuresBySku(data);
     const items = data.rows.map(row => {
       const unit = units.find(item => item.symbol === row.unit);
@@ -257,7 +268,8 @@ export class StockService {
     return { items, recipes };
   }
 
-  previewInitial(data: Initial, userId: string) {
+  previewInitial(data: Initial, userId: string, registersCosts: boolean) {
+    if (data.costs.length && !registersCosts) throw new ForbiddenException(costAccess);
     distinctSkus(data.rows);
     return serial(this.db, async tx => {
       const { items } = await this.initialLookups(tx, data);
@@ -266,9 +278,10 @@ export class StockService {
       }));
       const recipes = data.recipes.map(row => ({ ...row, quantity: row.quantity.toFixed() }));
       const measures = data.measures.map(row => ({ ...row, value: row.value.toFixed() }));
-      const batch = await tx.initialImport.create({ data: { userId, data: { rows, recipes, measures } as unknown as Prisma.InputJsonValue } });
+      const costs = data.costs.map(row => ({ ...row, value: row.value.toFixed() }));
+      const batch = await tx.initialImport.create({ data: { userId, data: { rows, recipes, measures, costs } as unknown as Prisma.InputJsonValue } });
       return {
-        id: batch.id, recipes, measures,
+        id: batch.id, recipes, measures, costs,
         rows: rows.map((row, index) => {
           const { unitCost, totalCost, quantity } = data.rows[index];
           // Cost per declared unit, shown before confirming. The stored value is per base unit.
@@ -279,13 +292,14 @@ export class StockService {
     });
   }
 
-  confirmInitial(id: string, userId: string) {
+  confirmInitial(id: string, userId: string, registersCosts: boolean) {
     return serial(this.db, async tx => {
       const batch = await tx.initialImport.findFirst({ where: { id, userId } });
       if (!batch) throw new NotFoundException('Prévia não encontrada.');
       if (batch.confirmedAt) return { id, confirmedAt: batch.confirmedAt };
       // Previews created before the technical sheet stored only the list of rows.
       const data = parse(initialFields, Array.isArray(batch.data) ? { rows: batch.data } : batch.data);
+      if (data.costs.length && !registersCosts) throw new ForbiddenException(costAccess);
       const { items, recipes } = await this.initialLookups(tx, data);
       const ids = new Map<string, string>();
       for (const item of items) {
@@ -309,6 +323,10 @@ export class StockService {
         });
       }
       if (data.measures.length) auditContext({ 'Linhas de medidas': data.measures.length });
+      if (data.costs.length) {
+        await tx.costItem.createMany({ data: data.costs });
+        auditChange(null, Object.fromEntries(data.costs.map(cost => ['Custo ' + cost.name, costSummary(cost)])));
+      }
       const confirmedAt = new Date();
       await tx.initialImport.update({ where: { id }, data: { confirmedAt } });
       return { id, confirmedAt };

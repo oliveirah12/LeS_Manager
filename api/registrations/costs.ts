@@ -5,13 +5,17 @@ import { Require } from '../access/access';
 import { Audit, auditChange } from '../audit/recorder';
 import { Database, idField, nameField, parse, positive, serial } from '../shared';
 
-export const costModeLabels = { VALUE: 'Valor (R$)', PERCENT: 'Percentual (%)' } as const;
-export const costBaseLabels = { COST: 'Sobre o custo', SALE: 'Sobre a venda' } as const;
+const costModeLabels = { VALUE: 'Valor (R$)', PERCENT: 'Percentual (%)' } as const;
+const costBaseLabels = { COST: 'Sobre o custo', SALE: 'Sobre a venda' } as const;
+type CostTerms = Pick<CostItem, 'mode' | 'base' | 'value'>;
+/** Readable terms of a cost for the audit, such as "6% sobre a venda" or "R$ 2.5". */
+export const costSummary = (cost: CostTerms) => cost.mode === 'PERCENT'
+  ? cost.value.toFixed() + '% ' + costBaseLabels[cost.base].toLowerCase() : 'R$ ' + cost.value.toFixed();
 
 const costShape = z.object({
   name: nameField,
-  mode: z.enum(['VALUE', 'PERCENT']),
-  base: z.enum(['COST', 'SALE']).default('COST'),
+  mode: z.enum(['VALUE', 'PERCENT'], { error: 'Escolha o tipo: valor ou percentual' }),
+  base: z.enum(['COST', 'SALE'], { error: 'Escolha a base do percentual: custo ou venda' }).default('COST'),
   value: positive,
   active: z.boolean().default(true),
 });

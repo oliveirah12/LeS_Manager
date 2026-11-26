@@ -3,11 +3,15 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { MovementKind, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
+import { canAccess } from '../access/security';
 import { Audit } from '../audit/recorder';
 import { CatalogService, stockSettingsFields } from '../catalog/catalog';
 import { Database, dayRange, idField, parse, sortField } from '../shared';
 import { countFields, initialFields, kitOutFields, movementFields, StockService } from './stock';
 import { WorkbookKind, WorkbookLists, workbookRows, workbookTemplate } from './workbooks';
+
+// Costs in the load are registrations, so they also need that permission.
+const registersCosts = (request: Authenticated) => canAccess(request.identity.permissions, 'registrations:operate');
 
 const pageSize = 100;
 // Only required columns of the movement: a cursor cannot continue past a NULL in the sorted column.
@@ -125,13 +129,13 @@ export class StockController {
   @Post('initial/preview')
   @Upload()
   async initialPreview(@Req() request: Authenticated, @UploadedFile() file?: Express.Multer.File) {
-    return this.stock.previewInitial(parse(initialFields, await workbookRows('initial', file)), request.identity.id);
+    return this.stock.previewInitial(parse(initialFields, await workbookRows('initial', file)), request.identity.id, registersCosts(request));
   }
 
   @Require('catalog:operate', 'stock:operate')
   @Audit('Confirmar carga inicial')
   @Post('initial/:id/confirm')
   initialConfirm(@Req() request: Authenticated, @Param('id') id: string) {
-    return this.stock.confirmInitial(parse(idField, id), request.identity.id);
+    return this.stock.confirmInitial(parse(idField, id), request.identity.id, registersCosts(request));
   }
 }

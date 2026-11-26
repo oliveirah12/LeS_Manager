@@ -7,7 +7,8 @@ type Row = CostItem & { purchases: number; deleteBlock: string | null };
 
 export const costModes = [{ id: 'VALUE', name: 'Valor (R$)' }, { id: 'PERCENT', name: 'Percentual (%)' }];
 const bases = [{ id: 'COST', name: 'Sobre o custo' }, { id: 'SALE', name: 'Sobre o preço de venda' }];
-const baseLabel = (row: CostItem) => row.mode === 'PERCENT' ? (row.base === 'SALE' ? 'Sobre a venda' : 'Sobre o custo') : '—';
+export const costTypeLabel = (row: Pick<CostItem, 'mode'>) => row.mode === 'PERCENT' ? 'Percentual' : 'Valor fixo';
+export const costBaseLabel = (row: Pick<CostItem, 'mode' | 'base'>) => row.mode === 'PERCENT' ? (row.base === 'SALE' ? 'Sobre a venda' : 'Sobre o custo') : '—';
 export const costValue = (row: Pick<CostItem, 'mode' | 'value'>) => row.mode === 'PERCENT' ? decimal(row.value) + '%' : brl(row.value);
 
 export function Costs({ edit }: { edit: boolean }) {
@@ -26,8 +27,8 @@ export function Costs({ edit }: { edit: boolean }) {
         columns={['Custo', 'Tipo', 'Base do %', { label: 'Valor', end: true }, 'Situação', { label: 'Compras', end: true }, ...(edit ? [{ label: 'Ações', actions: true }] : [])]}
         rows={data.filter(row => matches(query, row.name)).map(row => [
           by(row.name, <span className="cell-title">{row.name}</span>),
-          row.mode === 'PERCENT' ? 'Percentual' : 'Valor fixo',
-          baseLabel(row),
+          costTypeLabel(row),
+          costBaseLabel(row),
           by(Number(row.value), <span className="num">{costValue(row)}</span>),
           by(row.active ? 'Ativo' : 'Inativo', row.active ? <Badge tone="ok">Ativo</Badge> : <Badge>Inativo</Badge>),
           by(row.purchases, <span className="num">{row.purchases}</span>),
