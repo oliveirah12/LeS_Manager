@@ -60,6 +60,7 @@ test('API REST com PostgreSQL', {
       status: response.status,
       cookie: response.headers.get('set-cookie')?.split(';')[0],
       cacheControl: response.headers.get('cache-control'),
+      headers: response.headers,
       data,
     };
   }
@@ -1635,6 +1636,9 @@ test('API REST com PostgreSQL', {
     assert.equal(draft.budget, null);
     assert.equal(draft.items[0].marginPercent, undefined);
     assert.equal(draft.sale.profit, undefined);
+    // The margin the seller sent was ignored, as only stock:view sets it. Someone who sees costs edits it.
+    assert.equal(expectStatus(await admin('/quotes?search=' + draft.number), 200).quotes.find(row => row.id === draft.id).items[0].marginPercent, null);
+    expectStatus(await admin('/quotes/' + draft.id, { method: 'PATCH', body: body() }), 200);
     const company = expectStatus(await admin('/company'), 200);
     const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
     const expected = new Date(Date.parse(today + 'T12:00:00Z') + company.quoteValidityDays * 86_400_000).toISOString().slice(0, 10);
