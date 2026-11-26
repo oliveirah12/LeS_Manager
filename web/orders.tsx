@@ -18,7 +18,8 @@ type SaleValues = { gross: string; discount: string; total: string; fee: string;
 type Sale = { discountPercent: string; paymentMethodId: string | null; paymentName: string | null; feePercent: string; customFee: boolean; values: SaleValues | null };
 export type OrderInput = {
   inputId: string; sku: string; name: string; symbol: string; familyId: string; planned: string; used: string | null;
-  parts: { productId: string; planned: string }[]; replaces: string[];
+  parts: { productId: string; planned: string; colorInputId: string | null }[]; replaces: string[];
+  colors: { id: string; label: string; typeId: string; groupId: string | null; colorId: string }[];
 };
 export type Order = {
   id: string; number: number; revision: number; status: Status; notes: string | null; printer: { id: string; name: string }; user: { name: string };
@@ -35,7 +36,7 @@ type Budget = {
 export type OrdersView = {
   orders: Order[]; page: number; pageSize: number; total: number; printers: { id: string; name: string }[]; filterPrinters: { id: string; name: string }[];
   paymentMethods: { id: string; name: string; feePercent: string | null }[];
-  inputs: { id: string; sku: string; name: string; symbol: string; familyId: string }[];
+  inputs: { id: string; sku: string; name: string; symbol: string; familyId: string; typeId: string; groupId: string | null; colorId: string | null }[];
   products: { id: string; sku: string; name: string; symbol: string; printMinutes?: string | null; salePrice?: string | null; marginPercent?: string | null }[];
 };
 /** The values only come with stock:view. */
@@ -211,7 +212,8 @@ export function ProductionOrders({ edit, correct, seeCosts }: { edit: boolean; c
 function InputsTable({ inputs }: { inputs: OrderInput[] }) {
   return <Table responsive={false} columns={['Insumo', { label: 'Previsto', end: true }, ...(inputs.some(input => input.used !== null) ? [{ label: 'Real', end: true }] : [])]}
     rows={inputs.map(input => [
-      by(input.name, <><Title name={input.name} code={input.sku} />{input.replaces.length > 0 && <span className="hint" style={{ display: 'block' }}>Substitui {input.replaces.join(', ')}</span>}</>),
+      by(input.name, <><Title name={input.name} code={input.sku} />{input.replaces.length > 0 && <span className="hint" style={{ display: 'block' }}>Substitui {input.replaces.join(', ')}</span>}
+        {input.colors.length > 0 && <span className="hint" style={{ display: 'block' }}>Por cor: {input.colors.map(color => color.label).join(', ')}</span>}</>),
       by(input.planned, quantity(input.planned) + ' ' + input.symbol),
       ...(inputs.some(row => row.used !== null) ? [by(input.used, input.used === null ? '—' : quantity(input.used) + ' ' + input.symbol)] : []),
     ])} />;

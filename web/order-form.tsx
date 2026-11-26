@@ -1,10 +1,40 @@
 import { useState } from 'react';
 import { saleEstimate, suggestedMinutes } from './format';
 import { blankLine, ExpenseLines, LineRow, ProductLines, SaleFields } from './order-sections';
-import type { Order, OrdersView } from './orders';
+import type { Order, OrderInput, OrdersView } from './orders';
 import { localValue } from './slots';
 import { StartPicker } from './start-picker';
+import { Plus, Trash2 } from 'lucide-react';
 import { api, brl, dateTime, Field, Form, quantity, Select, useClosePanel } from './ui';
+
+type Brand = { key: number; inputId: string; planned: string };
+/** The brands of one recipe color across the order, with what each one takes. */
+type ColorGroup = { id: string; label: string; symbol: string; familyId: string; typeId: string; groupId: string | null; colorId: string; brands: { inputId: string; planned: number }[] };
+
+/** Groups the color lines of the order by color, keeping only the products still in the form. */
+function colorGroups(inputs: OrderInput[], productIds: string[]) {
+  const groups = new Map<string, ColorGroup>();
+  for (const input of inputs) {
+    for (const part of input.parts) {
+      if (!part.colorInputId || !productIds.includes(part.productId)) continue;
+      const color = input.colors.find(item => item.id === part.colorInputId)!;
+      const group = groups.get(color.id) ?? { ...color, symbol: input.symbol, familyId: input.familyId, brands: [] };
+      const brand = group.brands.find(item => item.inputId === input.inputId);
+      if (brand) brand.planned += Number(part.planned);
+      else group.brands.push({ inputId: input.inputId, planned: Number(part.planned) });
+      groups.set(color.id, group);
+    }
+  }
+  return [...groups.values()];
+}
+
+/** The exact part of each input: what the recipe names directly, outside any color. */
+function exactInputs(inputs: OrderInput[], productIds: string[]) {
+  return inputs.map(input => {
+    const parts = input.parts.filter(part => !part.colorInputId && productIds.includes(part.productId));
+    return { ...input, planned: String(parts.reduce((sum, part) => sum + Number(part.planned), 0)), parts };
+  }).filter(input => input.parts.length > 0);
+}
 
 const orderRows = (order: Order): LineRow[] => order.items.map((item, key) => ({
   key, productId: item.productId, quantity: item.planned, salePrice: item.salePrice ?? '', marginPercent: item.marginPercent ?? '',
@@ -27,6 +57,8 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
   const [substitutes, setSubstitutes] = useState<Record<string, string>>({});
   const [typedInputs, setTypedInputs] = useState<Record<string, string>>({});
   const [typedExpenses, setTypedExpenses] = useState<Record<string, string | null>>({});
+  // Only a color the person touched is sent. Its brands then replace the ones in the order.
+  const [splits, setSplits] = useState<Record<string, Brand[]>>({});
   const closePanel = useClosePanel();
   const estimatedMinutes = Number(hours || 0) * 60 + Number(minutes || 0);
   const validTime = Number.isInteger(estimatedMinutes) && estimatedMinutes > 0;
@@ -40,8 +72,13 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
     ? [...view.paymentMethods, { id: order.sale.paymentMethodId, name: order.sale.paymentName ?? 'Forma inativa', feePercent: order.sale.feePercent }] : view.paymentMethods;
   const products = [...view.products, ...(order?.items ?? []).filter(item => !view.products.some(row => row.id === item.productId))
     .map(item => ({ id: item.productId, sku: item.sku, name: item.name, symbol: item.symbol, salePrice: item.salePrice, marginPercent: item.marginPercent }))];
-  const orderInputs = (order?.inputs ?? []).filter(input => input.parts.some(part => rows.some(row => row.productId === part.productId)));
-  const inputExpenses = (order?.expenses ?? []).filter(row => row.source === 'INPUT' && orderInputs.some(input => input.inputId === row.inputId));
+  const productIds = rows.map(row => row.productId);
+  const orderInputs = exactInputs(order?.inputs ?? [], productIds);
+  const colors = colorGroups(order?.inputs ?? [], productIds);
+  const inputExpenses = (order?.expenses ?? []).filter(row => row.source === 'INPUT' && (order?.inputs ?? []).some(input => input.inputId === row.inputId
+    && input.parts.some(part => productIds.includes(part.productId))));
+  const brandsOf = (group: ColorGroup) => splits[group.id] ?? group.brands.map((brand, key) => ({ key, inputId: brand.inputId, planned: String(brand.planned) }));
+  const setBrands = (group: ColorGroup, update: (brands: Brand[]) => Brand[]) => setSplits(items => ({ ...items, [group.id]: update(items[group.id] ?? brandsOf(group)) }));
   const payment = payments.find(method => method.id === paymentId);
   const sale = saleEstimate(rows, discount, fee.trim() ? fee : payment?.feePercent ?? '0');
   const timeSuggestion = !hours.trim() && !minutes.trim()
@@ -58,6 +95,9 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
       replacements: orderInputs.filter(input => substitutes[input.inputId] && substitutes[input.inputId] !== input.inputId)
         .map(input => ({ inputId: input.inputId, substituteId: substitutes[input.inputId] })),
       inputs: orderInputs.filter(input => typedInputs[input.inputId]?.trim()).map(input => ({ inputId: input.inputId, planned: typedInputs[input.inputId].trim() })),
+      colorSplits: colors.filter(group => splits[group.id]).map(group => ({
+        colorInputId: group.id, lines: splits[group.id].map(brand => ({ inputId: brand.inputId, planned: brand.planned.trim() })),
+      })),
       inputExpenses: inputExpenses.filter(row => typedExpenses[row.inputId!] !== undefined).map(row => ({ inputId: row.inputId, value: typedExpenses[row.inputId!]?.trim() || null })),
     } : {};
     await api('production/orders' + (order ? '/' + order.id : ''), {
@@ -107,6 +147,34 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
           <label>{'Total (' + input.symbol + ')'}<input aria-label={'Total de ' + input.sku} inputMode="decimal" placeholder={quantity(input.planned)} value={typedInputs[input.inputId] ?? ''}
             onChange={event => setTypedInputs(items => ({ ...items, [input.inputId]: event.target.value }))} />
             <span className="hint">{input.replaces.length ? 'Substitui ' + input.replaces.join(', ') + '. ' : ''}Vazio: mantém a proporção.</span></label>
+        </div>;
+      })}
+    </>}
+    {colors.length > 0 && <>
+      <h3>Insumos por cor</h3>
+      <p className="hint">Escolha a marca de cada cor ou divida entre marcas. Cada produto mantém sua parte da cor.</p>
+      {colors.map(group => {
+        const brands = brandsOf(group);
+        const options = view.inputs.filter(item => item.familyId === group.familyId && item.typeId === group.typeId
+          && item.groupId === group.groupId && item.colorId === group.colorId);
+        const total = brands.reduce((sum, brand) => sum + (Number(brand.planned.replace(',', '.')) || 0), 0);
+        return <div className="stack" style={{ gap: 4 }} key={group.id}>
+          <strong>{group.label}</strong>
+          {brands.map((brand, index) => <div className="component-row" key={brand.key}>
+            <Select name={'brand' + group.id + brand.key} label={'Marca ' + (index + 1)} defaultValue={brand.inputId}
+              options={options.filter(item => item.id === brand.inputId || !brands.some(other => other.inputId === item.id)).map(item => ({ id: item.id, name: item.sku + ' · ' + item.name }))}
+              onChange={inputId => setBrands(group, items => items.map(item => item.key === brand.key ? { ...item, inputId } : item))} />
+            <label>{'Quantidade (' + group.symbol + ')'}<input aria-label={'Quantidade da marca ' + (index + 1) + ' de ' + group.label} inputMode="decimal" required value={brand.planned}
+              onChange={event => setBrands(group, items => items.map(item => item.key === brand.key ? { ...item, planned: event.target.value } : item))} /></label>
+            <button type="button" className="icon-button" aria-label={'Remover marca ' + (index + 1) + ' de ' + group.label} disabled={brands.length === 1}
+              onClick={() => setBrands(group, items => items.filter(item => item.key !== brand.key))}><Trash2 size={18} aria-hidden="true" /></button>
+          </div>)}
+          <div className="section-head">
+            <span className="hint">Total da cor: <strong className="num">{quantity(String(total))} {group.symbol}</strong></span>
+            <button type="button" className="btn secondary small" disabled={brands.length >= options.length}
+              onClick={() => setBrands(group, items => [...items, { key: Math.max(-1, ...items.map(item => item.key)) + 1, inputId: '', planned: '' }])}>
+              <Plus size={16} aria-hidden="true" />Dividir com outra marca</button>
+          </div>
         </div>;
       })}
     </>}

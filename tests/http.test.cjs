@@ -1640,6 +1640,26 @@ test('API REST com PostgreSQL', {
     assert.deepEqual([pricing.source, pricing.materialCost, pricing.partialCost], ['RECIPE', '3.25', false]);
     const details = expectStatus(await admin('/catalog/products/' + piece.id + '/details'), 200);
     assert.deepEqual([details.stock.estimate.unitCost, details.stock.estimate.producible], ['3.25', '160']);
+
+    // The order takes the brand with the most free balance, and an edit can split the color between brands.
+    const printer = expectStatus(await post('/production/printers', { name: sku('COR-IMPRESSORA'), powerWatts: '100', hourlyCost: '1' }), 201);
+    const plan = { printerId: printer.id, plannedStart: '2027-03-01T10:00:00.000Z', estimatedMinutes: 60, items: [{ productId: piece.id, quantity: '10' }] };
+    const order = expectStatus(await post('/production/orders', plan), 201);
+    assert.deepEqual(order.inputs.map(input => [input.inputId, input.planned, input.colors.length]), [[brandBProduct.id, '250', 1]]);
+    const colorInputId = order.inputs[0].colors[0].id;
+    const edit = colorSplits => admin('/production/orders/' + order.id, { method: 'PATCH', body: { ...plan, colorSplits } });
+    expectStatus(await edit([{ colorInputId, lines: [{ inputId: piece.id, planned: '10' }] }]), 409);
+    expectStatus(await edit([{ colorInputId: brandAProduct.id, lines: [{ inputId: brandAProduct.id, planned: '10' }] }]), 400);
+    const split = expectStatus(await edit([{ colorInputId, lines: [{ inputId: brandAProduct.id, planned: '100' }, { inputId: brandBProduct.id, planned: '150' }] }]), 200);
+    assert.deepEqual(split.inputs.map(input => [input.inputId, input.planned]).sort(), [[brandAProduct.id, '100'], [brandBProduct.id, '150']].sort());
+    // Starting reserves each brand, and finishing takes each brand at its own cost: 100 × 0.10 + 150 × 0.14 = 31.
+    expectStatus(await post('/production/orders/' + order.id + '/start', { startedAt: '2027-03-01T10:00:00.000Z' }), 200);
+    const done = expectStatus(await post('/production/orders/' + order.id + '/finish', { finishedAt: '2027-03-01T11:00:00.000Z', items: [{ productId: piece.id, lost: '0' }], inputs: [] }), 200);
+    assert.equal(done.inputs.reduce((sum, input) => sum + Number(input.used), 0), 250);
+    const balances = await db.product.findMany({ where: { id: { in: [brandAProduct.id, brandBProduct.id] } }, select: { id: true, quantity: true } });
+    assert.deepEqual(balances.map(row => [row.id, row.quantity.toString()]).sort(), [[brandAProduct.id, '900'], [brandBProduct.id, '2850']].sort());
+    const movements = await db.movement.findMany({ where: { productionOrderId: order.id, productId: { in: [brandAProduct.id, brandBProduct.id] } }, select: { productId: true, unitCost: true } });
+    assert.deepEqual(movements.map(row => [row.productId, row.unitCost.toString()]).sort(), [[brandAProduct.id, '0.1'], [brandBProduct.id, '0.14']].sort());
   });
 
   await t.test('orçamentos: acessos, custo oculto, aprovação gera a ordem e exclusão só do recusado', async () => {

@@ -13,7 +13,7 @@ import { FileService } from '../files/files';
 import { imageType } from '../files/rules';
 import { InputUse, suggestedExpense } from '../production/expenses';
 import { matchingProductIds, orderSearch } from '../production/order-search';
-import { manualExpenses, minutesField, ProductionOrderService, recipeConsumption, requireManufactured, symbolOf } from '../production/orders';
+import { manualExpenses, minutesField, ProductionOrderService, recipeProductInclude, requireManufactured, requireRecipe, symbolOf } from '../production/orders';
 import { orderSale, saleFields, saleResult } from '../production/sale';
 import { CompanyService, optionalText } from '../registrations/company';
 import { Database, dayRange, idField, nameField, parse, positive, serial, sortField, storedDecimal } from '../shared';
@@ -205,7 +205,7 @@ export class QuoteService {
       this.db.paymentMethod.findMany({ where: { active: true }, select: { id: true, name: true, feePercent: true }, orderBy: { name: 'asc' } }),
       // Only what an approval can turn into an order: active manufactured products with a recipe.
       this.db.product.findMany({
-        where: { active: true, type: { isManufactured: true }, recipe: { some: {} } },
+        where: { active: true, type: { isManufactured: true }, OR: [{ recipe: { some: {} } }, { colorRecipe: { some: {} } }] },
         select: { id: true, sku: true, name: true, salePrice: true, marginPercent: true, printMinutes: true, ...productInclude }, orderBy: { sku: 'asc' },
       }),
       this.db.companySettings.findUniqueOrThrow({ where: { id: 'default' }, select: { quoteValidityDays: true } }),
@@ -233,10 +233,10 @@ export class QuoteService {
       if (!method) throw new NotFoundException('Forma de pagamento não encontrada.');
       if (!method.active && paymentMethodId !== current?.paymentMethodId) throw new ConflictException('Escolha uma forma de pagamento ativa.');
     }
-    const products = await tx.product.findMany({ where: { id: { in: ids } }, include: { type: true, recipe: { include: { input: true } } } });
+    const products = await tx.product.findMany({ where: { id: { in: ids } }, include: recipeProductInclude });
     const items = data.items.map(item => {
       const product = requireManufactured(products.find(row => row.id === item.productId));
-      if (!current?.items.some(row => row.productId === product.id)) recipeConsumption(product, item.quantity);
+      if (!current?.items.some(row => row.productId === product.id)) requireRecipe(product);
       const before = current?.items.find(row => row.productId === product.id);
       return {
         productId: product.id, quantity: storedDecimal(item.quantity), salePrice: storedDecimal(item.salePrice),
