@@ -6,6 +6,21 @@ export type Release = { version: string; date: string; title: string; changes: s
  */
 export const releases: Release[] = [
   {
+    version: '0.6.0',
+    date: '2026-11-25',
+    title: 'Formação de preço',
+    changes: [
+      'A ficha técnica ganhou o tempo de impressão por peça e a impressora padrão, e mostra o custo da máquina e da energia.',
+      'Ao criar uma ordem de produção sem tempo informado, o painel sugere o tempo pela soma das fichas técnicas.',
+      'O antigo bloco Estoque e venda do produto virou Formação de preço: mostra insumos, máquina ou custo médio, os custos vinculados, a margem e o preço sugerido.',
+      'Os custos cadastrados podem ser vinculados ao produto. Mudar um custo no cadastro atualiza o preço sugerido de todos os produtos que o usam.',
+      'O painel avisa quando a margem somada aos custos sobre a venda chega a 100%, porque nenhum preço cobriria isso.',
+      'Na compra, cada item mostra o custo unitário e o preço sugerido, e quem opera o estoque pode atualizar o preço de venda ao lançar.',
+      'Uma impressora padrão de ficha técnica e um custo vinculado a produtos não podem ser excluídos, apenas inativados.',
+      'A planilha de carga inicial ganhou as colunas Tempo por peça, Impressora e Custos vinculados.',
+    ],
+  },
+  {
     version: '0.5.0',
     date: '2026-11-25',
     title: 'Cadastro de custos',
