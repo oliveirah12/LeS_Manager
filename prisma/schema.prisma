@@ -223,6 +223,7 @@ model StoredFile {
   product      ProductFile?
   productImage Product?     @relation("ProductImage")
   purchaseDocument PurchaseDocument?
+  companyLogo  CompanySettings? @relation("CompanyLogo")
   @@index([available, updatedAt])
 }
 
@@ -260,6 +261,18 @@ model Printer {
 model ProductionSettings {
   id         String  @id @default("default")
   energyRate Decimal @default(0) @db.Decimal(30, 12)
+}
+
+/// Single row with the company letterhead printed on the documents sent to customers.
+model CompanySettings {
+  id                String      @id @default("default")
+  name              String      @default("")
+  tagline           String?
+  footer            String?
+  contact           String?
+  logoFileId        String?     @unique
+  logoFile          StoredFile? @relation("CompanyLogo", fields: [logoFileId], references: [id], onDelete: SetNull)
+  quoteValidityDays Int         @default(15)
 }
 
 /// A print job. Machine values and costs are frozen when it finishes, so later changes never rewrite it.
