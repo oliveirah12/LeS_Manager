@@ -12,6 +12,7 @@ const controllers = [
   require('../dist/api/catalog/recipe.js').RecipeController,
   require('../dist/api/files/files.js').ProductFilesController,
   require('../dist/api/files/files.js').ProductImageController,
+  require('../dist/api/files/files.js').PendingUploadController,
   require('../dist/api/finance/finance.js').FinanceController,
   require('../dist/api/production/corrections.js').ProductionCorrectionController,
   require('../dist/api/production/orders.js').ProductionOrderController,
@@ -82,6 +83,14 @@ test('product file routes read with catalog:view and write with catalog:operate'
     const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
     assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'catalog:view' : 'catalog:operate'], name);
     if (!reads) assert.equal(typeof Reflect.getMetadata(AUDIT, handler), 'string', name);
+  }
+});
+
+test('pending uploads need catalog:operate and are not audited until the product links them', () => {
+  const controller = require('../dist/api/files/files.js').PendingUploadController;
+  for (const name of ['image', 'file']) {
+    assert.deepEqual(Reflect.getMetadata('permissions', controller.prototype[name]), ['catalog:operate'], name);
+    assert.equal(Reflect.getMetadata(AUDIT, controller.prototype[name]), false, name);
   }
 });
 

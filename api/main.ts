@@ -12,7 +12,7 @@ import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
 import { PricingService } from './catalog/pricing';
 import { RecipeController, RecipeService } from './catalog/recipe';
-import { FileMaintenance, FileService, ProductFilesController, ProductImageController } from './files/files';
+import { FileMaintenance, FileService, PendingUploadController, ProductFilesController, ProductImageController } from './files/files';
 import { DiskFileStorage, FileStorage } from './files/storage';
 import { BankConnectionService } from './finance/connection';
 import { FinanceController, FinanceService } from './finance/finance';
@@ -37,7 +37,7 @@ class PersistenceModule {}
 class AccessModule {}
 
 @Module({
-  controllers: [ProductFilesController, ProductImageController],
+  controllers: [PendingUploadController, ProductFilesController, ProductImageController],
   providers: [FileService, FileMaintenance, { provide: FileStorage, useClass: DiskFileStorage }],
   exports: [FileService],
 })

@@ -59,6 +59,15 @@ export class FileService {
     return file;
   }
 
+  /**
+   * Keeps a file that has no owner yet: the product form sends it before the product is saved.
+   * Only the product save links it, and what is never linked leaves with the hourly maintenance.
+   */
+  async storePending(upload: Express.Multer.File, authorId: string, image: boolean) {
+    const { createdBy, ...file } = await this.store(upload, authorId, async () => undefined, image ? { content: matchesImageContent, message: productImageMessage } : undefined);
+    return { ...file, author: createdBy.name };
+  }
+
   /** The temporary file is gone after a successful save; on any failure this clears it. */
   discard(upload: Express.Multer.File) { return this.storage.discard(upload.path); }
 
@@ -189,6 +198,41 @@ export class FileMaintenance extends DailyTask {
 
   protected async run() {
     await this.files.maintain().catch(() => console.error('Falha na manutenção dos arquivos.'));
+  }
+}
+
+/**
+ * Uploads made before the product exists. Nothing is audited here: the file only enters the
+ * catalog when the product save links it, and that save records its name.
+ */
+@Controller('catalog/uploads')
+export class PendingUploadController {
+  constructor(@Inject(FileService) private files: FileService) {}
+
+  @Require('catalog:operate')
+  @Audit(false)
+  @Post('image')
+  @FileUpload(productImageLimit, { name: hasImageExtension, message: productImageMessage })
+  async image(@Req() request: Authenticated, @UploadedFile() file?: Express.Multer.File) {
+    if (!file) throw new BadRequestException('Envie uma imagem.');
+    try {
+      return await this.files.storePending(file, request.identity.id, true);
+    } finally {
+      await this.files.discard(file);
+    }
+  }
+
+  @Require('catalog:operate')
+  @Audit(false)
+  @Post('file')
+  @FileUpload(productFileLimit)
+  async file(@Req() request: Authenticated, @UploadedFile() file?: Express.Multer.File) {
+    if (!file) throw new BadRequestException('Envie um arquivo.');
+    try {
+      return await this.files.storePending(file, request.identity.id, false);
+    } finally {
+      await this.files.discard(file);
+    }
   }
 }
 
