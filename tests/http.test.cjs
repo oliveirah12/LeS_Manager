@@ -302,6 +302,7 @@ test('API REST com PostgreSQL', {
     const cataloger = await session('COM-CATALOGO', ['catalog:operate']);
     expectStatus(await cataloger(settings, { method: 'PATCH', body }), 403);
     expectStatus(await cataloger('/catalog/products/' + product.id, { method: 'PATCH', body: { name: 'COMERCIAL', ...body } }), 200);
+    expectStatus(await cataloger('/catalog/products/' + product.id, { method: 'PATCH', body: { name: 'COMERCIAL', commercial: { ...body, minStock: '2' } } }), 403);
     const untouched = await productRow(product.id);
     assert.deepEqual([untouched.minStock, untouched.salePrice, untouched.marginPercent], [null, null, null]);
     const hidden = expectStatus(await cataloger(details), 200);
@@ -1485,6 +1486,77 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/catalog/products/' + pictured.id, { method: 'DELETE' }), 200);
     assert.equal(await db.storedFile.count({ where: { id: last.id } }), 0);
     assert.deepEqual(stored(), [], 'excluir o produto leva a imagem junto');
+  });
+
+  await t.test('produto salvo de uma vez: arquivos pendentes, ficha, preço, permissões e atomicidade', async () => {
+    const form = (bytes, name, type = 'application/pdf') => {
+      const body = new FormData();
+      body.append('file', new Blob([bytes], { type }), name);
+      return body;
+    };
+    const png = Buffer.from('89504e470d0a1a0a00', 'hex');
+    const viewer = await session('UMA-VEZ-VER', ['catalog:view']);
+    const cataloger = await session('UMA-VEZ-CAT', ['catalog:operate']);
+    const stranger = await session('UMA-VEZ-OUTRO', ['catalog:operate']);
+    const seller = await session('UMA-VEZ-PRECO', ['catalog:operate', 'stock:operate']);
+    const upload = (caller, kind, ...file) => caller('/catalog/uploads/' + kind, { method: 'POST', body: form(...file) });
+
+    expectStatus(await upload(viewer, 'file', 'x', 'a.pdf'), 403);
+    expectStatus(await upload(viewer, 'image', png, 'foto.png', 'image/png'), 403);
+    expectStatus(await upload(cataloger, 'image', 'texto', 'foto.png', 'image/png'), 415);
+    expectStatus(await upload(cataloger, 'file', 'x', 'setup.exe'), 415);
+    const image = expectStatus(await upload(seller, 'image', png, 'foto.png', 'image/png'), 201);
+    const manual = expectStatus(await upload(seller, 'file', 'manual', 'manual.pdf'), 201);
+    const fake = expectStatus(await upload(seller, 'file', 'texto', 'falsa.png', 'image/png'), 201);
+    assert.equal(await db.productFile.count({ where: { fileId: manual.id } }), 0, 'o arquivo pendente não tem dono');
+
+    const filament = await createProduct('UMA-VEZ-FILAMENTO', unit.id);
+    expectStatus(await admin('/catalog/products/' + filament.id, { method: 'PATCH', body: { name: filament.name, typeId: '00000000-0000-4000-8000-000000000002' } }), 200);
+    const fee = expectStatus(await post('/costs', { name: sku('UMA-VEZ-TAXA'), mode: 'PERCENT', base: 'SALE', value: '10' }), 201);
+    const product = (name, extra = {}) => ({
+      sku: sku(name), name, unitId: unit.id, typeId: '00000000-0000-4000-8000-000000000003',
+      recipe: { wastePercent: '5', inputs: [{ inputId: filament.id, unitId: unit.id, quantity: '2' }], printMinutes: '30', printerId: null },
+      ...extra,
+    });
+    const commercial = { minStock: '1', salePrice: '50', marginPercent: '30', costItemIds: [fee.id] };
+
+    // The price keeps its own permission, and nobody links a file someone else sent.
+    expectStatus(await cataloger('/catalog/products', { method: 'POST', body: product('UMA-VEZ-SEM', { commercial }) }), 403);
+    expectStatus(await stranger('/catalog/products', { method: 'POST', body: product('UMA-VEZ-ALHEIO', { fileIds: [manual.id] }) }), 404);
+    expectStatus(await seller('/catalog/products', { method: 'POST', body: product('UMA-VEZ-FALSA', { imageFileId: fake.id }) }), 415);
+    // A failing part undoes the whole save: no product, and the files stay pending for the next try.
+    expectStatus(await seller('/catalog/products', {
+      method: 'POST', body: product('UMA-VEZ-FALHA', { imageFileId: image.id, fileIds: [manual.id], commercial: { ...commercial, marginPercent: '95' } }),
+    }), 400);
+    expectStatus(await seller('/catalog/products', {
+      method: 'POST', body: product('UMA-VEZ-FALHA', { imageFileId: image.id, fileIds: [manual.id], commercial: { ...commercial, costItemIds: [randomUUID()] } }),
+    }), 404);
+    assert.equal(await db.product.count({ where: { sku: { in: ['UMA-VEZ-SEM', 'UMA-VEZ-ALHEIO', 'UMA-VEZ-FALSA', 'UMA-VEZ-FALHA'].map(sku) } } }), 0);
+    assert.equal(await db.productFile.count({ where: { fileId: manual.id } }), 0);
+
+    const created = expectStatus(await seller('/catalog/products', {
+      method: 'POST', body: product('UMA-VEZ', { imageFileId: image.id, fileIds: [manual.id], commercial }),
+    }), 201);
+    assert.equal(created.imageFileId, image.id);
+    const row = await db.product.findUniqueOrThrow({ where: { id: created.id }, include: { recipe: true, costs: true, files: true } });
+    assert.deepEqual([row.salePrice.toString(), row.marginPercent.toString(), row.minStock.toString(), row.printMinutes.toString(), row.wastePercent.toString()], ['50', '30', '1', '30', '5']);
+    assert.deepEqual(row.recipe.map(item => [item.inputId, item.quantity.toString()]), [[filament.id, '2']]);
+    assert.deepEqual([row.costs.map(item => item.costItemId), row.files.map(item => item.fileId)], [[fee.id], [manual.id]]);
+    const audit = await waitForAuditEvent({ action: 'Criar produto' }, event => event.targetId === created.id);
+    assert.equal(audit.details.before ?? null, null, "a criação não tem estado anterior");
+    assert.deepEqual([audit.details.after.Imagem, audit.details.after.Arquivos, audit.details.after['Preço de venda'], audit.details.after['Tempo por peça (min)']],
+      ['foto.png', ['manual.pdf'], '50', '30']);
+    // A linked file is no longer pending, so it cannot move to another product.
+    expectStatus(await seller('/catalog/products', { method: 'POST', body: product('UMA-VEZ-DE-NOVO', { fileIds: [manual.id] }) }), 404);
+
+    const second = expectStatus(await upload(seller, 'image', png, 'nova.png', 'image/png'), 201);
+    expectStatus(await cataloger('/catalog/products/' + created.id, { method: 'PATCH', body: { name: 'UMA-VEZ', commercial } }), 403);
+    expectStatus(await seller('/catalog/products/' + created.id, { method: 'PATCH', body: { name: 'UMA-VEZ', imageFileId: second.id, commercial: { ...commercial, salePrice: '60' } } }), 200);
+    assert.equal(await db.storedFile.count({ where: { id: image.id } }), 0, 'a imagem trocada sai do banco');
+    assert.deepEqual([(await productRow(created.id)).imageFileId, (await productRow(created.id)).salePrice.toString()], [second.id, '60']);
+    const change = await waitForAuditEvent({ action: 'Alterar produto' }, event => event.targetId === created.id);
+    assert.deepEqual([change.details.before.Imagem, change.details.after.Imagem, change.details.before['Preço de venda'], change.details.after['Preço de venda']],
+      ['foto.png', 'nova.png', '50', '60']);
   });
 
   await t.test('compras: permissões, produto repetido, rateio, atomicidade e estorno', async () => {

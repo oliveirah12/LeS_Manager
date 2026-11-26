@@ -88,33 +88,48 @@ export class PricingService {
     };
   }
 
-  /** Saves the confirmed price. A newly linked cost must be active, and the margin must leave room for the sale percentages. */
-  saveSettings(id: string, data: z.infer<typeof stockSettingsFields>) {
+  /** Active costs that can be linked to a product, for the price panel of a product not saved yet. */
+  async options() {
+    return { options: await this.db.costItem.findMany({ where: { active: true }, select: linkedCosts.select.costItem.select, orderBy: { name: 'asc' } }) };
+  }
+
+  saveSettings(id: string, data: StockSettings) {
     return serial(this.db, async tx => {
-      const before = await tx.product.findUnique({ where: { id }, select: settingsAudit });
-      if (!before) throw new NotFoundException('Produto não encontrado.');
-      // A client that does not send the margin or the costs keeps the stored ones.
-      const marginPercent = data.marginPercent === undefined ? before.marginPercent : data.marginPercent;
-      let costs = before.costs;
-      if (data.costItemIds) {
-        const found = await tx.costItem.findMany({ where: { id: { in: data.costItemIds } }, select: linkedCosts.select.costItem.select });
-        if (found.length !== data.costItemIds.length) throw new NotFoundException('Custo cadastrado não encontrado.');
-        const added = found.find(cost => !cost.active && !before.costs.some(link => link.costItem.id === cost.id));
-        if (added) throw new ConflictException('O custo ' + added.name + ' está inativo.');
-        costs = found.map(costItem => ({ costItem }));
-      }
-      if (!coverable(marginPercent, costs.map(link => link.costItem))) throw new BadRequestException(impossiblePrice);
-      const after = { minStock: data.minStock && storedDecimal(data.minStock), salePrice: data.salePrice && storedDecimal(data.salePrice), marginPercent, costs };
-      auditContext({ Produto: before.sku });
-      auditChange(settingsValues(before), settingsValues(after));
-      return tx.product.update({
-        where: { id },
-        data: {
-          minStock: after.minStock, salePrice: after.salePrice, marginPercent,
-          ...(data.costItemIds ? { costs: { deleteMany: {}, create: data.costItemIds.map(costItemId => ({ costItemId })) } } : {}),
-        },
-        select: { id: true, minStock: true, salePrice: true, marginPercent: true, costs: { select: { costItemId: true } } },
-      });
+      const { sku, before, after, saved } = await applySettings(tx, id, data);
+      auditContext({ Produto: sku });
+      auditChange(before, after);
+      return saved;
     });
   }
+}
+
+type StockSettings = z.infer<typeof stockSettingsFields>;
+/**
+ * Saves the confirmed price inside the caller's transaction and returns the readable values for the audit.
+ * A newly linked cost must be active, and the margin must leave room for the sale percentages.
+ */
+export async function applySettings(tx: Prisma.TransactionClient, id: string, data: StockSettings) {
+  const before = await tx.product.findUnique({ where: { id }, select: settingsAudit });
+  if (!before) throw new NotFoundException('Produto não encontrado.');
+  // A client that does not send the margin or the costs keeps the stored ones.
+  const marginPercent = data.marginPercent === undefined ? before.marginPercent : data.marginPercent;
+  let costs = before.costs;
+  if (data.costItemIds) {
+    const found = await tx.costItem.findMany({ where: { id: { in: data.costItemIds } }, select: linkedCosts.select.costItem.select });
+    if (found.length !== data.costItemIds.length) throw new NotFoundException('Custo cadastrado não encontrado.');
+    const added = found.find(cost => !cost.active && !before.costs.some(link => link.costItem.id === cost.id));
+    if (added) throw new ConflictException('O custo ' + added.name + ' está inativo.');
+    costs = found.map(costItem => ({ costItem }));
+  }
+  if (!coverable(marginPercent, costs.map(link => link.costItem))) throw new BadRequestException(impossiblePrice);
+  const after = { minStock: data.minStock && storedDecimal(data.minStock), salePrice: data.salePrice && storedDecimal(data.salePrice), marginPercent, costs };
+  const saved = await tx.product.update({
+    where: { id },
+    data: {
+      minStock: after.minStock, salePrice: after.salePrice, marginPercent,
+      ...(data.costItemIds ? { costs: { deleteMany: {}, create: data.costItemIds.map(costItemId => ({ costItemId })) } } : {}),
+    },
+    select: { id: true, minStock: true, salePrice: true, marginPercent: true, costs: { select: { costItemId: true } } },
+  });
+  return { sku: before.sku, before: settingsValues(before), after: settingsValues(after), saved };
 }

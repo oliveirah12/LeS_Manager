@@ -68,6 +68,55 @@ export class FileService {
     return { ...file, author: createdBy.name };
   }
 
+  /**
+   * Links pending files to a product inside the product save. Only the person who sent a file can link it,
+   * and only while it has no owner. Returns the readable names before and after, for the audit.
+   */
+  async linkProductFiles(tx: Prisma.TransactionClient, productId: string, ids: string[], authorId: string) {
+    const current = await tx.storedFile.findMany({ where: { available: true, product: { productId } }, select: { originalName: true } });
+    const files = await this.claimPending(tx, ids, authorId);
+    await tx.productFile.createMany({ data: files.map(file => ({ fileId: file.id, productId })) });
+    const before = current.map(file => file.originalName).sort();
+    return { before, after: [...before, ...files.map(file => file.originalName)].sort() };
+  }
+
+  /**
+   * Makes a pending image the product image inside the product save. The bytes are checked again, so a file
+   * sent through the generic route never becomes an image. Purge `replaced` after the commit.
+   */
+  async linkProductImage(tx: Prisma.TransactionClient, productId: string, fileId: string, authorId: string) {
+    const [file] = await this.claimPending(tx, [fileId], authorId);
+    if (file.sizeBytes > productImageLimit || !matchesImageContent(file.originalName, await this.head(file.storageKey))) {
+      throw new UnsupportedMediaTypeException(productImageMessage);
+    }
+    const { imageFile } = await tx.product.findUniqueOrThrow({ where: { id: productId }, select: { imageFile: { select: { id: true, originalName: true } } } });
+    if (imageFile) await tx.storedFile.update({ where: { id: imageFile.id }, data: { available: false } });
+    await tx.product.update({ where: { id: productId }, data: { imageFileId: file.id } });
+    return { before: imageFile?.originalName ?? null, after: file.originalName, replaced: imageFile?.id ?? null };
+  }
+
+  private async claimPending(tx: Prisma.TransactionClient, ids: string[], authorId: string) {
+    const files = await tx.storedFile.findMany({
+      where: { id: { in: ids }, available: true, createdById: authorId, product: { is: null }, productImage: { is: null }, purchaseDocument: { is: null } },
+      select: { id: true, originalName: true, sizeBytes: true, storageKey: true },
+    });
+    if (files.length !== new Set(ids).size) throw new NotFoundException('Um arquivo enviado não está mais disponível. Envie de novo.');
+    return files;
+  }
+
+  /** The first bytes of a stored file, enough for the signature checks. */
+  private async head(key: string) {
+    const content = await this.storage.open(key);
+    let head = Buffer.alloc(0);
+    if (!content) return head;
+    for await (const chunk of content) {
+      head = Buffer.concat([head, chunk as Buffer]);
+      if (head.length >= 64) break;
+    }
+    content.destroy();
+    return head;
+  }
+
   /** The temporary file is gone after a successful save; on any failure this clears it. */
   discard(upload: Express.Multer.File) { return this.storage.discard(upload.path); }
 

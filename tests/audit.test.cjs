@@ -9,6 +9,7 @@ const controllers = [
   require('../dist/api/access/access.js').AccessController,
   require('../dist/api/audit/audit.js').AuditController,
   require('../dist/api/catalog/catalog.js').CatalogController,
+  require('../dist/api/catalog/products.js').ProductController,
   require('../dist/api/catalog/recipe.js').RecipeController,
   require('../dist/api/files/files.js').ProductFilesController,
   require('../dist/api/files/files.js').ProductImageController,
@@ -42,7 +43,7 @@ test('purchase document routes read with purchases:view and write with purchases
 
 test('the price panel reads and saves with stock:operate, and only the save is audited', () => {
   const controller = require('../dist/api/stock/controller.js').StockController;
-  for (const name of ['pricingView', 'settings']) assert.deepEqual(Reflect.getMetadata('permissions', controller.prototype[name]), ['stock:operate'], name);
+  for (const name of ['pricingOptions', 'pricingView', 'settings']) assert.deepEqual(Reflect.getMetadata('permissions', controller.prototype[name]), ['stock:operate'], name);
   assert.equal(Reflect.getMetadata(AUDIT, controller.prototype.pricingView), undefined);
   assert.equal(Reflect.getMetadata(AUDIT, controller.prototype.settings), 'Alterar parâmetros de estoque');
 });
@@ -84,6 +85,14 @@ test('product file routes read with catalog:view and write with catalog:operate'
     assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'catalog:view' : 'catalog:operate'], name);
     if (!reads) assert.equal(typeof Reflect.getMetadata(AUDIT, handler), 'string', name);
   }
+});
+
+test('the product save is one audited route, and the empty recipe editor needs catalog:operate', () => {
+  const controller = require('../dist/api/catalog/products.js').ProductController;
+  assert.deepEqual([controller.prototype.create, controller.prototype.update].map(handler => Reflect.getMetadata(AUDIT, handler)), ['Criar produto', 'Alterar produto']);
+  for (const name of ['create', 'update']) assert.deepEqual(Reflect.getMetadata('permissions', controller.prototype[name]), ['catalog:operate'], name);
+  const recipe = require('../dist/api/catalog/recipe.js').RecipeController;
+  assert.deepEqual(Reflect.getMetadata('permissions', recipe.prototype.options), ['catalog:operate']);
 });
 
 test('pending uploads need catalog:operate and are not audited until the product links them', () => {

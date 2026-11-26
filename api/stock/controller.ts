@@ -75,6 +75,10 @@ export class StockController {
 
   /** The price panel: base cost, linked costs and the active costs that can be linked. */
   @Require('stock:operate')
+  @Get('pricing-options')
+  pricingOptions() { return this.pricing.options(); }
+
+  @Require('stock:operate')
   @Get('products/:id/pricing')
   pricingView(@Param('id') id: string) {
     return this.pricing.view(parse(idField, id));

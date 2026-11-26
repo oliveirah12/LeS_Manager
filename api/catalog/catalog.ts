@@ -42,7 +42,7 @@ export const productFields = z.object({
   lengthMm: positive.nullish(), widthMm: positive.nullish(), heightMm: positive.nullish(), diameterMm: positive.nullish(),
   purchaseUrl: purchaseUrlField.nullish(), measures: measuresField.optional(),
 });
-const productUpdate = productFields.partial({ sku: true, unitId: true });
+export const productUpdate = productFields.partial({ sku: true, unitId: true });
 const productTypeFields = z.object({ name: nameField, isInput: z.boolean(), isManufactured: z.boolean() });
 /** Default type of every product, created by the migration. */
 export const defaultProductType = '00000000-0000-4000-8000-000000000001';
@@ -61,7 +61,7 @@ const technicalProduct = {
   lengthMm: true, widthMm: true, heightMm: true, diameterMm: true, purchaseUrl: true,
   measures: { select: { name: true, value: true, unit: true }, orderBy: { name: 'asc' } },
 } as const;
-const catalogProduct = { ...catalogSummary, ...technicalProduct, imageFileId: true } as const;
+export const catalogProduct = { ...catalogSummary, ...technicalProduct, imageFileId: true } as const;
 /** What stock:view may read. A new product column stays private until it is listed here. */
 const stockProduct = {
   id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, lastPurchaseAt: true, lastPurchaseExpense: true,
@@ -454,43 +454,41 @@ export class CatalogService {
     return product;
   }
 
-  async updateProduct(id: string, data: z.infer<typeof productUpdate>) {
-    return serial(this.db, async tx => {
-      await this.assertReferences(tx, data);
-      const before = await tx.product.findUnique({
-        where: { id }, select: { ...productAudit, typeId: true, unitId: true, unit: { select: { symbol: true, familyId: true } }, ...productUsage },
-      });
-      if (!before) throw new NotFoundException('Produto não encontrado.');
-      // Print time and printer only price a manufactured product, so they leave with the type.
-      let leavesManufacturing = false;
-      if (data.typeId && data.typeId !== before.typeId) {
-        const type = await tx.productType.findUnique({ where: { id: data.typeId } });
-        if (!type) throw new NotFoundException('Tipo de produto não encontrado.');
-        if (before._count.recipe && !type.isManufactured) throw new ConflictException('O produto tem ficha técnica, então o tipo precisa ser fabricado.');
-        if (before._count.usedInRecipes && !type.isInput) throw new ConflictException('O produto está em fichas técnicas, então o tipo precisa ser usado como insumo.');
-        leavesManufacturing = !type.isManufactured;
-      }
-      const newUnitId = data.unitId && data.unitId !== before.unitId ? data.unitId : undefined;
-      if (newUnitId) {
-        const unit = await tx.unit.findUnique({ where: { id: newUnitId } });
-        if (!unit) throw new NotFoundException('Unidade não encontrada.');
-        // Balances are stored in the family's base unit, so a new family would reinterpret them.
-        const block = productBlock(before._count);
-        if (unit.familyId !== before.unit.familyId && block) throw new ConflictException(block + ' Escolha uma unidade da mesma família.');
-      }
-      // The revision change invalidates inventory previews counted with the previous unit.
-      const { measures, ...fields } = data;
-      await tx.product.update({
-        where: { id },
-        data: {
-          ...fields, ...(measures ? { measures: { deleteMany: {}, create: measures } } : {}),
-          ...(newUnitId ? { revision: { increment: 1 } } : {}),
-          ...(leavesManufacturing ? { printMinutes: null, printerId: null } : {}),
-        },
-      });
-      auditChange(productValues(before), productValues(await tx.product.findUniqueOrThrow({ where: { id }, select: productAudit })));
-      return tx.product.findUniqueOrThrow({ where: { id }, select: catalogProduct });
+  /** Runs inside the caller's transaction, so the product save can add files, recipe and price to the same commit. */
+  async updateProduct(tx: Prisma.TransactionClient, id: string, data: z.infer<typeof productUpdate>) {
+    await this.assertReferences(tx, data);
+    const before = await tx.product.findUnique({
+      where: { id }, select: { ...productAudit, typeId: true, unitId: true, unit: { select: { symbol: true, familyId: true } }, ...productUsage },
     });
+    if (!before) throw new NotFoundException('Produto não encontrado.');
+    // Print time and printer only price a manufactured product, so they leave with the type.
+    let leavesManufacturing = false;
+    if (data.typeId && data.typeId !== before.typeId) {
+      const type = await tx.productType.findUnique({ where: { id: data.typeId } });
+      if (!type) throw new NotFoundException('Tipo de produto não encontrado.');
+      if (before._count.recipe && !type.isManufactured) throw new ConflictException('O produto tem ficha técnica, então o tipo precisa ser fabricado.');
+      if (before._count.usedInRecipes && !type.isInput) throw new ConflictException('O produto está em fichas técnicas, então o tipo precisa ser usado como insumo.');
+      leavesManufacturing = !type.isManufactured;
+    }
+    const newUnitId = data.unitId && data.unitId !== before.unitId ? data.unitId : undefined;
+    if (newUnitId) {
+      const unit = await tx.unit.findUnique({ where: { id: newUnitId } });
+      if (!unit) throw new NotFoundException('Unidade não encontrada.');
+      // Balances are stored in the family's base unit, so a new family would reinterpret them.
+      const block = productBlock(before._count);
+      if (unit.familyId !== before.unit.familyId && block) throw new ConflictException(block + ' Escolha uma unidade da mesma família.');
+    }
+    // The revision change invalidates inventory previews counted with the previous unit.
+    const { measures, ...fields } = data;
+    await tx.product.update({
+      where: { id },
+      data: {
+        ...fields, ...(measures ? { measures: { deleteMany: {}, create: measures } } : {}),
+        ...(newUnitId ? { revision: { increment: 1 } } : {}),
+        ...(leavesManufacturing ? { printMinutes: null, printerId: null } : {}),
+      },
+    });
+    auditChange(productValues(before), productValues(await tx.product.findUniqueOrThrow({ where: { id }, select: productAudit })));
   }
 
   /** Deletes a product that never entered the history. Unconfirmed count previews do not hold it back. */
@@ -713,25 +711,6 @@ export class CatalogController {
   @Audit('Excluir unidade')
   @Delete('units/:id')
   removeUnit(@Param('id') id: string) { return this.catalog.deleteUnit(parse(idField, id)); }
-
-  @Require('catalog:operate')
-  @Audit('Criar produto')
-  @Post('products')
-  addProduct(@Body() body: unknown) {
-    const data = parse(productFields, body);
-    return serial(this.db, async tx => {
-      const { id } = await this.catalog.createProduct(tx, data);
-      return tx.product.findUniqueOrThrow({ where: { id }, select: catalogProduct });
-    });
-  }
-
-  @Require('catalog:operate')
-  @Audit('Alterar produto')
-  @Patch('products/:id')
-  updateProduct(@Param('id') id: string, @Body() body: unknown) {
-    const data = parse(productUpdate, body);
-    return this.catalog.updateProduct(parse(idField, id), data);
-  }
 
   @Require('catalog:operate')
   @Audit('Alterar situação do produto')

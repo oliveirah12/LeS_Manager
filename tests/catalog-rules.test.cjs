@@ -76,26 +76,26 @@ function service(usage, unitFamily = 'mass') {
     releaseProductFiles: async () => { calls.push('files'); return { ids: ['f1'], names: ['a.pdf'] }; },
     purge: async ids => { calls.push('purge ' + ids.join()); },
   };
-  return { catalog: new CatalogService({ $transaction: work => work(tx) }, files), calls };
+  return { catalog: new CatalogService({ $transaction: work => work(tx) }, files), calls, tx };
 }
 
 const change = { name: 'Produto', unitId: 'new' };
 
 test('a product with history stays in its unit family', async () => {
-  const { catalog, calls } = service({ ...unused, movements: 1 }, 'volume');
-  await assert.rejects(catalog.updateProduct('id', change), { status: 409 });
+  const { catalog, calls, tx } = service({ ...unused, movements: 1 }, 'volume');
+  await assert.rejects(catalog.updateProduct(tx, 'id', change), { status: 409 });
   assert.deepEqual(calls, []);
 });
 
 test('a product with history can use another unit of the same family', async () => {
-  const { catalog, calls } = service({ ...unused, movements: 1 });
-  await catalog.updateProduct('id', change);
+  const { catalog, calls, tx } = service({ ...unused, movements: 1 });
+  await catalog.updateProduct(tx, 'id', change);
   assert.deepEqual(calls, ['update']);
 });
 
 test('an unused product can move to another family', async () => {
-  const { catalog, calls } = service(unused, 'volume');
-  await catalog.updateProduct('id', change);
+  const { catalog, calls, tx } = service(unused, 'volume');
+  await catalog.updateProduct(tx, 'id', change);
   assert.deepEqual(calls, ['update']);
 });
 
