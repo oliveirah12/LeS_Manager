@@ -1559,6 +1559,46 @@ test('API REST com PostgreSQL', {
       ['foto.png', 'nova.png', '50', '60']);
   });
 
+  await t.test('cadastro da empresa: acessos, logo pendente e auditoria', async () => {
+    const form = (bytes, name, type) => {
+      const body = new FormData();
+      body.append('file', new Blob([bytes], { type }), name);
+      return body;
+    };
+    const png = Buffer.from('89504e470d0a1a0a00', 'hex');
+    const reader = await session('EMPRESA-VER', ['registrations:view']);
+    const operator = await session('EMPRESA-OPERA', ['registrations:operate']);
+    const other = await session('EMPRESA-OUTRA', ['registrations:operate']);
+    const stranger = await session('EMPRESA-SEM', ['catalog:operate']);
+    const upload = (caller, ...file) => caller('/company/uploads/logo', { method: 'POST', body: form(...file) });
+    const data = { name: 'Lar&Stock3D', tagline: 'Impressão 3D', contact: '(11) 90000-0000', footer: 'Obrigado pela preferência', quoteValidityDays: 10 };
+
+    expectStatus(await stranger('/company'), 403);
+    expectStatus(await stranger('/company/logo'), 403);
+    expectStatus(await upload(stranger, png, 'logo.png', 'image/png'), 403);
+    expectStatus(await upload(reader, png, 'logo.png', 'image/png'), 403);
+    expectStatus(await reader('/company', { method: 'PUT', body: data }), 403);
+    expectStatus(await operator('/company', { method: 'PUT', body: { ...data, quoteValidityDays: 0 } }), 400);
+    expectStatus(await upload(operator, 'texto', 'logo.png', 'image/png'), 415);
+    const logo = expectStatus(await upload(operator, png, 'logo.png', 'image/png'), 201);
+    // Only who sent the logo links it, and a failed save keeps it pending.
+    expectStatus(await other('/company', { method: 'PUT', body: { ...data, logoFileId: logo.id } }), 404);
+    const saved = expectStatus(await operator('/company', { method: 'PUT', body: { ...data, tagline: ' ', logoFileId: logo.id } }), 200);
+    assert.deepEqual([saved.name, saved.tagline, saved.quoteValidityDays, saved.logoFileId, saved.logoName], ['Lar&Stock3D', null, 10, logo.id, 'logo.png']);
+    const shown = await reader('/company/logo');
+    assert.deepEqual([shown.status, shown.headers.get('content-type')], [200, 'image/png']);
+    const audit = await waitForAuditEvent({ action: 'Alterar dados da empresa' }, event => event.details.after?.Logo === 'logo.png');
+    assert.deepEqual([audit.details.after.Nome, audit.details.after['Validade do orçamento (dias)']], ['Lar&Stock3D', 10]);
+    // The logo now has an owner, so the product form cannot take it.
+    expectStatus(await admin('/catalog/products', { method: 'POST', body: { sku: sku('EMPRESA-LOGO'), name: 'Logo', unitId: unit.id, typeId: '00000000-0000-4000-8000-000000000003', imageFileId: logo.id } }), 404);
+
+    // Leaving the logo out keeps it, and null removes it from the disk too.
+    assert.equal(expectStatus(await operator('/company', { method: 'PUT', body: data }), 200).logoFileId, logo.id);
+    assert.equal(expectStatus(await operator('/company', { method: 'PUT', body: { ...data, logoFileId: null } }), 200).logoName, null);
+    assert.equal(await db.storedFile.count({ where: { id: logo.id } }), 0);
+    expectStatus(await reader('/company/logo'), 404);
+  });
+
   await t.test('compras: permissões, produto repetido, rateio, atomicidade e estorno', async () => {
     const day = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
     const purchase = (items, extra = {}) => ({ purchaseDate: day, items, ...extra });

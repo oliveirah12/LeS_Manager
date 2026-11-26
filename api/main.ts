@@ -24,6 +24,7 @@ import { PaymentMethodController, PaymentMethodService } from './production/paym
 import { ProductionController, ProductionService } from './production/production';
 import { PurchaseDocumentController, PurchaseDocumentSearch, PurchaseDocumentSearchController, PurchaseDocumentService } from './purchases/documents';
 import { PurchaseController, PurchaseService } from './purchases/purchases';
+import { CompanyController, CompanyService } from './registrations/company';
 import { CostItemController, CostItemService } from './registrations/costs';
 import { SupplierController, SupplierService } from './purchases/suppliers';
 import { Database, DatabaseErrors } from './shared';
@@ -65,7 +66,7 @@ class ProductionModule {}
 })
 class PurchasesModule {}
 
-@Module({ controllers: [CostItemController], providers: [CostItemService] })
+@Module({ imports: [FilesModule], controllers: [CompanyController, CostItemController], providers: [CompanyService, CostItemService], exports: [CompanyService] })
 class RegistrationsModule {}
 
 @Module({ controllers: [AuditController], providers: [AuditRetention] })

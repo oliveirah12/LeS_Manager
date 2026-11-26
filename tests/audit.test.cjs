@@ -23,6 +23,7 @@ const controllers = [
   require('../dist/api/purchases/documents.js').PurchaseDocumentSearchController,
   require('../dist/api/purchases/purchases.js').PurchaseController,
   require('../dist/api/purchases/suppliers.js').SupplierController,
+  require('../dist/api/registrations/company.js').CompanyController,
   require('../dist/api/registrations/costs.js').CostItemController,
   require('../dist/api/stock/controller.js').StockController,
 ];
@@ -131,6 +132,17 @@ test('registered cost routes read with registrations:view and write with registr
     assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'registrations:view' : 'registrations:operate'], name);
     assert.equal(typeof Reflect.getMetadata(AUDIT, handler), reads ? 'undefined' : 'string', name);
   }
+});
+
+test('company routes read with registrations:view, and only the save is audited', () => {
+  const controller = require('../dist/api/registrations/company.js').CompanyController;
+  for (const name of ['show', 'logo', 'save', 'uploadLogo']) {
+    const handler = controller.prototype[name];
+    const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
+    assert.deepEqual(Reflect.getMetadata('permissions', handler), [reads ? 'registrations:view' : 'registrations:operate'], name);
+  }
+  assert.equal(Reflect.getMetadata(AUDIT, controller.prototype.save), 'Alterar dados da empresa');
+  assert.equal(Reflect.getMetadata(AUDIT, controller.prototype.uploadLogo), false);
 });
 
 test('purchase routes read with purchases:view and write with purchases:operate', () => {
