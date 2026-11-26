@@ -23,6 +23,7 @@ const controllers = [
   require('../dist/api/purchases/documents.js').PurchaseDocumentSearchController,
   require('../dist/api/purchases/purchases.js').PurchaseController,
   require('../dist/api/purchases/suppliers.js').SupplierController,
+  require('../dist/api/quotes/quotes.js').QuoteController,
   require('../dist/api/registrations/company.js').CompanyController,
   require('../dist/api/registrations/costs.js').CostItemController,
   require('../dist/api/stock/controller.js').StockController,
@@ -61,6 +62,23 @@ test('production routes require the production permission', () => {
       assert.deepEqual(Reflect.getMetadata('permissions', handler), [method === RequestMethod.GET ? 'production:view' : 'production:operate'], name);
     }
   }
+});
+
+test('quote routes read with quotes:view, write with quotes:operate, and approving also needs production:operate', () => {
+  const controller = require('../dist/api/quotes/quotes.js').QuoteController;
+  const routes = Object.getOwnPropertyNames(controller.prototype).filter(name => Reflect.getMetadata(METHOD_METADATA, controller.prototype[name]) !== undefined);
+  assert.equal(routes.length, 10);
+  const labels = {
+    create: 'Criar orçamento', update: 'Editar orçamento', send: 'Enviar orçamento', reject: 'Recusar orçamento', approve: 'Aprovar orçamento', remove: 'Excluir orçamento',
+  };
+  for (const name of routes) {
+    const handler = controller.prototype[name];
+    const reads = Reflect.getMetadata(METHOD_METADATA, handler) === RequestMethod.GET;
+    const expected = reads ? ['quotes:view'] : name === 'approve' ? ['quotes:operate', 'production:operate'] : ['quotes:operate'];
+    assert.deepEqual(Reflect.getMetadata('permissions', handler), expected, name);
+    assert.equal(Reflect.getMetadata(AUDIT, handler), reads ? undefined : labels[name], name);
+  }
+  assert.ok(require('../dist/api/access/security.js').configurablePermissions.includes('quotes:operate'));
 });
 
 test('correcting a finished order needs its own permission, which nothing else grants', () => {

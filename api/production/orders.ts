@@ -29,6 +29,7 @@ const orderFields = {
   })).min(1).max(50),
 };
 const createFields = z.object({ ...orderFields, manualExpenses: manualExpenses.default([]) });
+export type OrderCreate = z.infer<typeof createFields>;
 /** Inputs are named by their id before the swap. A blank field of the form simply is not sent, so what was not touched stays. */
 export const updateFields = z.object({
   ...orderFields,
@@ -193,16 +194,16 @@ function closing(order: LoadedOrder, energyRate: Prisma.Decimal, data: Finish) {
   return { printMinutes, machineCost, used, costing, sale, feePercent, expenses };
 }
 
-type RecipeProduct = Prisma.ProductGetPayload<{ include: { type: true; recipe: { include: { input: true } } } }>;
+export type RecipeProduct = Prisma.ProductGetPayload<{ include: { type: true; recipe: { include: { input: true } } } }>;
 
-function requireManufactured(product: RecipeProduct | undefined) {
+export function requireManufactured(product: RecipeProduct | undefined) {
   if (!product) throw new NotFoundException('Produto não encontrado.');
   if (!product.active || !product.type.isManufactured) throw new ConflictException(product.sku + ' não é um produto fabricado ativo.');
   return product;
 }
 
 /** What a new line of the order consumes, from the product's recipe with its waste. */
-function recipeConsumption(product: RecipeProduct, quantity: Prisma.Decimal) {
+export function recipeConsumption(product: RecipeProduct, quantity: Prisma.Decimal) {
   if (!product.recipe.length) throw new ConflictException(product.sku + ' ainda não tem ficha técnica.');
   const inactive = product.recipe.find(row => !row.input.active);
   if (inactive) throw new ConflictException('Insumo inativo na ficha de ' + product.sku + ': ' + inactive.input.sku + '.');
@@ -337,55 +338,58 @@ export class ProductionOrderService {
     };
   }
 
-  create(data: z.infer<typeof createFields>, userId: string, seeCosts: boolean) {
+  create(data: OrderCreate, userId: string, seeCosts: boolean) {
+    return serial(this.db, tx => this.createIn(tx, data, userId, seeCosts));
+  }
+
+  /** Runs inside the caller's transaction, so an approved quote and its order are saved together or not at all. */
+  async createIn(tx: Prisma.TransactionClient, data: OrderCreate, userId: string, seeCosts: boolean) {
     const ids = data.items.map(item => item.productId);
     if (new Set(ids).size !== ids.length) throw new BadRequestException('Inclua cada produto apenas uma vez.');
-    return serial(this.db, async tx => {
-      const printer = await tx.printer.findUnique({ where: { id: data.printerId } });
-      if (!printer?.active) throw new ConflictException('Escolha uma impressora ativa.');
-      await this.requireFreeSlot(tx, printer.id, data.plannedStart, data.estimatedMinutes);
-      const payment = await this.paymentMethod(tx, data.paymentMethodId);
-      const products = await tx.product.findMany({ where: { id: { in: ids } }, include: { type: true, recipe: { include: { input: true } } } });
-      const items = data.items.map(item => {
-        const product = requireManufactured(products.find(row => row.id === item.productId));
-        return {
-          productId: product.id, planned: storedDecimal(item.quantity),
-          // The registered price and margin are the starting point. Changing them here affects only this order.
-          salePrice: item.salePrice === undefined ? product.salePrice : item.salePrice && storedDecimal(item.salePrice),
-          marginPercent: !seeCosts || item.marginPercent === undefined ? product.marginPercent : item.marginPercent,
-          consumption: { create: recipeConsumption(product, item.quantity) },
-        };
-      });
-      const expectedEnd = new Date(data.plannedStart.getTime() + data.estimatedMinutes * 60000);
-      const needed = new Map<string, InputUse & { sku: string }>();
-      for (const item of items) {
-        const product = products.find(row => row.id === item.productId)!;
-        for (const row of item.consumption.create) {
-          const input = product.recipe.find(line => line.inputId === row.inputId)!.input;
-          needed.set(row.inputId, { sku: input.sku, unitExpense: input.lastPurchaseExpense, quantity: (needed.get(row.inputId)?.quantity ?? new Prisma.Decimal(0)).plus(row.planned) });
-        }
-      }
-      const expenses = [
-        ...[...needed].map(([inputId, use]) => ({ source: 'INPUT' as const, inputId, title: 'Despesas de compra · ' + use.sku, value: suggestedExpense(use) })),
-        ...data.manualExpenses.map(row => ({ source: 'MANUAL' as const, title: row.title, value: storedDecimal(row.value), edited: true })),
-      ];
-      const order = await tx.productionOrder.create({
-        data: {
-          printerId: printer.id, userId, notes: data.notes || null, plannedStart: data.plannedStart,
-          estimatedMinutes: data.estimatedMinutes, expectedEnd, items: { create: items },
-          discountPercent: data.discountPercent ?? 0, paymentMethodId: payment?.id ?? null, feePercent: data.feePercent ?? null,
-          expenses: { create: expenses },
-        },
-        include: orderInclude,
-      });
-      auditChange(null, {
-        Ordem: order.number, Impressora: printer.name, 'Situação': statusNames.PLANNED,
-        Produtos: order.items.map(item => item.product.sku + ' × ' + item.planned.toFixed()).sort(),
-        'Desconto (%)': order.discountPercent.toFixed(), 'Forma de pagamento': payment?.name ?? null,
-        Despesas: expenses.filter(row => row.value.gt(0)).map(row => row.title + ': ' + row.value.toFixed()).sort(),
-      });
-      return presentOrder(order, seeCosts);
+    const printer = await tx.printer.findUnique({ where: { id: data.printerId } });
+    if (!printer?.active) throw new ConflictException('Escolha uma impressora ativa.');
+    await this.requireFreeSlot(tx, printer.id, data.plannedStart, data.estimatedMinutes);
+    const payment = await this.paymentMethod(tx, data.paymentMethodId);
+    const products = await tx.product.findMany({ where: { id: { in: ids } }, include: { type: true, recipe: { include: { input: true } } } });
+    const items = data.items.map(item => {
+      const product = requireManufactured(products.find(row => row.id === item.productId));
+      return {
+        productId: product.id, planned: storedDecimal(item.quantity),
+        // The registered price and margin are the starting point. Changing them here affects only this order.
+        salePrice: item.salePrice === undefined ? product.salePrice : item.salePrice && storedDecimal(item.salePrice),
+        marginPercent: !seeCosts || item.marginPercent === undefined ? product.marginPercent : item.marginPercent,
+        consumption: { create: recipeConsumption(product, item.quantity) },
+      };
     });
+    const expectedEnd = new Date(data.plannedStart.getTime() + data.estimatedMinutes * 60000);
+    const needed = new Map<string, InputUse & { sku: string }>();
+    for (const item of items) {
+      const product = products.find(row => row.id === item.productId)!;
+      for (const row of item.consumption.create) {
+        const input = product.recipe.find(line => line.inputId === row.inputId)!.input;
+        needed.set(row.inputId, { sku: input.sku, unitExpense: input.lastPurchaseExpense, quantity: (needed.get(row.inputId)?.quantity ?? new Prisma.Decimal(0)).plus(row.planned) });
+      }
+    }
+    const expenses = [
+      ...[...needed].map(([inputId, use]) => ({ source: 'INPUT' as const, inputId, title: 'Despesas de compra · ' + use.sku, value: suggestedExpense(use) })),
+      ...data.manualExpenses.map(row => ({ source: 'MANUAL' as const, title: row.title, value: storedDecimal(row.value), edited: true })),
+    ];
+    const order = await tx.productionOrder.create({
+      data: {
+        printerId: printer.id, userId, notes: data.notes || null, plannedStart: data.plannedStart,
+        estimatedMinutes: data.estimatedMinutes, expectedEnd, items: { create: items },
+        discountPercent: data.discountPercent ?? 0, paymentMethodId: payment?.id ?? null, feePercent: data.feePercent ?? null,
+        expenses: { create: expenses },
+      },
+      include: orderInclude,
+    });
+    auditChange(null, {
+      Ordem: order.number, Impressora: printer.name, 'Situação': statusNames.PLANNED,
+      Produtos: order.items.map(item => item.product.sku + ' × ' + item.planned.toFixed()).sort(),
+      'Desconto (%)': order.discountPercent.toFixed(), 'Forma de pagamento': payment?.name ?? null,
+      Despesas: expenses.filter(row => row.value.gt(0)).map(row => row.title + ': ' + row.value.toFixed()).sort(),
+    });
+    return presentOrder(order, seeCosts);
   }
 
   /** A planned order has moved nothing yet, so its lines are rebuilt from what the edit decided. */

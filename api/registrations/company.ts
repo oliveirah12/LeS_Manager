@@ -9,8 +9,8 @@ import { FileUpload } from '../files/upload';
 import { Database, idField, nameField, parse, serial } from '../shared';
 
 const settingsId = 'default';
-const blankToNull = (value: unknown) => typeof value === 'string' && !value.trim() ? null : value;
-const optionalText = (max: number) => z.preprocess(blankToNull, z.string().trim().max(max, 'Use até ' + max + ' caracteres').nullable()).default(null);
+export const blankToNull = (value: unknown) => typeof value === 'string' && !value.trim() ? null : value;
+export const optionalText = (max: number) => z.preprocess(blankToNull, z.string().trim().max(max, 'Use até ' + max + ' caracteres').nullable()).default(null);
 
 export const companyFields = z.object({
   name: nameField,

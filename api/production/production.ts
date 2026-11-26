@@ -19,9 +19,10 @@ const printerValues = (printer: { name: string; powerWatts: Prisma.Decimal; hour
   Nome: printer.name, 'Potência (W)': printer.powerWatts.toFixed(), 'Custo por hora': printer.hourlyCost.toFixed(),
 });
 const situation = (active: boolean) => active ? 'Ativa' : 'Inativa';
-const printerUsage = { _count: { select: { orders: true, products: true } } } as const;
-function printerBlock(usage: { orders: number; products: number }) {
+const printerUsage = { _count: { select: { orders: true, products: true, quotes: true } } } as const;
+function printerBlock(usage: { orders: number; products: number; quotes: number }) {
   if (usage.orders) return 'A impressora já foi usada em ordens de produção.';
+  if (usage.quotes) return 'A impressora está em orçamentos.';
   return usage.products ? 'A impressora é a padrão da ficha técnica de ' + usage.products + (usage.products === 1 ? ' produto.' : ' produtos.') : null;
 }
 

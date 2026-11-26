@@ -1599,6 +1599,87 @@ test('API REST com PostgreSQL', {
     expectStatus(await reader('/company/logo'), 404);
   });
 
+  await t.test('orçamentos: acessos, custo oculto, aprovação gera a ordem e exclusão só do recusado', async () => {
+    const [filamentType, printedType] = [2, 3].map(n => '00000000-0000-4000-8000-00000000000' + n);
+    const typed = async (name, typeId) => {
+      const product = await createProduct(name, unit.id);
+      expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name, typeId } }), 200);
+      return product;
+    };
+    const filament = await typed('ORC-FILAMENTO', filamentType);
+    const statue = await typed('ORC-ESTATUETA', printedType);
+    expectStatus(await movement(filament.id, unit.id, 'PURCHASE', '1000', '0.1'), 201);
+    expectStatus(await admin('/catalog/products/' + statue.id + '/recipe', { method: 'PUT', body: { wastePercent: '0', inputs: [{ inputId: filament.id, unitId: unit.id, quantity: '20' }] } }), 200);
+    const printer = expectStatus(await post('/production/printers', { name: sku('ORC-IMPRESSORA'), powerWatts: '200', hourlyCost: '1' }), 201);
+    const stranger = await session('ORC-SEM', ['production:operate']);
+    const viewer = await session('ORC-VER', ['quotes:view']);
+    const seller = await session('ORC-VENDE', ['quotes:operate']);
+    const approver = await session('ORC-APROVA', ['quotes:operate', 'production:operate']);
+    const body = (extra = {}) => ({
+      customerName: 'Cliente Orçamento', customerContact: '(11) 90000-0000', title: 'Estatuetas', description: 'Peças pintadas',
+      details: [{ label: 'Tamanho', value: '10 cm' }], printPlates: 2, estimatedMinutes: 300, deliveryDays: 7, printerId: printer.id,
+      discountPercent: '10', items: [{ productId: statue.id, quantity: '32', salePrice: '16', marginPercent: '40' }],
+      manualExpenses: [{ title: 'Embalagem', value: '5' }], ...extra,
+    });
+    const action = (caller, id, name, payload = {}) => caller('/quotes/' + id + '/' + name, { method: 'POST', body: payload });
+
+    expectStatus(await stranger('/quotes'), 403);
+    expectStatus(await viewer('/quotes', { method: 'POST', body: body() }), 403);
+    // Only a manufactured product with a recipe can become an order.
+    expectStatus(await seller('/quotes', { method: 'POST', body: body({ items: [{ productId: filament.id, quantity: '1', salePrice: '1' }] }) }), 409);
+    const draft = expectStatus(await seller('/quotes', { method: 'POST', body: body() }), 201);
+    assert.equal(draft.status, 'DRAFT');
+    assert.deepEqual(draft.actions, ['edit', 'send', 'approve', 'reject']);
+    assert.equal(draft.sale.total, '460.8');
+    // Without stock:view the margin, the budget and the result stay in the API.
+    assert.equal(draft.budget, null);
+    assert.equal(draft.items[0].marginPercent, undefined);
+    assert.equal(draft.sale.profit, undefined);
+    const company = expectStatus(await admin('/company'), 200);
+    const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+    const expected = new Date(Date.parse(today + 'T12:00:00Z') + company.quoteValidityDays * 86_400_000).toISOString().slice(0, 10);
+    assert.equal(draft.validUntil, expected);
+    assert.ok(expectStatus(await viewer('/quotes?search=' + encodeURIComponent('orçamento')), 200).quotes.some(row => row.id === draft.id));
+    assert.ok(expectStatus(await viewer('/quotes?search=' + draft.number), 200).quotes.some(row => row.id === draft.id));
+    expectStatus(await viewer('/quotes/letterhead'), 200);
+    expectStatus(await viewer('/quotes/products/' + statue.id + '/image'), 404);
+    const full = expectStatus(await admin('/quotes?status=DRAFT'), 200).quotes.find(row => row.id === draft.id);
+    assert.ok(full.budget.totalCost);
+    assert.equal(full.items[0].marginPercent, '40');
+
+    expectStatus(await action(seller, draft.id, 'send'), 200);
+    expectStatus(await action(seller, draft.id, 'send'), 409);
+    expectStatus(await seller('/quotes/' + draft.id, { method: 'DELETE' }), 409);
+    expectStatus(await action(seller, draft.id, 'approve', { plannedStart: '2099-05-01T10:00:00.000Z' }), 403);
+    const approved = expectStatus(await action(approver, draft.id, 'approve', { plannedStart: '2099-05-01T10:00:00.000Z' }), 200);
+    assert.equal(approved.status, 'APPROVED');
+    assert.deepEqual(approved.actions, []);
+    const order = await db.productionOrder.findUniqueOrThrow({ where: { id: approved.productionOrder.id }, include: { items: true, expenses: true } });
+    assert.deepEqual([order.status, order.printerId, order.estimatedMinutes, order.discountPercent.toFixed()], ['PLANNED', printer.id, 300, '10']);
+    assert.deepEqual([order.items[0].planned.toFixed(), order.items[0].salePrice.toFixed(), order.items[0].marginPercent.toFixed()], ['32', '16', '40']);
+    assert.ok(order.expenses.some(row => row.source === 'MANUAL' && row.title === 'Embalagem' && row.value.toFixed() === '5'));
+    expectStatus(await seller('/quotes/' + draft.id, { method: 'PATCH', body: body() }), 409);
+    expectStatus(await action(seller, draft.id, 'reject'), 409);
+    const audit = await waitForAuditEvent({ action: 'Aprovar orçamento' }, event => event.details?.after?.['Ordem de produção'] === approved.productionOrder.number);
+    assert.equal(audit.details.after['Situação'], 'Aprovado');
+
+    // A busy printer stops the approval, and nothing is saved.
+    const clash = expectStatus(await seller('/quotes', { method: 'POST', body: body() }), 201);
+    expectStatus(await action(approver, clash.id, 'approve', { plannedStart: '2099-05-01T11:00:00.000Z' }), 409);
+    const kept = await db.quote.findUniqueOrThrow({ where: { id: clash.id } });
+    assert.deepEqual([kept.status, kept.productionOrderId], ['DRAFT', null]);
+    assert.equal(await db.productionOrder.count({ where: { printerId: printer.id } }), 1);
+
+    expectStatus(await seller('/quotes/' + clash.id, { method: 'DELETE' }), 409);
+    expectStatus(await action(seller, clash.id, 'reject'), 200);
+    expectStatus(await viewer('/quotes/' + clash.id, { method: 'DELETE' }), 403);
+    expectStatus(await seller('/quotes/' + clash.id, { method: 'DELETE' }), 200);
+    assert.equal(await db.quote.count({ where: { id: clash.id } }), 0);
+    await waitForAuditEvent({ action: 'Excluir orçamento' }, event => event.details?.before?.['Orçamento'] === clash.number);
+    // A printer named in a quote stays in use.
+    expectStatus(await admin('/production/printers/' + printer.id, { method: 'DELETE' }), 409);
+  });
+
   await t.test('compras: permissões, produto repetido, rateio, atomicidade e estorno', async () => {
     const day = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
     const purchase = (items, extra = {}) => ({ purchaseDate: day, items, ...extra });

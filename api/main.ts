@@ -26,6 +26,7 @@ import { PurchaseDocumentController, PurchaseDocumentSearch, PurchaseDocumentSea
 import { PurchaseController, PurchaseService } from './purchases/purchases';
 import { CompanyController, CompanyService } from './registrations/company';
 import { CostItemController, CostItemService } from './registrations/costs';
+import { QuoteController, QuoteService } from './quotes/quotes';
 import { SupplierController, SupplierService } from './purchases/suppliers';
 import { Database, DatabaseErrors } from './shared';
 import { StockController } from './stock/controller';
@@ -57,6 +58,7 @@ class FinanceModule {}
 @Module({
   imports: [StockModule], controllers: [ProductionController, ProductionCorrectionController, ProductionOrderController, PaymentMethodController],
   providers: [ProductionService, ProductionOrderService, ProductionCorrectionService, PaymentMethodService],
+  exports: [ProductionOrderService],
 })
 class ProductionModule {}
 
@@ -69,11 +71,14 @@ class PurchasesModule {}
 @Module({ imports: [FilesModule], controllers: [CompanyController, CostItemController], providers: [CompanyService, CostItemService], exports: [CompanyService] })
 class RegistrationsModule {}
 
+@Module({ imports: [ProductionModule, RegistrationsModule, FilesModule], controllers: [QuoteController], providers: [QuoteService] })
+class QuotesModule {}
+
 @Module({ controllers: [AuditController], providers: [AuditRetention] })
 class AuditModule {}
 
 @Module({
-  imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, ProductionModule, PurchasesModule, RegistrationsModule, AuditModule],
+  imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, ProductionModule, PurchasesModule, RegistrationsModule, QuotesModule, AuditModule],
   controllers: [HealthController],
 })
 class AppModule {}

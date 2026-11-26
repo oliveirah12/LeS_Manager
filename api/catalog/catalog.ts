@@ -93,17 +93,18 @@ const kitValues = (kit: AuditedKit) => ({
 const kitAudit = { components: { include: { product: { select: { sku: true } } } } } as const;
 const productUsage = {
   _count: { select: {
-    movements: true, kitComponents: true, recipe: true, usedInRecipes: true, productionItems: true, productionInputs: true, replacedInputs: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } },
+    movements: true, kitComponents: true, recipe: true, usedInRecipes: true, productionItems: true, productionInputs: true, replacedInputs: true, quoteItems: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } },
   } },
 } as const;
 const kitUsage = { _count: { select: { movements: true } } } as const;
 
 /** Why a product is in use. Such a product cannot be deleted or moved to another unit family. */
 function productBlock(usage: {
-  movements: number; kitComponents: number; inventoryRows: number; recipe: number; usedInRecipes: number; productionItems: number; productionInputs: number; replacedInputs: number;
+  movements: number; kitComponents: number; inventoryRows: number; recipe: number; usedInRecipes: number; productionItems: number; productionInputs: number; replacedInputs: number; quoteItems: number;
 }) {
   if (usage.movements) return 'O produto tem movimentações no histórico.';
   if (usage.productionItems || usage.productionInputs || usage.replacedInputs) return 'O produto consta em ordens de produção.';
+  if (usage.quoteItems) return 'O produto consta em orçamentos.';
   if (usage.kitComponents) return 'O produto compõe um kit.';
   if (usage.inventoryRows) return 'O produto consta em inventário confirmado.';
   if (usage.recipe) return 'O produto tem ficha técnica.';
