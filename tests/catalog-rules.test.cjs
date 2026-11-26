@@ -39,7 +39,7 @@ test('the stock view reads products through an explicit field list', async () =>
   // One product with the pricing columns, which feed the suggestion and must not leave the API.
   const row = {
     id: 'p', quantity: d(1), currentCost: d(60), salePrice: null, marginPercent: d(40), minStock: null, wastePercent: d(5), printMinutes: d(30),
-    type: { isManufactured: false }, printer: null, recipe: [], costs: [{ costItem: { id: 'c', name: 'Taxa', mode: 'PERCENT', base: 'SALE', value: d(10), active: true } }],
+    type: { isManufactured: false }, printer: null, recipe: [], colorRecipe: [], costs: [{ costItem: { id: 'c', name: 'Taxa', mode: 'PERCENT', base: 'SALE', value: d(10), active: true } }],
   };
   const capture = (name, rows = []) => async args => { queries[name] = args; return rows; };
   const db = {
@@ -55,7 +55,7 @@ test('the stock view reads products through an explicit field list', async () =>
   }
   assert.equal(componentQuery.select.wastePercent, undefined);
   const [product] = view.products;
-  for (const key of ['wastePercent', 'printMinutes', 'printer', 'recipe', 'costs']) assert.equal(key in product, false, key);
+  for (const key of ['wastePercent', 'printMinutes', 'printer', 'recipe', 'colorRecipe', 'costs']) assert.equal(key in product, false, key);
   // 60 ÷ (1 − 40% − 10%) = 120
   assert.equal(product.suggestedPrice.toFixed(), '120');
 });

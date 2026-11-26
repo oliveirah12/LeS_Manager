@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost, belowMinimum, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, pricingBreakdown, recipeEstimate, saleMargin, salePricing } = require('../dist/api/stock/cost.js');
+const { averageCost, belowMinimum, colorAverage, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, pricingBreakdown, recipeEstimate, saleMargin, salePricing } = require('../dist/api/stock/cost.js');
 
 const { orderSale, saleResult } = require('../dist/api/production/sale.js');
 
@@ -328,4 +328,12 @@ test('the budget separates expenses from materials', () => {
     minutes: 60, hourCost: d('2'), expenses: [{ inputId: 'pla', value: d('3') }],
   });
   assert.deepEqual([budget.materialCost, budget.machineCost, budget.expenseCost, budget.totalCost].map(value => value.toString()), ['10', '2', '3', '15']);
+});
+
+test('a cor custa a média das marcas ponderada pelo saldo, ou a média simples sem saldo', () => {
+  const brand = (quantity, value) => ({ quantity: d(quantity), value: value === null ? null : d(value) });
+  assert.equal(colorAverage([brand('1000', '0.1'), brand('3000', '0.14'), brand('0', '9')]).toString(), '0.13');
+  assert.equal(colorAverage([brand('0', '0.1'), brand('0', '0.2'), brand('0', null)]).toString(), '0.15');
+  assert.equal(colorAverage([brand('500', null)]), null);
+  assert.equal(colorAverage([]), null);
 });

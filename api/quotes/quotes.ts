@@ -7,7 +7,8 @@ import { Authenticated, Require } from '../access/access';
 import { canAccess } from '../access/security';
 import { Audit, auditChange, auditContext } from '../audit/recorder';
 import { marginField, productInclude } from '../catalog/catalog';
-import { currentEnergyRate, pricingSelect } from '../catalog/pricing';
+import { ColorMember, colorLabel, colorLabelSelect, colorLine } from '../catalog/colors';
+import { currentEnergyRate, pricingSelect, recipeColors } from '../catalog/pricing';
 import { FileService } from '../files/files';
 import { imageType } from '../files/rules';
 import { InputUse, suggestedExpense } from '../production/expenses';
@@ -60,6 +61,7 @@ const quotedProduct = {
     id: true, sku: true, name: true, active: true, imageFileId: true, salePrice: true, marginPercent: true, wastePercent: true, printMinutes: true,
     type: { select: { isManufactured: true } }, unit: productInclude.unit, costs: pricingSelect.costs,
     recipe: { select: { inputId: true, quantity: true, input: { select: { sku: true, currentCost: true, lastPurchaseExpense: true, unit: { select: { familyId: true } } } } } },
+    colorRecipe: { select: { quantity: true, colorInput: { select: colorLabelSelect } } },
   },
 } as const;
 const quoteInclude = {
@@ -77,11 +79,22 @@ const quoteFee = (quote: LoadedQuote) => quote.feePercent ?? quote.paymentMethod
  * Live cost of a quote, as the order it would become: recipes with waste at the current average, the printer's hour for the
  * estimated time, the purchase expenses of the inputs and the manual ones. Each product then gets its linked costs and margin.
  */
-function quoteBudget(quote: LoadedQuote, energyRate: Prisma.Decimal) {
-  const rows = quote.items.flatMap(item => item.product.recipe.map(row => ({
-    productId: item.productId, inputId: row.inputId, familyId: row.input.unit.familyId, unitCost: row.input.currentCost, sku: row.input.sku, unitExpense: row.input.lastPurchaseExpense,
-    planned: row.quantity.times(item.quantity).times(item.product.wastePercent.div(100).plus(1)).toDecimalPlaces(12),
-  })));
+function quoteBudget(quote: LoadedQuote, { energyRate, colors }: QuotePricing) {
+  const planned = (item: LoadedQuote['items'][number], quantity: Prisma.Decimal) => quantity.times(item.quantity).times(item.product.wastePercent.div(100).plus(1)).toDecimalPlaces(12);
+  const rows = quote.items.flatMap(item => [
+    ...item.product.recipe.map(row => ({
+      productId: item.productId, inputId: row.inputId, familyId: row.input.unit.familyId, unitCost: row.input.currentCost, sku: row.input.sku, unitExpense: row.input.lastPurchaseExpense,
+      planned: planned(item, row.quantity),
+    })),
+    // A color is priced as one input at the average of its brands, since the order only picks the brand later.
+    ...item.product.colorRecipe.map(row => {
+      const { unitCost, unitExpense } = colorLine(colors.get(row.colorInput.id) ?? []);
+      return {
+        productId: item.productId, inputId: row.colorInput.id, familyId: row.colorInput.familyId, unitCost, sku: colorLabel(row.colorInput), unitExpense,
+        planned: planned(item, row.quantity),
+      };
+    }),
+  ]);
   const uses = new Map<string, InputUse>();
   for (const row of rows) uses.set(row.inputId, { unitExpense: row.unitExpense, quantity: (uses.get(row.inputId)?.quantity ?? new Prisma.Decimal(0)).plus(row.planned) });
   const budget = productionBudget({
@@ -106,9 +119,17 @@ function quoteBudget(quote: LoadedQuote, energyRate: Prisma.Decimal) {
 }
 
 /** Fields are listed one by one, so a cost never leaves the API by accident. Margin and budget need stock:view. */
-function presentQuote(quote: LoadedQuote, seeCosts: boolean, energyRate: Prisma.Decimal) {
+type QuotePricing = { energyRate: Prisma.Decimal; colors: Map<string, ColorMember[]> };
+/** The energy rate and the brands of every color the quotes use, loaded once for all of them. */
+async function quotePricing(db: Prisma.TransactionClient, quotes: LoadedQuote[]): Promise<QuotePricing> {
+  const [energyRate, colors] = await Promise.all([currentEnergyRate(db), recipeColors(db, quotes.flatMap(quote => quote.items.map(item => item.product)))]);
+  return { energyRate, colors };
+}
+
+/** Fields are listed one by one, so a cost never leaves the API by accident. Margin and budget need stock:view. */
+function presentQuote(quote: LoadedQuote, seeCosts: boolean, pricing: QuotePricing) {
   const sale = orderSale(quote.items.map(item => ({ quantity: item.quantity, salePrice: item.salePrice })), quote.discountPercent, quoteFee(quote));
-  const budget = seeCosts ? quoteBudget(quote, energyRate) : null;
+  const budget = seeCosts ? quoteBudget(quote, pricing) : null;
   return {
     id: quote.id, number: quote.number, status: quote.status, actions: quoteActions(quote.status),
     customerName: quote.customerName, customerContact: quote.customerContact, title: quote.title, description: quote.description,
@@ -177,8 +198,7 @@ export class QuoteService {
     const { page, sort } = filters;
     const term = filters.search ? orderSearch(filters.search) : null;
     const where = quoteWhere(filters, term && { text: filters.search!, number: term.number, productIds: await matchingProductIds(this.db, term.pattern) });
-    const [energyRate, quotes, total, printers, paymentMethods, products, company] = await Promise.all([
-      currentEnergyRate(this.db),
+    const [quotes, total, printers, paymentMethods, products, company] = await Promise.all([
       this.db.quote.findMany({ where, include: quoteInclude, orderBy: quoteOrder(sort), skip: (page - 1) * quotePageSize, take: quotePageSize }),
       this.db.quote.count({ where }),
       this.db.printer.findMany({ where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
@@ -190,8 +210,9 @@ export class QuoteService {
       }),
       this.db.companySettings.findUniqueOrThrow({ where: { id: 'default' }, select: { quoteValidityDays: true } }),
     ]);
+    const pricing = await quotePricing(this.db, quotes);
     return {
-      quotes: quotes.map(quote => presentQuote(quote, seeCosts, energyRate)),
+      quotes: quotes.map(quote => presentQuote(quote, seeCosts, pricing)),
       page, pageSize: quotePageSize, total, printers, paymentMethods, quoteValidityDays: company.quoteValidityDays,
       products: products.map(product => ({
         id: product.id, sku: product.sku, name: product.name, symbol: symbolOf(product), printMinutes: product.printMinutes, salePrice: product.salePrice,
@@ -241,7 +262,7 @@ export class QuoteService {
       const validUntil = new Date(data.validUntil ?? addDays(brazilToday(), quoteValidityDays));
       const quote = await tx.quote.create({ data: { ...values, validUntil, userId }, include: quoteInclude });
       auditChange(null, quoteValues(quote));
-      return presentQuote(quote, seeCosts, await currentEnergyRate(tx));
+      return presentQuote(quote, seeCosts, await quotePricing(tx, [quote]));
     });
   }
 
@@ -256,7 +277,7 @@ export class QuoteService {
         where: { id }, data: { ...values, ...(data.validUntil ? { validUntil: new Date(data.validUntil) } : {}) }, include: quoteInclude,
       });
       auditChange(quoteValues(before), quoteValues(quote));
-      return presentQuote(quote, seeCosts, await currentEnergyRate(tx));
+      return presentQuote(quote, seeCosts, await quotePricing(tx, [quote]));
     });
   }
 
@@ -268,7 +289,7 @@ export class QuoteService {
         where: { id }, data: action === 'send' ? { status: 'SENT', sentAt: now } : { status: 'REJECTED', decidedAt: now }, include: quoteInclude,
       });
       auditChange({ 'Situação': quoteStatusNames[before.status] }, { 'Situação': quoteStatusNames[quote.status] });
-      return presentQuote(quote, seeCosts, await currentEnergyRate(tx));
+      return presentQuote(quote, seeCosts, await quotePricing(tx, [quote]));
     });
   }
 
@@ -294,7 +315,7 @@ export class QuoteService {
       });
       // The order describes itself in the same event; the quote's own keys come last so they win.
       auditChange({ 'Situação': quoteStatusNames[before.status] }, { 'Situação': quoteStatusNames.APPROVED, 'Ordem de produção': order.number });
-      return presentQuote(quote, seeCosts, await currentEnergyRate(tx));
+      return presentQuote(quote, seeCosts, await quotePricing(tx, [quote]));
     });
   }
 

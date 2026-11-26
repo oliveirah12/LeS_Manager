@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { auditChange, auditContext } from '../audit/recorder';
 import { Database, idField, nonnegative, positive, serial, storedDecimal } from '../shared';
 import { pricingBreakdown, printerHourCost, recipeEstimate, sumValues } from '../stock/cost';
+import { ColorMember, colorLabel, colorLabelSelect, colorLine, colorMembersById } from './colors';
 
 export const marginField = nonnegative.refine(value => value.lt(100) && value.decimalPlaces() <= 2, 'Informe a margem abaixo de 100, com até 2 casas');
 export const printMinutesField = positive.refine(value => value.lt(1000000) && value.decimalPlaces() <= 2, 'Informe o tempo por peça abaixo de 1.000.000 minutos, com até 2 casas');
@@ -23,6 +24,7 @@ export const pricingSelect = {
   type: { select: { isManufactured: true } },
   printer: { select: { id: true, name: true, active: true, powerWatts: true, hourlyCost: true } },
   recipe: { select: { quantity: true, input: { select: { sku: true, active: true, quantity: true, currentCost: true } } } },
+  colorRecipe: { select: { quantity: true, colorInput: { select: colorLabelSelect } } },
   costs: { select: { costItem: { select: { id: true, name: true, mode: true, base: true, value: true, active: true } } }, orderBy: { costItem: { name: 'asc' } } },
 } as const satisfies Prisma.ProductSelect;
 export type PricedProduct = Prisma.ProductGetPayload<{ select: typeof pricingSelect }>;
@@ -32,15 +34,22 @@ export function machineCost(hourCost: Prisma.Decimal | null, printMinutes: Prism
   return hourCost && printMinutes ? hourCost.times(printMinutes).div(60).toDecimalPlaces(12) : null;
 }
 
+/** Brands of every color the given products' recipes use, for their estimates. */
+export const recipeColors = (db: Prisma.TransactionClient, products: { colorRecipe: { colorInput: Prisma.ColorInputGetPayload<{ select: typeof colorLabelSelect }> }[] }[]) =>
+  colorMembersById(db, products.flatMap(product => product.colorRecipe.map(row => row.colorInput)));
+
 /**
- * Price formation of a product. A manufactured product with a recipe costs its inputs with waste plus the machine time.
- * Any other product costs its moving average. Inactive costs stay linked but stop pricing the product.
+ * Price formation of a product. A manufactured product with a recipe costs its inputs with waste plus the machine time,
+ * each color at the average of its brands. Any other product costs its moving average. Inactive costs stay linked but stop pricing the product.
  */
-export function productPricing(product: PricedProduct, energyRate: Prisma.Decimal) {
-  const fromRecipe = product.type.isManufactured && product.recipe.length > 0;
-  const material = fromRecipe ? recipeEstimate(product.wastePercent, product.recipe.map(row => ({
-    sku: row.input.sku, quantity: row.quantity, active: row.input.active, balance: row.input.quantity, reserved: new Prisma.Decimal(0), unitCost: row.input.currentCost,
-  }))) : null;
+export function productPricing(product: PricedProduct, energyRate: Prisma.Decimal, colors = new Map<string, ColorMember[]>()) {
+  const fromRecipe = product.type.isManufactured && product.recipe.length + product.colorRecipe.length > 0;
+  const material = fromRecipe ? recipeEstimate(product.wastePercent, [
+    ...product.recipe.map(row => ({
+      sku: row.input.sku, quantity: row.quantity, active: row.input.active, balance: row.input.quantity, reserved: new Prisma.Decimal(0), unitCost: row.input.currentCost,
+    })),
+    ...product.colorRecipe.map(row => ({ sku: colorLabel(row.colorInput), quantity: row.quantity, ...colorLine(colors.get(row.colorInput.id) ?? []) })),
+  ]) : null;
   const hourCost = product.printer ? printerHourCost(product.printer.powerWatts, energyRate, product.printer.hourlyCost) : null;
   const machine = fromRecipe ? machineCost(hourCost, product.printMinutes) : null;
   const costs = product.costs.map(row => row.costItem);
@@ -84,7 +93,7 @@ export class PricingService {
     if (!product) throw new NotFoundException('Produto não encontrado.');
     return {
       id: product.id, sku: product.sku, name: product.name, minStock: product.minStock,
-      symbol: product.unit.family.units[0]?.symbol ?? product.unit.symbol, ...productPricing(product, energyRate), options,
+      symbol: product.unit.family.units[0]?.symbol ?? product.unit.symbol, ...productPricing(product, energyRate, await recipeColors(this.db, [product])), options,
     };
   }
 

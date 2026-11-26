@@ -8,9 +8,9 @@ import { canAccess } from '../access/security';
 import { Audit, auditChange } from '../audit/recorder';
 import { FileService } from '../files/files';
 import { Database, idField, nameField, parse, positive, serial, skuField, storedDecimal } from '../shared';
-import { colorLabel, colorLabelSelect } from './colors';
+import { colorLabel, colorLabelSelect, colorLine } from './colors';
 import { belowMinimum, kitCosting, recipeEstimate, saleMargin, stockValue, sumValues } from '../stock/cost';
-import { currentEnergyRate, pricingSelect, productPricing } from './pricing';
+import { currentEnergyRate, pricingSelect, productPricing, recipeColors } from './pricing';
 
 export { marginField } from './pricing';
 
@@ -333,7 +333,8 @@ export class CatalogService {
     if (!product) throw new NotFoundException('Produto não encontrado.');
     const symbol = (row: { unit: { symbol: string; family: { units: { symbol: string }[] } } }) => row.unit.family.units[0]?.symbol ?? row.unit.symbol;
     const [reserved, energyRate] = seeStock ? await Promise.all([this.reservedById(), currentEnergyRate(this.db)]) : [null, null];
-    const pricing = energyRate && productPricing(product, energyRate);
+    const colors = await recipeColors(this.db, [product]);
+    const pricing = energyRate && productPricing(product, energyRate, colors);
     const [lastMovement, purchases, lastItem, consumption] = await Promise.all([
       seeStock ? this.db.movement.findFirst({ where: { productId: id }, orderBy: { createdAt: 'desc' }, select: { kind: true, quantity: true, createdAt: true } }) : null,
       seeStock ? this.db.movement.findMany({
@@ -381,10 +382,13 @@ export class CatalogService {
         salePrice: product.salePrice, margin: saleMargin(product.salePrice, product.currentCost), marginPercent: product.marginPercent,
         suggestedPrice: pricing!.suggestedPrice, belowTargetMargin: pricing!.belowTargetMargin, priceCost: pricing!.totalCost,
         linkedCosts: pricing!.costs.map(cost => ({ name: cost.name, active: cost.active })),
-        estimate: product.type.isManufactured && product.recipe.length ? recipeEstimate(product.wastePercent, product.recipe.map(row => ({
-          sku: row.input.sku, quantity: row.quantity, active: row.input.active, balance: row.input.quantity,
-          reserved: reserved!(row.inputId), unitCost: row.input.currentCost,
-        }))) : null,
+        estimate: product.type.isManufactured && product.recipe.length + product.colorRecipe.length ? recipeEstimate(product.wastePercent, [
+          ...product.recipe.map(row => ({
+            sku: row.input.sku, quantity: row.quantity, active: row.input.active, balance: row.input.quantity,
+            reserved: reserved!(row.inputId), unitCost: row.input.currentCost,
+          })),
+          ...product.colorRecipe.map(row => ({ sku: colorLabel(row.colorInput), quantity: row.quantity, ...colorLine(colors.get(row.colorInput.id) ?? [], reserved!) })),
+        ]) : null,
       } : null,
     };
   }
@@ -417,12 +421,13 @@ export class CatalogService {
       this.db.productionConsumption.groupBy({ by: ['inputId'], where: { item: { order: { status: 'PRINTING' } } }, _sum: { planned: true } }),
       currentEnergyRate(this.db),
     ]);
+    const colors = await recipeColors(this.db, products);
     const reserved = (id: string) => reservations.find(row => row.inputId === id)?._sum.planned ?? new Prisma.Decimal(0);
     // Values are computed here with exact decimals, so the panel only formats them.
     const valued = products.map(row => {
       // The pricing columns only feed the suggestion, so they stay out of the response.
-      const { wastePercent: _waste, printMinutes: _minutes, printer: _printer, recipe: _recipe, costs: _costs, ...product } = row;
-      const { suggestedPrice, belowTargetMargin } = productPricing(row, energyRate);
+      const { wastePercent: _waste, printMinutes: _minutes, printer: _printer, recipe: _recipe, colorRecipe: _colorRecipe, costs: _costs, ...product } = row;
+      const { suggestedPrice, belowTargetMargin } = productPricing(row, energyRate, colors);
       return {
         ...product, reserved: reserved(product.id), value: stockValue(product.quantity, product.currentCost),
         available: Prisma.Decimal.max(0, product.quantity.minus(reserved(product.id))),

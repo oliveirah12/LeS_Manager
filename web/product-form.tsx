@@ -78,7 +78,7 @@ export function ProductForm({ data, product, editStock, save, changed }: {
   const chosen = data.units.find(unit => unit.id === unitId);
   const symbol = data.units.find(unit => unit.familyId === chosen?.familyId && unit.isBase)?.symbol ?? chosen?.symbol ?? 'un';
   const saved = pricingView.data && 'id' in pricingView.data ? pricingView.data : undefined;
-  const estimate = manufactured && recipeView.data && recipe?.draft.rows.length ? recipeCost(recipeView.data, recipe.draft, data.units) : null;
+  const estimate = manufactured && recipeView.data && recipe && recipe.draft.rows.length + recipe.draft.colorRows.length ? recipeCost(recipeView.data, recipe.draft, data.units) : null;
   // Display only, like the price panel of a saved product: the API never stores this estimate.
   const base: PricingBase = estimate && recipe && recipeView.data ? {
     symbol, source: 'RECIPE', materialCost: estimate.material.toFixed(6), partialCost: estimate.partial, machineCost: estimate.machine?.toFixed(6) ?? null,

@@ -1611,8 +1611,8 @@ test('API REST com PostgreSQL', {
       expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name, typeId, ...extra } }), 200);
       return product;
     };
-    await typed('COR-PLA-A', filamentType, { colorId: black.id, groupId: pla.id, brandId: brandA.id });
-    await typed('COR-PLA-B', filamentType, { colorId: black.id, groupId: pla.id, brandId: brandB.id });
+    const brandAProduct = await typed('COR-PLA-A', filamentType, { colorId: black.id, groupId: pla.id, brandId: brandA.id });
+    const brandBProduct = await typed('COR-PLA-B', filamentType, { colorId: black.id, groupId: pla.id, brandId: brandB.id });
     const piece = await typed('COR-PECA', printedType);
     const options = expectStatus(await admin('/catalog/products/' + piece.id + '/recipe'), 200);
     const offered = options.colors.find(row => row.colorId === black.id && row.groupId === pla.id);
@@ -1633,6 +1633,13 @@ test('API REST com PostgreSQL', {
     const listed = expectStatus(await admin('/catalog'), 200).products.find(row => row.id === piece.id);
     assert.deepEqual([listed.hasRecipe, listed.deleteBlock], [true, 'O produto tem ficha técnica.']);
     expectStatus(await admin('/catalog/product-types/' + filamentType, { method: 'PATCH', body: { name: typeName, isInput: false, isManufactured: false } }), 409);
+    // The estimate weighs each brand by its balance: 1000 g at 0.10 and 3000 g at 0.14 average 0.13, so 25 g cost 3.25.
+    expectStatus(await movement(brandAProduct.id, unit.id, 'PURCHASE', '1000', '0.1'), 201);
+    expectStatus(await movement(brandBProduct.id, unit.id, 'PURCHASE', '3000', '0.14'), 201);
+    const pricing = expectStatus(await admin('/stock/products/' + piece.id + '/pricing'), 200);
+    assert.deepEqual([pricing.source, pricing.materialCost, pricing.partialCost], ['RECIPE', '3.25', false]);
+    const details = expectStatus(await admin('/catalog/products/' + piece.id + '/details'), 200);
+    assert.deepEqual([details.stock.estimate.unitCost, details.stock.estimate.producible], ['3.25', '160']);
   });
 
   await t.test('orçamentos: acessos, custo oculto, aprovação gera a ordem e exclusão só do recusado', async () => {

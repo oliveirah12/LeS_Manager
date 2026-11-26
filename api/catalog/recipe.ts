@@ -78,7 +78,8 @@ export class RecipeService {
     // A color already in the recipe stays choosable even when no active brand fills it today.
     const saved = product.colorRecipe.map(({ quantity, colorInput: { id: _id, type, group, color, ...key } }) => ({ ...key, quantity, label: colorLabel({ type, group, color }) }));
     const colors = [...offered, ...saved.filter(row => !offered.some(option => colorKey(option) === colorKey(row)))
-      .map(({ quantity: _quantity, ...row }) => ({ ...row, brands: 0 }))];
+      .map(({ quantity: _quantity, ...row }) => ({ ...row, brands: 0, averageCost: null }))]
+      .map(({ averageCost, ...option }) => canSeeCost ? { ...option, averageCost } : option);
     return {
       wastePercent: product.wastePercent, inputs: product.recipe, canSeeCost, printMinutes: product.printMinutes, printerId: product.printerId,
       colorInputs: saved, colors,

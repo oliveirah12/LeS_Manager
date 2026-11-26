@@ -184,6 +184,19 @@ export function productionBudget({ items, rows, minutes, hourCost, expenses = []
 }
 
 /**
+ * Estimated value of a color from its brands: the average weighted by balance, so the brand with more stock weighs more.
+ * Without balance it is the plain average of the known values, and without any value it is unknown.
+ */
+export function colorAverage(members: { quantity: Prisma.Decimal; value: Prisma.Decimal | null }[]) {
+  const known = members.filter((member): member is { quantity: Prisma.Decimal; value: Prisma.Decimal } => member.value !== null);
+  const stocked = known.filter(member => member.quantity.gt(0));
+  if (stocked.length) {
+    return sumValues(stocked.map(member => member.quantity.times(member.value))).div(sumValues(stocked.map(member => member.quantity))).toDecimalPlaces(12);
+  }
+  return known.length ? sumValues(known.map(member => member.value)).div(known.length).toDecimalPlaces(12) : null;
+}
+
+/**
  * What one piece of a recipe costs in inputs, waste included, and how many pieces the free balance yields.
  * Reserved balance and inactive inputs cannot be used by a new order.
  */

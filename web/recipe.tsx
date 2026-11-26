@@ -7,7 +7,7 @@ import {
 type Candidate = Pick<Product, 'id' | 'sku' | 'name' | 'active' | 'unit'> & { currentCost?: string | null; typeId: string; groupId: string | null; colorId: string | null };
 type ColorKey = { typeId: string; groupId: string | null; colorId: string };
 /** A color offered by today's active inputs. Brands counts how many of them can fill it. */
-type ColorOption = ColorKey & { familyId: string; label: string; brands: number };
+type ColorOption = ColorKey & { familyId: string; label: string; brands: number; averageCost?: string | null };
 export type RecipeView = {
   wastePercent: string; inputs: { inputId: string; quantity: string }[]; candidates: Candidate[]; canSeeCost: boolean;
   colorInputs: (ColorKey & { familyId: string; label: string; quantity: string })[]; colors: ColorOption[];
@@ -55,9 +55,19 @@ export function recipeCost(view: RecipeView, draft: RecipeDraft, units: Unit[]) 
     const consumed = amount * Number(unit.factor) * factor;
     return { consumed, symbol: baseUnit(input).symbol, cost: input.currentCost == null ? null : consumed * Number(input.currentCost) };
   });
+  // A color is estimated at the average of its brands. The order later uses the cost of the brand it takes.
+  const colorLines = draft.colorRows.map(row => {
+    const option = view.colors.find(item => colorKey(item) === row.color);
+    const unit = units.find(item => item.id === row.unitId);
+    const amount = number(row.quantity);
+    if (!option || !unit || !(amount > 0)) return null;
+    const consumed = amount * Number(unit.factor) * factor;
+    return { consumed, cost: option.averageCost == null ? null : consumed * Number(option.averageCost) };
+  });
+  const all = [...lines, ...colorLines];
   const hourCost = view.printers.find(printer => printer.id === draft.printerId)?.hourCost;
   return {
-    lines, material: lines.reduce((sum, line) => sum + (line?.cost ?? 0), 0), partial: lines.some(line => line?.cost === null),
+    lines, colorLines, material: all.reduce((sum, line) => sum + (line?.cost ?? 0), 0), partial: all.some(line => line?.cost === null),
     machine: hourCost && number(draft.minutes) > 0 ? Number(hourCost) * number(draft.minutes) / 60 : null,
   };
 }
@@ -132,9 +142,7 @@ export function RecipeFields({ view, draft, change, units, symbol, name }: {
     {colorRows.map((row, index) => {
       const option = view.colors.find(item => colorKey(item) === row.color);
       const options = view.colors.filter(item => colorKey(item) === row.color || !colorRows.some(other => other.color === colorKey(item)));
-      const unit = units.find(item => item.id === row.unitId);
-      const amount = number(row.quantity);
-      const consumed = unit && amount > 0 ? amount * Number(unit.factor) * (1 + (number(draft.waste) || 0) / 100) : null;
+      const line = cost.colorLines[index];
       return <div className="stack" style={{ gap: 4 }} key={'color' + row.key}>
         <div className="component-row">
           <Select name={'recipeColor' + row.key} label={'Por cor ' + (index + 1)} defaultValue={row.color}
@@ -147,7 +155,8 @@ export function RecipeFields({ view, draft, change, units, symbol, name }: {
           <button type="button" className="icon-button" aria-label={'Remover cor ' + (index + 1)}
             onClick={() => setColorRows(items => items.filter(item => item.key !== row.key))}><Trash2 size={18} aria-hidden="true" /></button>
         </div>
-        {option && <span className="hint">{consumed !== null && <>Consome <strong className="num">{quantity(String(consumed))} {baseOf(units, option.familyId)?.symbol}</strong> · </>}
+        {option && <span className="hint">{line && <>Consome <strong className="num">{quantity(String(line.consumed))} {baseOf(units, option.familyId)?.symbol}</strong> · </>}
+          {line && view.canSeeCost && <>{line.cost === null ? 'sem custo registrado' : <>média das marcas <strong className="num">{brl(line.cost)}</strong></>} · </>}
           {option.brands ? 'a ordem escolhe a marca' : 'nenhuma marca ativa desta cor no momento'}</span>}
       </div>;
     })}
@@ -171,7 +180,7 @@ export function RecipeFields({ view, draft, change, units, symbol, name }: {
         options={view.printers.map(printer => ({ id: printer.id, name: printer.name + (printer.active ? '' : ' (inativa)') }))}
         onChange={printerId => change(current => ({ ...current, printerId }))} />
     </div>
-    {view.canSeeCost && (cost.lines.some(Boolean) || cost.machine !== null) && <div className="info">
+    {view.canSeeCost && ([...cost.lines, ...cost.colorLines].some(Boolean) || cost.machine !== null) && <div className="info">
       Custo de insumos por {symbol}: <strong className="num">{brl(cost.material)}</strong>
       {cost.partial && ' (parcial, há insumo sem custo registrado)'}
       {cost.machine !== null && <> · máquina e energia: <strong className="num">{brl(cost.machine)}</strong> · total: <strong className="num">{brl(cost.material + cost.machine)}</strong></>}
