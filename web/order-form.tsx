@@ -1,21 +1,18 @@
 import { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
 import { saleEstimate, suggestedMinutes } from './format';
+import { blankLine, ExpenseLines, LineRow, ProductLines, SaleFields } from './order-sections';
 import type { Order, OrdersView } from './orders';
 import { localValue } from './slots';
 import { StartPicker } from './start-picker';
 import { api, brl, dateTime, Field, Form, quantity, Select, useClosePanel } from './ui';
 
-type Row = { key: number; productId: string; quantity: string; salePrice: string; marginPercent: string };
-const blankRow = (key: number): Row => ({ key, productId: '', quantity: '', salePrice: '', marginPercent: '' });
-
-const orderRows = (order: Order): Row[] => order.items.map((item, key) => ({
+const orderRows = (order: Order): LineRow[] => order.items.map((item, key) => ({
   key, productId: item.productId, quantity: item.planned, salePrice: item.salePrice ?? '', marginPercent: item.marginPercent ?? '',
 }));
 
 /** Creates an order or, when one is given, edits it while it is still planned. */
 export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; order?: Order; seeCosts: boolean; done: (text: string) => Promise<void> }) {
-  const [rows, setRows] = useState<Row[]>(() => order ? orderRows(order) : [blankRow(0)]);
+  const [rows, setRows] = useState<LineRow[]>(() => order ? orderRows(order) : [blankLine(0)]);
   const [plannedStart, setPlannedStart] = useState(() => order ? localValue(new Date(order.plannedStart)) : '');
   const [printerId, setPrinterId] = useState(order?.printer.id ?? '');
   const [agenda, setAgenda] = useState(0);
@@ -50,12 +47,6 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
   const timeSuggestion = !hours.trim() && !minutes.trim()
     ? suggestedMinutes(rows.filter(row => row.productId).map(row => ({ quantity: row.quantity, printMinutes: view.products.find(item => item.id === row.productId)?.printMinutes })))
     : null;
-  const change = (key: number, values: Partial<Row>) => setRows(items => items.map(item => item.key === key ? { ...item, ...values } : item));
-  /** Choosing a product brings its registered price and margin, which stay editable for this order only. */
-  function choose(key: number, productId: string) {
-    const product = products.find(item => item.id === productId);
-    change(key, { productId, salePrice: product?.salePrice ?? '', marginPercent: product?.marginPercent ?? '' });
-  }
   if (!order && (!view.printers.length || !view.products.length)) return <div className="info">
     {!view.printers.length ? 'Cadastre uma impressora ativa em Produção → Impressoras.' : 'Monte a ficha técnica de um produto fabricado em Cadastros → Produtos.'}
   </div>;
@@ -103,33 +94,7 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
       ignoreOrderId={order?.id} keepValue={sameSchedule} />
     <p className="hint" role="status">{expectedEnd ? <>Término previsto: <strong>{dateTime(expectedEnd)}</strong></> : 'Informe o início e o tempo para calcular o término.'}</p>
     <h3>Produtos da impressão</h3>
-    {rows.map((row, index) => {
-      const product = products.find(item => item.id === row.productId);
-      const options = products.filter(item => item.id === row.productId || !rows.some(other => other.productId === item.id));
-      const estimate = order?.budget?.items.find(item => item.productId === row.productId);
-      return <div className="stack" style={{ gap: 8 }} key={row.key}>
-        <div className="component-row" style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr) auto' }}>
-          <Select name={'product' + row.key} label={'Produto ' + (index + 1)} options={options.map(item => ({ id: item.id, name: item.sku + ' · ' + item.name }))} defaultValue={row.productId}
-            onChange={value => choose(row.key, value)} />
-          <label>{'Quantidade' + (product ? ' (' + product.symbol + ')' : '')}
-            <input name={'quantity' + row.key} inputMode="decimal" required value={row.quantity} onChange={event => change(row.key, { quantity: event.target.value })} /></label>
-          <button type="button" className="icon-button" aria-label={'Remover produto ' + (index + 1)} disabled={rows.length === 1}
-            onClick={() => setRows(items => items.filter(item => item.key !== row.key))}><Trash2 size={18} aria-hidden="true" /></button>
-        </div>
-        <div className="form-grid">
-          <label>Preço por unidade<input aria-label={'Preço do produto ' + (index + 1)} inputMode="decimal" value={row.salePrice} placeholder={seeCosts ? 'Sem preço' : 'Preço do cadastro'}
-            onChange={event => change(row.key, { salePrice: event.target.value })} />
-            {estimate?.suggestedPrice && estimate.suggestedPrice !== row.salePrice && <button type="button" className="btn ghost small" style={{ alignSelf: 'flex-start' }}
-              onClick={() => change(row.key, { salePrice: estimate.suggestedPrice! })}>Usar sugerido: {brl(estimate.suggestedPrice)}</button>}
-            {estimate?.belowTargetMargin && <span className="hint">O preço está abaixo da margem desejada.</span>}</label>
-          {seeCosts && <label>Margem desejada (%)<input aria-label={'Margem do produto ' + (index + 1)} inputMode="decimal" value={row.marginPercent}
-            onChange={event => change(row.key, { marginPercent: event.target.value })} /><span className="hint">Vale só para esta ordem.</span></label>}
-        </div>
-      </div>;
-    })}
-    <button type="button" className="btn secondary" style={{ alignSelf: 'flex-start' }} disabled={rows.length >= products.length}
-      onClick={() => setRows(items => [...items, blankRow(Math.max(...items.map(item => item.key)) + 1)])}>
-      <Plus size={16} aria-hidden="true" />Adicionar produto</button>
+    <ProductLines rows={rows} setRows={setRows} products={products} estimates={order?.budget?.items} seeCosts={seeCosts} scope="esta ordem" />
     {orderInputs.length > 0 && <>
       <h3>Insumos</h3>
       <p className="hint">Troque por outro insumo da mesma família ou ajuste o total. Produtos novos usam a ficha técnica ao salvar.</p>
@@ -156,25 +121,9 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
           onClick={() => setTypedExpenses(items => ({ ...items, [row.inputId!]: null }))}>Usar sugestão: {brl(row.suggested)}</button>}
       </label>;
     })}
-    {expenses.map((row, index) => <div className="component-row" style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr) auto' }} key={row.key}>
-      <label>Título<input aria-label={'Título da despesa ' + (index + 1)} required maxLength={120} value={row.title}
-        onChange={event => setExpenses(items => items.map(item => item.key === row.key ? { ...item, title: event.target.value } : item))} /></label>
-      <label>Valor<input aria-label={'Valor da despesa ' + (index + 1)} required inputMode="decimal" value={row.value}
-        onChange={event => setExpenses(items => items.map(item => item.key === row.key ? { ...item, value: event.target.value } : item))} /></label>
-      <button type="button" className="icon-button" aria-label={'Remover despesa ' + (index + 1)}
-        onClick={() => setExpenses(items => items.filter(item => item.key !== row.key))}><Trash2 size={18} aria-hidden="true" /></button>
-    </div>)}
-    <button type="button" className="btn secondary" style={{ alignSelf: 'flex-start' }}
-      onClick={() => setExpenses(items => [...items, { key: Math.max(-1, ...items.map(item => item.key)) + 1, title: '', value: '' }])}>
-      <Plus size={16} aria-hidden="true" />Adicionar despesa</button>
+    <ExpenseLines expenses={expenses} setExpenses={setExpenses} />
     <h3>Venda</h3>
-    <div className="form-grid">
-      <label>Desconto sobre o total (%)<input name="discountPercent" inputMode="decimal" placeholder="0" value={discount} onChange={event => setDiscount(event.target.value)} /></label>
-      <Select name="paymentMethodId" label="Forma de pagamento" required={false} options={payments} defaultValue={order?.sale.paymentMethodId ?? undefined} onChange={setPaymentId} />
-      <label>Taxa (%)<input name="feePercent" inputMode="decimal" value={fee} placeholder={payment?.feePercent ?? '0'} onChange={event => setFee(event.target.value)} />
-        <span className="hint">Vazio: usa a taxa da forma de pagamento.</span></label>
-    </div>
-    {sale && <p className="hint" role="status">Bruto {brl(sale.gross)} · Desconto {brl(sale.discount)} · Total {brl(sale.total)} · Taxa {brl(sale.fee)} · <strong>Líquido {brl(sale.net)}</strong></p>}
+    <SaleFields discount={discount} setDiscount={setDiscount} payments={payments} paymentId={paymentId} setPaymentId={setPaymentId} fee={fee} setFee={setFee} sale={sale} />
     <Field name="notes" label="Observação" required={false} placeholder="Pedido, cliente ou lote" defaultValue={order?.notes ?? undefined} />
   </Form>;
 }
