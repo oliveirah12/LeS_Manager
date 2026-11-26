@@ -18,7 +18,7 @@ export function ProductThumb({ product }: { product: { id: string; name: string;
 }
 
 /** Shows a chosen file before it is sent, and frees the memory when the choice changes. */
-function usePreview(file: File | null) {
+export function usePreview(file: File | null) {
   const [url, setUrl] = useState<string>();
   useEffect(() => {
     if (!file) { setUrl(undefined); return; }
