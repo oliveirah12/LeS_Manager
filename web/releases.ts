@@ -6,6 +6,21 @@ export type Release = { version: string; date: string; title: string; changes: s
  */
 export const releases: Release[] = [
   {
+    version: '0.9.0',
+    date: '2026-11-26',
+    title: 'Orçamentos',
+    changes: [
+      'Novo menu Orçamentos, com busca por cliente, título, produto ou número e filtros por situação e período.',
+      'O orçamento reúne cliente, título, descrição, detalhes livres (como tamanho e cores), produtos, tempo, placas, prazo de entrega, validade, despesas, desconto e forma de pagamento.',
+      'A validade vem sugerida pelo cadastro da empresa, e o preço de cada produto parte do cadastro e pode ser ajustado.',
+      'O PDF para o cliente traz o logo e o rodapé da empresa, a imagem do produto, a tabela do pedido e o valor total em destaque. Ele nunca mostra custos, insumos, margem nem a observação interna.',
+      'Situações: Rascunho, Enviado, Aprovado e Recusado. Rascunho e Enviado podem ser editados, e só o Recusado pode ser excluído.',
+      'Aprovar pede o dia e o horário na agenda da impressora e cria a ordem de produção planejada com os mesmos itens, preços, desconto e despesas. Para aprovar é preciso também operar a Produção.',
+      'Quem vê o Estoque enxerga o custo estimado, o preço sugerido e a margem real de cada orçamento.',
+      'Nova permissão Orçamentos nos perfis de acesso. Impressoras, formas de pagamento e produtos usados em orçamentos não podem ser excluídos.',
+    ],
+  },
+  {
     version: '0.8.0',
     date: '2026-11-25',
     title: 'Cadastro da empresa',
