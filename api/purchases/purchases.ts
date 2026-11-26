@@ -19,6 +19,7 @@ const informative = {
   documentNumber: optionalText(60), purchaseDate: purchaseDateField, notes: optionalText(500),
 };
 const costRow = z.object({
+  costItemId: z.preprocess(blankToNull, idField.nullable()).default(null),
   title: nameField, mode: z.enum(['VALUE', 'PERCENT']), value: positive, split: z.enum(['VALUE', 'QUANTITY']),
 }).refine(cost => cost.mode === 'VALUE' || cost.value.lte(100), 'O percentual precisa ficar entre 0 e 100');
 export const purchaseFields = z.object({
@@ -61,14 +62,15 @@ export class PurchaseService {
 
   /** What the purchase form needs. It carries no costs, so operating purchases does not reveal the stock values. */
   async options() {
-    const [suppliers, products, units] = await Promise.all([
+    const [suppliers, products, units, costs] = await Promise.all([
       this.db.supplier.findMany({ where: { active: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
       this.db.product.findMany({
         where: { active: true }, select: { id: true, sku: true, name: true, ...productInclude, type: { select: { isManufactured: true } } }, orderBy: { sku: 'asc' },
       }),
       this.db.unit.findMany({ orderBy: { symbol: 'asc' } }),
+      this.db.costItem.findMany({ where: { active: true }, select: { id: true, name: true, mode: true, value: true }, orderBy: { name: 'asc' } }),
     ]);
-    return { suppliers, products, units };
+    return { suppliers, products, units, costs };
   }
 
   async details(id: string) {
@@ -93,6 +95,15 @@ export class PurchaseService {
     return null;
   }
 
+  /** A registered cost only fills the form. The purchase keeps the typed copy, so only the reference is checked. */
+  private async assertCostItems(tx: Prisma.TransactionClient, ids: string[]) {
+    if (!ids.length) return;
+    const costs = await tx.costItem.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, active: true } });
+    if (ids.some(id => !costs.some(cost => cost.id === id))) throw new NotFoundException('Custo cadastrado não encontrado.');
+    const inactive = costs.find(cost => !cost.active);
+    if (inactive) throw new ConflictException('O custo ' + inactive.name + ' está inativo.');
+  }
+
   private async assertSupplier(tx: Prisma.TransactionClient, supplierId: string | null, current?: string | null) {
     if (!supplierId || supplierId === current) return null;
     const supplier = await tx.supplier.findUnique({ where: { id: supplierId } });
@@ -105,6 +116,7 @@ export class PurchaseService {
     auditContext({ Documento: data.documentNumber, 'Data da compra': data.purchaseDate, Itens: data.items.length });
     return serial(this.db, async tx => {
       const supplier = await this.assertSupplier(tx, data.supplierId);
+      await this.assertCostItems(tx, data.costs.flatMap(cost => cost.costItemId ? [cost.costItemId] : []));
       const [products, units] = await Promise.all([
         tx.product.findMany({
           where: { id: { in: data.items.map(item => item.productId) } },

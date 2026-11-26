@@ -762,6 +762,24 @@ test('API REST com PostgreSQL', {
     expectStatus(await reader('/costs/' + cost.id, { method: 'DELETE' }), 403);
     expectStatus(await operator('/costs/' + cost.id, { method: 'DELETE' }), 200);
     expectStatus(await operator('/costs/' + cost.id, { method: 'DELETE' }), 404);
+
+    // The purchase copies the typed values, so later edits to the registered cost never reach it.
+    const freight = expectStatus(await operator('/costs', { method: 'POST', body: { name: sku('FRETE'), mode: 'PERCENT', value: '10' } }), 201);
+    const hidden = expectStatus(await operator('/costs', { method: 'POST', body: { name: sku('FRETE-INATIVO'), mode: 'VALUE', value: '3', active: false } }), 201);
+    const options = expectStatus(await admin('/purchases/options'), 200);
+    assert.deepEqual(options.costs.filter(row => [freight.id, hidden.id].includes(row.id)).map(row => row.id), [freight.id]);
+    const product = await createProduct('CUSTO-COMPRA', unit.id);
+    const items = [{ productId: product.id, unitId: unit.id, quantity: '10', totalCost: '200' }];
+    expectStatus(await post('/purchases', { purchaseDate: '2026-01-01', items, costs: [{ costItemId: hidden.id, title: 'Frete', mode: 'VALUE', value: '3', split: 'VALUE' }] }), 409);
+    const purchase = expectStatus(await post('/purchases', {
+      purchaseDate: '2026-01-01', items, costs: [{ costItemId: freight.id, title: 'Frete expresso', mode: 'PERCENT', value: '5', split: 'VALUE' }],
+    }), 201);
+    expectStatus(await operator('/costs/' + freight.id, { method: 'PATCH', body: { name: freight.name, mode: 'VALUE', value: '99', active: true } }), 200);
+    const [stored] = expectStatus(await admin('/purchases/' + purchase.id), 200).costs;
+    assert.deepEqual([stored.costItemId, stored.title, stored.mode, stored.value, stored.amount], [freight.id, 'Frete expresso', 'PERCENT', '5', '10']);
+    const used = expectStatus(await reader('/costs'), 200).find(row => row.id === freight.id);
+    assert.deepEqual([used.purchases, typeof used.deleteBlock], [1, 'string']);
+    expectStatus(await operator('/costs/' + freight.id, { method: 'DELETE' }), 409);
   });
 
   await t.test('despesas entram uma única vez no custo e na média do fabricado', async () => {
