@@ -3,7 +3,7 @@ import { ReactNode, useEffect, useRef, useState } from 'react';
 import { ReleaseNotices } from './release-notices';
 import { createRoot } from 'react-dom/client';
 import {
-  ChevronDown, Home as HomeIcon, Layers, LogOut, Menu, Moon, MoreHorizontal, Package, PanelLeftClose, PanelLeftOpen, Printer,
+  ChevronDown, ClipboardList, Home as HomeIcon, Layers, LogOut, Menu, Moon, MoreHorizontal, Package, PanelLeftClose, PanelLeftOpen, Printer,
   ShieldCheck, ShoppingCart, Sun, Tag, UserRound, Users, Wallet,
 } from 'lucide-react';
 import { AccountSettings, Administration, SignIn } from './access';
@@ -20,6 +20,7 @@ import { Printers } from './production';
 import { PurchaseDocuments } from './purchase-documents';
 import { Purchases } from './purchases';
 import { InstallApp } from './pwa';
+import { Quotes } from './quotes';
 import { referenceKinds, RegistrationPage, Registrations } from './registrations';
 import { Stock } from './stock';
 import { Suppliers } from './suppliers';
@@ -36,6 +37,7 @@ const groups = [
   { id: 'finance', label: 'Financeiro', icon: Wallet, section: 'ops', permission: 'finance:view', pages: [
     { id: 'balance', label: 'Saldo' }, { id: 'statement', label: 'Extrato' }, { id: 'reconciliation', label: 'Conciliação' }, { id: 'integration', label: 'Integração' },
   ] },
+  { id: 'quotes', label: 'Orçamentos', icon: ClipboardList, section: 'ops', permission: 'quotes:view', pages: [{ id: 'quotes', label: 'Orçamentos' }] },
   { id: 'production', label: 'Produção', icon: Printer, section: 'ops', permission: 'production:view', pages: [
     { id: 'production-orders', label: 'Ordens' }, { id: 'printers', label: 'Impressoras' },
   ] },
@@ -91,6 +93,7 @@ const pageDescriptions: Record<Page, string> = {
   balance: 'Saldo da conta bancária na última sincronização.', statement: 'Transações bancárias por período.',
   reconciliation: 'Confira os lançamentos do banco com as referências internas.',
   integration: 'Credenciais e certificado usados para ler o saldo e o extrato.',
+  quotes: 'Propostas para clientes, com PDF e aprovação que gera a ordem de produção.',
   'production-orders': 'Planeje, acompanhe e conclua as impressões.',
   printers: 'Impressoras e tarifa de energia usadas no custo da produção.',
   audit: 'Inclusões, alterações, acessos e tentativas negadas dos últimos 12 meses.',
@@ -102,7 +105,7 @@ const paths = {
   home: '', products: 'catalogo/produtos', inputs: 'catalogo/insumos', kits: 'catalogo/kits',
   stock: 'estoque', purchases: 'compras', 'purchase-documents': 'compras/documentos',
   balance: 'financeiro/saldo', statement: 'financeiro/extrato', reconciliation: 'financeiro/conciliacao', integration: 'financeiro/integracao',
-  'production-orders': 'producao/ordens', printers: 'producao/impressoras',
+  quotes: 'orcamentos', 'production-orders': 'producao/ordens', printers: 'producao/impressoras',
   audit: 'auditoria', admin: 'acessos/usuarios', 'admin-account': 'acessos/minha-conta', account: 'conta',
   ...Object.fromEntries(Object.entries(sections).flatMap(([id, section]) => [
     [id, section.path], ...section.tabs.map(tab => [tab.id, section.path + '/' + tab.path]),
@@ -329,6 +332,7 @@ function App() {
     {(page === 'balance' || page === 'statement' || page === 'reconciliation' || page === 'integration') &&
       <Finance key={page} page={page} edit={can('finance:operate')} admin={admin} openStatement={() => navigate('statement')}
         openIntegration={() => navigate('integration')} />}
+    {page === 'quotes' && <Quotes edit={can('quotes:operate')} approve={can('production:operate')} seeCosts={can('stock:view')} />}
     {page === 'production-orders' && <ProductionOrders edit={can('production:operate')} correct={can('production:correct')} seeCosts={can('stock:view')} />}
     {page === 'printers' && <Printers edit={can('production:operate')} />}
     {page === 'admin' && <Administration onUserChanged={async id => { if (id === identity.id) await signIn(); }} />}
