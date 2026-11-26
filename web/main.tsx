@@ -9,6 +9,7 @@ import {
 import { AccountSettings, Administration, SignIn } from './access';
 import { Audit } from './audit';
 import { Catalog } from './catalog';
+import { Costs } from './costs';
 import { Finance } from './finance';
 import { Home } from './home';
 import { pageFromHash } from './format';
@@ -46,7 +47,7 @@ const groups = [
   ] },
 ] as const;
 type Group = typeof groups[number];
-type TabId = RegistrationPage | 'register-products' | 'register-kits' | 'suppliers' | 'payment-methods';
+type TabId = RegistrationPage | 'register-products' | 'register-kits' | 'suppliers' | 'payment-methods' | 'costs';
 type SectionId = 'register-catalog' | 'register-classification' | 'register-commercial';
 type SectionTab = { id: TabId; label: string; path: string; permission?: string };
 export type Page = Group['pages'][number]['id'] | TabId | 'account';
@@ -64,6 +65,7 @@ const sections: Record<SectionId, { path: string; tabs: SectionTab[] }> = {
   'register-commercial': { path: 'cadastros/comercial', tabs: [
     { id: 'suppliers', label: 'Fornecedores', path: 'fornecedores' },
     { id: 'payment-methods', label: 'Formas de pagamento', path: 'formas-de-pagamento' },
+    { id: 'costs', label: 'Custos', path: 'custos' },
   ] },
 };
 const isSection = (page: Page): page is SectionId => page in sections;
@@ -75,6 +77,7 @@ const pageDescriptions: Record<Page, string> = {
   'register-products': 'Cadastre, edite e inative produtos.', 'register-kits': 'Monte e edite a composição dos kits.',
   suppliers: 'Empresas e pessoas de quem você compra.',
   'payment-methods': 'Formas de pagamento e taxas usadas na venda das ordens.',
+  costs: 'Custos reutilizáveis, como embalagem, frete e impostos, em valor ou percentual.',
   'product-types': 'Defina o que cada produto é e como ele se comporta na produção.',
   GRUPO: 'Organize os produtos por grupos.', MARCA: 'Gerencie as marcas do catálogo.',
   COR: 'Mantenha a lista de cores disponíveis.', DEPARTAMENTO: 'Organize os departamentos do catálogo.',
@@ -315,6 +318,7 @@ function App() {
       <Registrations key={page} page={page} edit={can('registrations:operate')} admin={admin} />}
     {page === 'suppliers' && <Suppliers edit={can('registrations:operate')} />}
     {page === 'payment-methods' && <PaymentMethods edit={can('registrations:operate')} />}
+    {page === 'costs' && <Costs edit={can('registrations:operate')} />}
     {page === 'purchases' && <Purchases edit={can('purchases:operate')} />}
     {page === 'purchase-documents' && <PurchaseDocuments edit={can('purchases:operate')} />}
     {page === 'stock' && <Stock edit={can('stock:operate')} importInitial={can('stock:operate') && can('catalog:operate')} />}
