@@ -6,6 +6,18 @@ export type Release = { version: string; date: string; title: string; changes: s
  */
 export const releases: Release[] = [
   {
+    version: '0.7.0',
+    date: '2026-11-25',
+    title: 'Produto salvo de uma vez',
+    changes: [
+      'O cadastro do produto virou um formulário só, com as seções Dados, Imagem e arquivos, Ficha técnica e Formação de preço.',
+      'Imagem e arquivos podem ser escolhidos já no cadastro de um produto novo. Eles são enviados ao clicar em Salvar, junto com o resto.',
+      'Um único Salvar grava os dados, a imagem, os arquivos, a ficha técnica e o preço. Se algo der errado, nada é gravado pela metade.',
+      'A formação de preço de um produto novo já mostra o preço sugerido pela ficha técnica que está sendo montada.',
+      'A auditoria registra o cadastro ou a alteração do produto num único evento, com imagem, arquivos, ficha e preço.',
+    ],
+  },
+  {
     version: '0.6.0',
     date: '2026-11-25',
     title: 'Formação de preço',
