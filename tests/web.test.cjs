@@ -83,6 +83,58 @@ test('the branded PDF carries the logo, section images, the highlighted total an
   assert.equal(Buffer.from((await renderPdf({ ...report, brand: undefined, sections: [] })).slice(0, 4)).toString(), '%PDF');
 });
 
+const { quoteReport } = load('../web/quote-report.ts', __filename);
+const fullQuote = (values = {}) => ({
+  id: 'q', number: 7, status: 'SENT', actions: [], customerName: 'Maria Cliente', customerContact: '(11) 98888-0000', title: 'Estatueta decorativa',
+  description: 'Peça pintada à mão', details: [{ label: 'Tamanho', value: '15 cm' }, { label: 'Cores', value: 'Dourado' }],
+  printPlates: 2, estimatedMinutes: 330, deliveryDays: 7, validUntil: '2026-12-10', expired: false, notes: 'Cliente pediu urgência interna',
+  printer: { id: 'p', name: 'Impressora Secreta' }, user: { name: 'Vendedor' }, createdAt: '2026-11-25T12:00:00.000Z', sentAt: null, decidedAt: null, productionOrder: null,
+  discountPercent: '10', paymentMethodId: 'm', paymentName: 'Pix', feePercent: '3.5', customFee: false,
+  items: [{ productId: 'x', sku: 'EST-01', name: 'Estatueta', symbol: 'un', imageFileId: null, quantity: '32', salePrice: '16', total: '512', marginPercent: '41.37' }],
+  expenses: [{ title: 'Frete do insumo', value: '9.91' }],
+  sale: { gross: '512', discount: '51.2', total: '460.8', fee: '16.128', net: '444.672', profit: '213.47', marginPercent: '46.33' },
+  budget: {
+    machineCost: '7.77', expenseCost: '9.91', materialCost: '221.13', totalCost: '238.81', partialCost: false, missingCost: [],
+    items: [{ productId: 'x', totalCost: '238.81', unitCost: '7.4628', pricedCost: '8.1234', suggestedPrice: '13.97', realMargin: '49.22', belowTargetMargin: false }],
+  },
+  ...values,
+});
+const letterhead = { brand: { name: 'Lar&Stock3D', tagline: 'Impressão 3D' }, footer: 'Obrigado pela preferência' };
+
+test('the customer quote shows the sale and never a cost, input, margin or internal note', async () => {
+  const report = quoteReport(fullQuote(), letterhead, null, new Date('2026-11-25T12:00:00Z'));
+  const text = JSON.stringify(report);
+  for (const hidden of ['Custo', 'custo', 'Margem', 'margem', 'Insumo', 'insumo', 'Resultado', 'Líquido', 'Taxa', 'Frete do insumo', 'Impressora Secreta', 'urgência interna',
+    '238', '221', '7,77', '7,46', '13,97', '41,37', '46,33', '49,22', '213', '444', '16,13', '9,91']) {
+    assert.ok(!text.includes(hidden), 'O PDF do cliente mostrou ' + hidden);
+  }
+  const pedido = report.sections.find(section => section.heading === 'Pedido').table.rows;
+  assert.deepEqual(pedido, [
+    ['Produto', 'Estatueta'], ['Tamanho', '15 cm'], ['Cores', 'Dourado'], ['Quantidade', '32 un'], ['Tempo estimado', '2 placas · 5 h 30 min'], ['Prazo de entrega', '7 dias'],
+  ]);
+  const total = report.sections.find(section => section.total).total;
+  assert.equal(total.label, 'VALOR TOTAL');
+  assert.match(total.value, /460,80/);
+  assert.deepEqual(total.lines.map(([label]) => label), ['Valor por unidade', 'Quantidade', 'Subtotal', 'Desconto (10%)']);
+  assert.equal(report.status, 'Válido até 10/12/2026');
+  assert.equal(report.footer, 'Obrigado pela preferência');
+  assert.equal(Buffer.from((await renderPdf(report)).slice(0, 4)).toString(), '%PDF');
+});
+
+test('a quote with several products lists each line, and no discount means no discount line', () => {
+  const items = [
+    { productId: 'a', sku: 'A', name: 'Vaso', symbol: 'un', imageFileId: null, quantity: '2', salePrice: '10.5', total: '21' },
+    { productId: 'b', sku: 'B', name: 'Placa', symbol: 'un', imageFileId: null, quantity: '1', salePrice: '30', total: '30' },
+  ];
+  const report = quoteReport(fullQuote({ items, discountPercent: '0', printPlates: null, deliveryDays: null, sale: { gross: '51', discount: '0', total: '51' } }), letterhead, null);
+  const rows = report.sections.find(section => section.heading === 'Pedido').table.rows;
+  assert.deepEqual(rows.slice(0, 2), [['Produto 1', 'Vaso · 2 un'], ['Produto 2', 'Placa · 1 un']]);
+  assert.ok(!rows.some(([label]) => label === 'Prazo de entrega' || label === 'Quantidade'));
+  const total = report.sections.find(section => section.total).total;
+  assert.equal(total.lines.length, 2);
+  assert.ok(!total.lines.some(([label]) => label.startsWith('Desconto')));
+});
+
 test('text wraps by words and breaks a word only when it is too long', () => {
   const measure = text => text.length;
   assert.deepEqual(wrapText('uma frase curta', 9, measure), ['uma frase', 'curta']);

@@ -12,9 +12,8 @@ export type Company = {
 /** The file id in the address makes the browser ask again when the logo is replaced. */
 export const companyLogoUrl = (company: Pick<Company, 'logoFileId'>) => company.logoFileId ? '/api/company/logo?v=' + company.logoFileId : null;
 
-/** The letterhead of a report, with the logo read from the panel. */
-export async function companyBrand(company: Company): Promise<ReportBrand> {
-  const url = companyLogoUrl(company);
+/** The letterhead of a report, with the logo read from the panel. Quotes pass their own logo address, readable with quotes:view. */
+export async function companyBrand(company: Company, url = companyLogoUrl(company)): Promise<ReportBrand> {
   return { name: company.name || 'Sua empresa', tagline: company.tagline, contact: company.contact, logo: url ? await loadReportImage(url) : null };
 }
 

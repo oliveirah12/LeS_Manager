@@ -120,7 +120,7 @@ function presentQuote(quote: LoadedQuote, seeCosts: boolean, energyRate: Prisma.
     feePercent: quoteFee(quote), customFee: quote.feePercent !== null,
     items: quote.items.map(item => ({
       productId: item.productId, sku: item.product.sku, name: item.product.name, symbol: symbolOf(item.product), imageFileId: item.product.imageFileId,
-      quantity: item.quantity, salePrice: item.salePrice, ...(seeCosts ? { marginPercent: item.marginPercent } : {}),
+      quantity: item.quantity, salePrice: item.salePrice, total: item.quantity.times(item.salePrice).toDecimalPlaces(12), ...(seeCosts ? { marginPercent: item.marginPercent } : {}),
     })),
     expenses: quote.expenses.map(row => ({ title: row.title, value: row.value })),
     sale: sale && { gross: sale.gross, discount: sale.discount, total: sale.total, fee: sale.fee, net: sale.net, ...(budget ? saleResult(sale, budget.totalCost) : {}) },
