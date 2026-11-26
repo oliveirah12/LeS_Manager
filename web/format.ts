@@ -85,6 +85,22 @@ function scaled(text: string | null | undefined) {
 }
 const validMargin = (margin: bigint | null): margin is bigint => margin !== null && margin < 100n * priceScale && margin % (priceScale / 100n) === 0n;
 
+/**
+ * Print time suggested by the recipes: minutes per piece times the quantity, rounded up to whole minutes.
+ * Only when every chosen product has its time, since a partial sum would look complete.
+ */
+export function suggestedMinutes(rows: { quantity: string; printMinutes?: string | null }[]) {
+  if (!rows.length) return null;
+  let total = 0;
+  for (const row of rows) {
+    const [amount, minutes] = [Number(row.quantity.trim().replace(',', '.')), Number(row.printMinutes ?? NaN)];
+    if (!(amount > 0) || !(minutes > 0)) return null;
+    total += amount * minutes;
+  }
+  // Float residue such as 90.00000000001 must not add a whole minute.
+  return Math.ceil(Math.round(total * 1000) / 1000);
+}
+
 export type PricingCost = { mode: 'VALUE' | 'PERCENT'; base: 'COST' | 'SALE'; value: string };
 /**
  * The cost before the sale percentages, scaled by 100 × 10^24, and the share of the price left after margin and sale

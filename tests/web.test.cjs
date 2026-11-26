@@ -3,7 +3,7 @@ const { test } = require('node:test');
 // tsx loads the panel's TypeScript directly, without a separate build.
 const { require: load } = require('tsx/cjs/api');
 const {
-  accessible, applyFilters, brl, compareDecimal, decimal, displayDate, fileSize, marginShortfall, nextSort, pageFromHash, sortParam, sortRows, suggestedConsumption, suggestedPrice, yesNo,
+  accessible, applyFilters, brl, compareDecimal, decimal, displayDate, fileSize, marginShortfall, nextSort, pageFromHash, sortParam, sortRows, suggestedConsumption, suggestedMinutes, suggestedPrice, yesNo,
 } = load('../web/format.ts', __filename);
 const { clashingPeriods, dayPeriods, localValue, monthDays } = load('../web/slots.ts', __filename);
 const { Prisma } = require('@prisma/client');
@@ -106,6 +106,14 @@ test('the price preview with registered costs matches the API rule', () => {
   assert.equal(suggestedPrice('60', '40', [{ mode: 'PERCENT', base: 'SALE', value: '60' }]), null);
   assert.equal(marginShortfall('100', '60', '30', [{ mode: 'PERCENT', base: 'SALE', value: '10' }]), null);
   assert.equal(marginShortfall('99.99', '60', '30', [{ mode: 'PERCENT', base: 'SALE', value: '10' }]), '29.99');
+});
+
+test('the order time comes from the recipes only when every product has one', () => {
+  assert.equal(suggestedMinutes([{ quantity: '32', printMinutes: '15' }, { quantity: '2,5', printMinutes: '10.2' }]), 506);
+  assert.equal(suggestedMinutes([{ quantity: '3', printMinutes: '30' }]), 90);
+  assert.equal(suggestedMinutes([{ quantity: '3', printMinutes: '30' }, { quantity: '1', printMinutes: null }]), null);
+  assert.equal(suggestedMinutes([{ quantity: '', printMinutes: '30' }]), null);
+  assert.equal(suggestedMinutes([]), null);
 });
 
 test('the margin warning shows the real margin without rounding it up', () => {

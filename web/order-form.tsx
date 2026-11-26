@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { saleEstimate } from './format';
+import { saleEstimate, suggestedMinutes } from './format';
 import type { Order, OrdersView } from './orders';
 import { localValue } from './slots';
 import { StartPicker } from './start-picker';
@@ -47,6 +47,9 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
   const inputExpenses = (order?.expenses ?? []).filter(row => row.source === 'INPUT' && orderInputs.some(input => input.inputId === row.inputId));
   const payment = payments.find(method => method.id === paymentId);
   const sale = saleEstimate(rows, discount, fee.trim() ? fee : payment?.feePercent ?? '0');
+  const timeSuggestion = !hours.trim() && !minutes.trim()
+    ? suggestedMinutes(rows.filter(row => row.productId).map(row => ({ quantity: row.quantity, printMinutes: view.products.find(item => item.id === row.productId)?.printMinutes })))
+    : null;
   const change = (key: number, values: Partial<Row>) => setRows(items => items.map(item => item.key === key ? { ...item, ...values } : item));
   /** Choosing a product brings its registered price and margin, which stay editable for this order only. */
   function choose(key: number, productId: string) {
@@ -89,6 +92,13 @@ export function OrderForm({ view, order, seeCosts, done }: { view: OrdersView; o
       <label>Tempo de impressão (horas)<input name="hours" inputMode="numeric" placeholder="10" value={hours} onChange={event => setHours(event.target.value)} /></label>
       <label>Minutos<input name="minutes" inputMode="numeric" placeholder="0" value={minutes} onChange={event => setMinutes(event.target.value)} /></label>
     </div>
+    {timeSuggestion !== null && <div className="section-head">
+      <span className="hint">Pela ficha técnica: <strong>{Math.floor(timeSuggestion / 60)} h {timeSuggestion % 60} min</strong></span>
+      <button type="button" className="btn secondary small" onClick={() => {
+        setHours(String(Math.floor(timeSuggestion / 60)));
+        setMinutes(timeSuggestion % 60 ? String(timeSuggestion % 60) : '');
+      }}>Usar sugestão</button>
+    </div>}
     <StartPicker key={agenda} printerId={printerId} minutes={validTime ? estimatedMinutes : 0} value={plannedStart} onChange={setPlannedStart} onBlocked={setBlocked}
       ignoreOrderId={order?.id} keepValue={sameSchedule} />
     <p className="hint" role="status">{expectedEnd ? <>Término previsto: <strong>{dateTime(expectedEnd)}</strong></> : 'Informe o início e o tempo para calcular o término.'}</p>

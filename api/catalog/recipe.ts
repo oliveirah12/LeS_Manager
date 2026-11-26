@@ -7,19 +7,26 @@ import { Authenticated, Require } from '../access/access';
 import { canAccess } from '../access/security';
 import { Audit, auditChange } from '../audit/recorder';
 import { Database, idField, nonnegative, parse, positive, serial } from '../shared';
+import { printerHourCost } from '../stock/cost';
 import { inBase, productInclude } from './catalog';
+import { currentEnergyRate } from './pricing';
 
 export const recipeFields = z.object({
   wastePercent: nonnegative.refine(value => value.lte(100) && value.decimalPlaces() <= 2, 'Informe a perda entre 0 e 100, com até 2 casas'),
   inputs: z.array(z.object({ inputId: idField, unitId: idField, quantity: positive })).max(100),
+  printMinutes: positive.refine(value => value.lt(1000000) && value.decimalPlaces() <= 2, 'Informe o tempo por peça abaixo de 1.000.000 minutos, com até 2 casas').nullable().default(null),
+  printerId: idField.nullable().default(null),
 });
 type Recipe = z.infer<typeof recipeFields>;
-type AuditedRecipe = { wastePercent: Prisma.Decimal; recipe: { quantity: Prisma.Decimal; input: { sku: string } }[] };
+const recipeAudit = {
+  wastePercent: true, printMinutes: true, printerId: true, printer: { select: { name: true } }, recipe: { select: { quantity: true, input: { select: { sku: true } } } },
+} as const;
+type AuditedRecipe = Prisma.ProductGetPayload<{ select: typeof recipeAudit }>;
 const recipeValues = (product: AuditedRecipe) => ({
   'Perda (%)': product.wastePercent.toFixed(),
   Insumos: product.recipe.map(item => item.input.sku + ' × ' + item.quantity.toFixed()).sort(),
+  'Tempo por peça (min)': product.printMinutes?.toFixed() ?? null, Impressora: product.printer?.name ?? null,
 });
-const recipeAudit = { wastePercent: true, recipe: { select: { quantity: true, input: { select: { sku: true } } } } } as const;
 
 /** True when the product would end up consuming itself, directly or through another manufactured input. */
 export function formsCycle(productId: string, inputIds: string[], edges: { productId: string; inputId: string }[]) {
@@ -45,17 +52,24 @@ export class RecipeService {
 
   /** Costs only leave the API for people who can already see them in the stock. */
   async view(id: string, canSeeCost: boolean) {
-    const [product, candidates] = await Promise.all([
-      this.db.product.findUnique({ where: { id }, select: { wastePercent: true, recipe: { select: { inputId: true, quantity: true } } } }),
+    const [product, candidates, printers, energyRate] = await Promise.all([
+      this.db.product.findUnique({ where: { id }, select: { wastePercent: true, printMinutes: true, printerId: true, recipe: { select: { inputId: true, quantity: true } } } }),
       this.db.product.findMany({
         where: { id: { not: id }, OR: [{ active: true, type: { isInput: true } }, { usedInRecipes: { some: { productId: id } } }] },
         select: { id: true, sku: true, name: true, active: true, currentCost: true, ...productInclude }, orderBy: { sku: 'asc' },
       }),
+      // An inactive printer leaves the list, but stays on the recipe that already uses it.
+      this.db.printer.findMany({ where: { OR: [{ active: true }, { products: { some: { id } } }] }, orderBy: { name: 'asc' } }),
+      currentEnergyRate(this.db),
     ]);
     if (!product) throw new NotFoundException('Produto não encontrado.');
     return {
-      wastePercent: product.wastePercent, inputs: product.recipe, canSeeCost,
+      wastePercent: product.wastePercent, inputs: product.recipe, canSeeCost, printMinutes: product.printMinutes, printerId: product.printerId,
       candidates: candidates.map(({ currentCost, ...item }) => canSeeCost ? { ...item, currentCost } : item),
+      printers: printers.map(printer => ({
+        id: printer.id, name: printer.name, active: printer.active,
+        ...(canSeeCost ? { hourCost: printerHourCost(printer.powerWatts, energyRate, printer.hourlyCost) } : {}),
+      })),
     };
   }
 
@@ -67,6 +81,11 @@ export class RecipeService {
       const product = await tx.product.findUnique({ where: { id }, select: { ...recipeAudit, type: { select: { isManufactured: true } } } });
       if (!product) throw new NotFoundException('Produto não encontrado.');
       if (!product.type.isManufactured) throw new ConflictException('Só produtos de tipo fabricado têm ficha técnica.');
+      if (data.printerId && data.printerId !== product.printerId) {
+        const printer = await tx.printer.findUnique({ where: { id: data.printerId } });
+        if (!printer) throw new NotFoundException('Impressora não encontrada.');
+        if (!printer.active) throw new ConflictException('A impressora ' + printer.name + ' está inativa.');
+      }
       const [inputs, units, edges] = await Promise.all([
         tx.product.findMany({ where: { id: { in: inputIds } }, include: { unit: true, type: true } }),
         tx.unit.findMany({ where: { id: { in: data.inputs.map(item => item.unitId) } } }),
@@ -82,10 +101,11 @@ export class RecipeService {
       });
       if (formsCycle(id, inputIds, edges)) throw new ConflictException('Esta ficha faria o produto consumir a si mesmo por meio de outro insumo.');
       const saved = await tx.product.update({
-        where: { id }, data: { wastePercent: data.wastePercent, recipe: { deleteMany: {}, create: rows } }, select: recipeAudit,
+        where: { id }, data: { wastePercent: data.wastePercent, printMinutes: data.printMinutes, printerId: data.printerId, recipe: { deleteMany: {}, create: rows } },
+        select: recipeAudit,
       });
       auditChange(recipeValues(product), recipeValues(saved));
-      return { id, wastePercent: saved.wastePercent };
+      return { id, wastePercent: saved.wastePercent, printMinutes: saved.printMinutes, printerId: saved.printerId };
     });
   }
 }

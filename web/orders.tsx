@@ -36,7 +36,7 @@ export type OrdersView = {
   orders: Order[]; page: number; pageSize: number; total: number; printers: { id: string; name: string }[]; filterPrinters: { id: string; name: string }[];
   paymentMethods: { id: string; name: string; feePercent: string | null }[];
   inputs: { id: string; sku: string; name: string; symbol: string; familyId: string }[];
-  products: { id: string; sku: string; name: string; symbol: string; salePrice?: string | null; marginPercent?: string | null }[];
+  products: { id: string; sku: string; name: string; symbol: string; printMinutes?: string | null; salePrice?: string | null; marginPercent?: string | null }[];
 };
 /** The values only come with stock:view. */
 type PreviewItem = { productId: string; sku: string; name: string; symbol: string; good: string; lost: string; unitCost?: string | null; fullUnitCost?: string; lossCost?: string };

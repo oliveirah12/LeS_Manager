@@ -5,7 +5,10 @@ import {
 } from './ui';
 
 type Candidate = Pick<Product, 'id' | 'sku' | 'name' | 'active' | 'unit'> & { currentCost?: string | null };
-type RecipeView = { wastePercent: string; inputs: { inputId: string; quantity: string }[]; candidates: Candidate[]; canSeeCost: boolean };
+type RecipeView = {
+  wastePercent: string; inputs: { inputId: string; quantity: string }[]; candidates: Candidate[]; canSeeCost: boolean;
+  printMinutes: string | null; printerId: string | null; printers: { id: string; name: string; active: boolean; hourCost?: string }[];
+};
 type Row = { key: number; inputId: string; unitId: string; quantity: string };
 const number = (value: string) => Number(value.replace(',', '.'));
 
@@ -19,6 +22,8 @@ export function RecipeEditor({ product, units, saved }: { product: Product; unit
 
 function RecipeForm({ product, view, units, saved }: { product: Product; view: RecipeView; units: Unit[]; saved: () => Promise<void> }) {
   const [waste, setWaste] = useState(Number(view.wastePercent) ? view.wastePercent : '');
+  const [minutes, setMinutes] = useState(view.printMinutes ?? '');
+  const [printerId, setPrinterId] = useState(view.printerId ?? '');
   const [rows, setRows] = useState<Row[]>(() => view.inputs.map((item, key) => {
     const input = view.candidates.find(row => row.id === item.inputId);
     return { key, inputId: item.inputId, unitId: input ? baseUnit(input).id : '', quantity: item.quantity };
@@ -37,10 +42,13 @@ function RecipeForm({ product, view, units, saved }: { product: Product; view: R
   });
   const missingCost = preview.some(item => item?.cost === null);
   const total = preview.reduce((sum, item) => sum + (item?.cost ?? 0), 0);
+  const hourCost = view.printers.find(printer => printer.id === printerId)?.hourCost;
+  const machine = hourCost && number(minutes) > 0 ? Number(hourCost) * number(minutes) / 60 : null;
 
   return <Form label="Salvar ficha técnica" cancel="Cancelar" action={async () => {
     await api('catalog/products/' + product.id + '/recipe', {
       wastePercent: waste.trim() || '0', inputs: rows.map(({ inputId, unitId, quantity: amount }) => ({ inputId, unitId, quantity: amount })),
+      printMinutes: minutes.trim() || null, printerId: printerId || null,
     }, 'PUT');
     await saved();
     closePanel?.();
@@ -76,7 +84,18 @@ function RecipeForm({ product, view, units, saved }: { product: Product; view: R
       <input name="wastePercent" inputMode="decimal" placeholder="0" value={waste} onChange={event => setWaste(event.target.value)} />
       <span className="hint">Opcional. Cobre suportes, purga e sobras previstas em cada peça.</span>
     </label>
-    {view.canSeeCost && preview.some(Boolean) && <div className="info">Custo de insumos por {baseUnit(product).symbol}: <strong className="num">{brl(total)}</strong>
-      {missingCost && ' (parcial, há insumo sem custo registrado)'}</div>}
+    <div className="form-grid">
+      <label>Tempo de impressão por {baseUnit(product).symbol} (min)
+        <input name="printMinutes" inputMode="decimal" placeholder="Ex.: 45" value={minutes} onChange={event => setMinutes(event.target.value)} />
+        <span className="hint">Opcional. Soma o custo da máquina ao preço e sugere o tempo da ordem.</span>
+      </label>
+      <Select name="printerId" label="Impressora padrão" required={false} placeholder="Sem impressora" defaultValue={printerId}
+        options={view.printers.map(printer => ({ id: printer.id, name: printer.name + (printer.active ? '' : ' (inativa)') }))} onChange={setPrinterId} />
+    </div>
+    {view.canSeeCost && (preview.some(Boolean) || machine !== null) && <div className="info">
+      Custo de insumos por {baseUnit(product).symbol}: <strong className="num">{brl(total)}</strong>
+      {missingCost && ' (parcial, há insumo sem custo registrado)'}
+      {machine !== null && <> · máquina e energia: <strong className="num">{brl(machine)}</strong> · total: <strong className="num">{brl(total + machine)}</strong></>}
+    </div>}
   </Form>;
 }

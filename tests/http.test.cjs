@@ -590,6 +590,19 @@ test('API REST com PostgreSQL', {
     const recipe = expectStatus(await admin(`/catalog/products/${printed.id}/recipe`), 200);
     assert.equal(recipe.wastePercent, '5');
     assert.deepEqual(recipe.inputs, [{ inputId: filament.id, quantity: '120' }]);
+    // Print time and default printer live on the recipe, and the printer cannot be deleted while it is the default.
+    const recipePrinter = expectStatus(await post('/production/printers', { name: sku('FICHA-IMPRESSORA'), powerWatts: '100', hourlyCost: '1' }), 201);
+    const timedRecipe = printMinutes => admin(`/catalog/products/${printed.id}/recipe`, {
+      method: 'PUT', body: { wastePercent: '5', inputs: line(filament.id), printMinutes, printerId: recipePrinter.id },
+    });
+    expectStatus(await timedRecipe('0'), 400);
+    expectStatus(await timedRecipe('45.555'), 400);
+    expectStatus(await timedRecipe('45.5'), 200);
+    const timed = expectStatus(await admin(`/catalog/products/${printed.id}/recipe`), 200);
+    assert.deepEqual([timed.printMinutes, timed.printerId, timed.printers.some(row => row.id === recipePrinter.id)], ['45.5', recipePrinter.id, true]);
+    expectStatus(await admin('/production/printers/' + recipePrinter.id, { method: 'DELETE' }), 409);
+    expectStatus(await post(`/production/printers/${recipePrinter.id}/status`, { active: false }), 200);
+    expectStatus(await timedRecipe('45.5'), 200);
     const listed = expectStatus(await admin('/catalog'), 200).products;
     assert.equal(listed.find(row => row.id === printed.id).hasRecipe, true);
     assert.equal(listed.find(row => row.id === filament.id).hasRecipe, false);
@@ -603,6 +616,7 @@ test('API REST com PostgreSQL', {
     }), 409);
     expectStatus(await saveRecipe(printed.id, '0', []), 200);
     expectStatus(await admin('/catalog/products/' + filament.id, { method: 'DELETE' }), 200);
+    expectStatus(await admin('/production/printers/' + recipePrinter.id, { method: 'DELETE' }), 200);
   });
 
   await t.test('impressoras somam energia e desgaste no custo por hora', async () => {

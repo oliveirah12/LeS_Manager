@@ -316,7 +316,7 @@ export class ProductionOrderService {
       this.db.printer.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
       this.db.product.findMany({
         where: { active: true, type: { isManufactured: true }, recipe: { some: {} } },
-        select: { id: true, sku: true, name: true, salePrice: true, marginPercent: true, ...productInclude }, orderBy: { sku: 'asc' },
+        select: { id: true, sku: true, name: true, salePrice: true, marginPercent: true, printMinutes: true, ...productInclude }, orderBy: { sku: 'asc' },
       }),
       this.db.paymentMethod.findMany({ where: { active: true }, select: { id: true, name: true, feePercent: true }, orderBy: { name: 'asc' } }),
       this.db.product.findMany({
@@ -331,7 +331,7 @@ export class ProductionOrderService {
       page, pageSize: orderPageSize, total, printers, filterPrinters, paymentMethods,
       inputs: inputs.map(input => ({ id: input.id, sku: input.sku, name: input.name, symbol: symbolOf(input), familyId: input.unit.familyId })),
       products: products.map(product => ({
-        id: product.id, sku: product.sku, name: product.name, symbol: symbolOf(product),
+        id: product.id, sku: product.sku, name: product.name, symbol: symbolOf(product), printMinutes: product.printMinutes,
         ...(seeCosts ? { salePrice: product.salePrice, marginPercent: product.marginPercent } : {}),
       })),
     };
