@@ -112,7 +112,7 @@ function ProductPanel({ id }: { id: string }) {
       <Table responsive={false} columns={['Data', { label: 'Quantidade', end: true }, { label: 'Custo unitário', end: true }]}
         rows={stock.purchases.map(row => [by(Date.parse(row.createdAt), dateTime(row.createdAt)), by(row.quantity, amount(row.quantity)), by(row.unitCost, brl(row.unitCost))])} />
     </>}
-    <ProductFiles productId={id} edit={false} />
+    <ProductFiles productId={id} />
   </div>;
 }
 
