@@ -1,18 +1,21 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { MovementKind, Prisma, Product } from '@prisma/client';
 import { z } from 'zod';
 import {
   CatalogService, defaultProductType, inBase, marginField, maxMeasures, productInclude, purchaseUrlField, repeatedMeasure, symbolField,
 } from '../catalog/catalog';
+import { coverable, printMinutesField } from '../catalog/pricing';
 import { formsCycle } from '../catalog/recipe';
 import { auditChange, auditContext } from '../audit/recorder';
 import { purchaseDateField, storedDate } from '../purchases/rules';
+import { costItemFields, costSummary } from '../registrations/costs';
 import { averageCost, costPerBaseUnit } from './cost';
 import {
   DailyTask, Database, decimalField, idField, money, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal,
 } from '../shared';
 
 const previewAge = 7 * 24 * 60 * 60 * 1000;
+const costAccess = 'Seu perfil não cadastra custos. Remova a aba Custos da planilha ou peça o acesso de operação em Cadastros.';
 
 export const movementFields = z.object({
   productId: idField, unitId: idField, kind: z.enum(['OUT', 'ADJUSTMENT']),
@@ -29,19 +32,30 @@ const initialRow = z.object({
   minStock: nonnegative.optional(), marginPercent: marginField.optional(), salePrice: positive.optional(),
   lengthMm: positive.optional(), widthMm: positive.optional(), heightMm: positive.optional(), diameterMm: positive.optional(),
   purchaseUrl: purchaseUrlField.optional(), purchaseDate: purchaseDateField.optional(), supplier: nameField.optional(), purchaseExpenses: nonnegative.optional(),
+  printMinutes: printMinutesField.optional(), printer: nameField.optional(),
+  // Names of registered costs, or of costs in this batch, separated by semicolons. A stored preview keeps the list.
+  linkedCosts: z.preprocess(value => Array.isArray(value) ? value.join(';') : value, z.string().trim().max(2000))
+    .transform(text => text.split(';').map(name => name.trim()).filter(Boolean)).optional(),
 }).refine(row => row.unitCost === undefined || row.totalCost === undefined, 'Use apenas uma coluna de custo.')
   .refine(row => row.quantity.eq(0) || row.unitCost !== undefined || row.totalCost !== undefined, 'Informe o custo do saldo inicial.')
   .refine(row => row.totalCost === undefined || row.quantity.gt(0), 'O custo total exige quantidade maior que zero.')
   .refine(row => row.purchaseExpenses === undefined || row.quantity.gt(0), 'As despesas da compra exigem quantidade maior que zero.');
 const initialRecipe = z.object({ product: skuField, input: skuField, quantity: positive, unit: nameField });
 const initialMeasure = z.object({ sku: skuField, name: nameField, value: positive, unit: symbolField });
+// The spreadsheet uses labels, and a stored preview uses the ids, so both read the same way.
+const costLabels: Record<string, string> = { Valor: 'VALUE', Percentual: 'PERCENT', Custo: 'COST', Venda: 'SALE' };
+const costChoice = (value: unknown) => typeof value === 'string' ? costLabels[value.trim()] ?? value : value;
+const initialCost = z.preprocess(row => row && typeof row === 'object' && 'mode' in row
+  ? { ...row, mode: costChoice(row.mode), ...('base' in row ? { base: costChoice(row.base) } : {}) } : row, costItemFields);
 export const initialFields = z.object({
   rows: z.array(initialRow).min(1).max(500), recipes: z.array(initialRecipe).max(500).default([]), measures: z.array(initialMeasure).max(500).default([]),
+  costs: z.array(initialCost).max(100).default([]),
 });
 type Count = z.infer<typeof countFields>;
 type Initial = z.infer<typeof initialFields>;
 const initialDecimals = [
   'quantity', 'unitCost', 'totalCost', 'wastePercent', 'minStock', 'marginPercent', 'salePrice', 'lengthMm', 'widthMm', 'heightMm', 'diameterMm', 'purchaseExpenses',
+  'printMinutes',
 ] as const;
 
 /** Groups the measures by SKU, applying the same limits as the product form. */
@@ -185,15 +199,23 @@ export class StockService {
   }
 
   private async initialLookups(tx: Prisma.TransactionClient, data: Initial) {
-    const [existing, units, references, types, storedInputs, suppliers] = await Promise.all([
+    const linkedNames = [...new Set(data.rows.flatMap(row => row.linkedCosts ?? []))];
+    const [existing, units, references, types, storedInputs, suppliers, storedCosts, printers, linkable] = await Promise.all([
       tx.product.findMany({ where: { sku: { in: data.rows.map(row => row.sku) } }, select: { sku: true } }),
       tx.unit.findMany({ where: { symbol: { in: [...data.rows, ...data.recipes].map(row => row.unit) } } }),
       tx.reference.findMany(),
       tx.productType.findMany(),
       tx.product.findMany({ where: { sku: { in: data.recipes.map(row => row.input) } }, include: { unit: true, type: true } }),
       tx.supplier.findMany({ where: { active: true, name: { in: data.rows.flatMap(row => row.supplier ? [row.supplier] : []) } }, select: { id: true, name: true } }),
+      tx.costItem.findMany({ where: { name: { in: data.costs.map(cost => cost.name) } }, select: { name: true } }),
+      tx.printer.findMany({ where: { active: true, name: { in: data.rows.flatMap(row => row.printer ? [row.printer] : []) } }, select: { id: true, name: true } }),
+      tx.costItem.findMany({ where: { active: true, name: { in: linkedNames } }, select: { name: true, mode: true, base: true, value: true, active: true } }),
     ]);
+    // A linked cost may be registered already or come in the Custos tab of this batch.
+    const costTerms = [...linkable, ...data.costs.filter(cost => cost.active)];
     if (existing.length) throw new ConflictException('SKUs já cadastrados: ' + existing.map(product => product.sku).join(', '));
+    if (storedCosts.length) throw new ConflictException('Custos já cadastrados: ' + storedCosts.map(cost => cost.name).join(', '));
+    if (new Set(data.costs.map(cost => cost.name)).size !== data.costs.length) throw new BadRequestException('Há custos repetidos no lote.');
     const measures = measuresBySku(data);
     const items = data.rows.map(row => {
       const unit = units.find(item => item.symbol === row.unit);
@@ -207,6 +229,18 @@ export class StockService {
         if (!reference) throw new BadRequestException('Classificação desconhecida no SKU ' + row.sku + ': ' + name);
         return reference.id;
       };
+      if ((row.printMinutes || row.printer) && !type.isManufactured) throw new BadRequestException('Tempo por peça e impressora só valem para produto fabricado: ' + row.sku + '.');
+      const printer = row.printer ? printers.find(item => item.name === row.printer) : undefined;
+      if (row.printer && !printer) throw new BadRequestException('Impressora desconhecida ou inativa no SKU ' + row.sku + ': ' + row.printer);
+      const linked = (row.linkedCosts ?? []).map(name => {
+        const cost = costTerms.find(item => item.name === name);
+        if (!cost) throw new BadRequestException('Custo desconhecido ou inativo no SKU ' + row.sku + ': ' + name);
+        return cost;
+      });
+      if (new Set(row.linkedCosts).size !== linked.length) throw new BadRequestException('Custo repetido no SKU ' + row.sku + '.');
+      if (!coverable(row.marginPercent ?? null, linked)) {
+        throw new BadRequestException('No SKU ' + row.sku + ', a margem somada aos custos sobre a venda chega a 100%.');
+      }
       const supplier = row.supplier ? suppliers.find(item => item.name === row.supplier) : undefined;
       if (row.supplier && !supplier) throw new BadRequestException('Fornecedor desconhecido ou inativo no SKU ' + row.sku + ': ' + row.supplier);
       const quantity = inBase(unit, unit.familyId, row.quantity);
@@ -219,8 +253,9 @@ export class StockService {
           colorId: find('COR', row.color), departmentId: find('DEPARTAMENTO', row.department),
           minStock: row.minStock, marginPercent: row.marginPercent, salePrice: row.salePrice,
           lengthMm: row.lengthMm, widthMm: row.widthMm, heightMm: row.heightMm, diameterMm: row.diameterMm,
-          purchaseUrl: row.purchaseUrl, measures: measures.get(row.sku),
+          purchaseUrl: row.purchaseUrl, measures: measures.get(row.sku), printMinutes: row.printMinutes, printerId: printer?.id,
         },
+        linkedCosts: row.linkedCosts ?? [], printerName: printer?.name,
         quantity, cost, type, familyId: unit.familyId,
         // The expense is shown with the last purchase and stays out of the average.
         lastPurchase: row.purchaseDate || supplier || row.purchaseExpenses !== undefined ? {
@@ -257,7 +292,8 @@ export class StockService {
     return { items, recipes };
   }
 
-  previewInitial(data: Initial, userId: string) {
+  previewInitial(data: Initial, userId: string, registersCosts: boolean) {
+    if (data.costs.length && !registersCosts) throw new ForbiddenException(costAccess);
     distinctSkus(data.rows);
     return serial(this.db, async tx => {
       const { items } = await this.initialLookups(tx, data);
@@ -266,9 +302,10 @@ export class StockService {
       }));
       const recipes = data.recipes.map(row => ({ ...row, quantity: row.quantity.toFixed() }));
       const measures = data.measures.map(row => ({ ...row, value: row.value.toFixed() }));
-      const batch = await tx.initialImport.create({ data: { userId, data: { rows, recipes, measures } as unknown as Prisma.InputJsonValue } });
+      const costs = data.costs.map(row => ({ ...row, value: row.value.toFixed() }));
+      const batch = await tx.initialImport.create({ data: { userId, data: { rows, recipes, measures, costs } as unknown as Prisma.InputJsonValue } });
       return {
-        id: batch.id, recipes, measures,
+        id: batch.id, recipes, measures, costs,
         rows: rows.map((row, index) => {
           const { unitCost, totalCost, quantity } = data.rows[index];
           // Cost per declared unit, shown before confirming. The stored value is per base unit.
@@ -279,23 +316,38 @@ export class StockService {
     });
   }
 
-  confirmInitial(id: string, userId: string) {
+  confirmInitial(id: string, userId: string, registersCosts: boolean) {
     return serial(this.db, async tx => {
       const batch = await tx.initialImport.findFirst({ where: { id, userId } });
       if (!batch) throw new NotFoundException('Prévia não encontrada.');
       if (batch.confirmedAt) return { id, confirmedAt: batch.confirmedAt };
       // Previews created before the technical sheet stored only the list of rows.
       const data = parse(initialFields, Array.isArray(batch.data) ? { rows: batch.data } : batch.data);
+      if (data.costs.length && !registersCosts) throw new ForbiddenException(costAccess);
       const { items, recipes } = await this.initialLookups(tx, data);
+      // Costs of the batch come first, so the products can link to them.
+      if (data.costs.length) {
+        await tx.costItem.createMany({ data: data.costs });
+        auditChange(null, Object.fromEntries(data.costs.map(cost => ['Custo ' + cost.name, costSummary(cost)])));
+      }
+      const costIds = new Map((await tx.costItem.findMany({
+        where: { name: { in: items.flatMap(item => item.linkedCosts) } }, select: { id: true, name: true },
+      })).map(cost => [cost.name, cost.id]));
       const ids = new Map<string, string>();
       for (const item of items) {
         const product = await this.catalog.createProduct(tx, item.product);
         ids.set(product.sku, product.id);
-        const { minStock, marginPercent, salePrice } = item.product;
+        const { minStock, marginPercent, salePrice, printMinutes } = item.product;
+        if (item.linkedCosts.length) {
+          await tx.productCost.createMany({ data: item.linkedCosts.map(name => ({ productId: product.id, costItemId: costIds.get(name)! })) });
+        }
         auditChange(null, {
           ...(minStock ? { [product.sku + ' · estoque mínimo']: minStock } : {}),
           ...(marginPercent ? { [product.sku + ' · margem desejada (%)']: marginPercent } : {}),
           ...(salePrice ? { [product.sku + ' · preço de venda']: salePrice } : {}),
+          ...(printMinutes ? { [product.sku + ' · tempo por peça (min)']: printMinutes } : {}),
+          ...(item.printerName ? { [product.sku + ' · impressora']: item.printerName } : {}),
+          ...(item.linkedCosts.length ? { [product.sku + ' · custos vinculados']: [...item.linkedCosts].sort() } : {}),
         });
         if (!item.quantity.eq(0) || item.cost !== null) {
           await this.record(tx, product, item.quantity, 'INITIAL', userId, 'Carga inicial ' + id, item.cost);

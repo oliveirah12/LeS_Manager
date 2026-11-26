@@ -17,6 +17,8 @@ const hour = 60 * 60 * 1000;
 const publicFile = {
   id: true, originalName: true, mimeType: true, sizeBytes: true, sha256: true, createdAt: true, createdBy: { select: { name: true } },
 } as const;
+/** A file without any of these owners is pending: it waits for a save to link it, or leaves with the hourly maintenance. */
+const unowned = { product: { is: null }, productImage: { is: null }, purchaseDocument: { is: null }, companyLogo: { is: null } } satisfies Prisma.StoredFileWhereInput;
 const fileValues = (file: { originalName: string; mimeType: string; sizeBytes: number; sha256: string }) => ({
   Arquivo: file.originalName, Tipo: file.mimeType, 'Tamanho (bytes)': file.sizeBytes, 'SHA-256': file.sha256,
 });
@@ -59,6 +61,82 @@ export class FileService {
     return file;
   }
 
+  /**
+   * Keeps a file that has no owner yet: the product form sends it before the product is saved.
+   * Only the product save links it, and what is never linked leaves with the hourly maintenance.
+   */
+  async storePending(upload: Express.Multer.File, authorId: string, image: boolean) {
+    const { createdBy, ...file } = await this.store(upload, authorId, async () => undefined, image ? { content: matchesImageContent, message: productImageMessage } : undefined);
+    return { ...file, author: createdBy.name };
+  }
+
+  /**
+   * Links pending files to a product inside the product save. Only the person who sent a file can link it,
+   * and only while it has no owner. Returns the readable names before and after, for the audit.
+   */
+  async linkProductFiles(tx: Prisma.TransactionClient, productId: string, ids: string[], authorId: string) {
+    const current = await tx.storedFile.findMany({ where: { available: true, product: { productId } }, select: { originalName: true } });
+    const files = await this.claimPending(tx, ids, authorId);
+    await tx.productFile.createMany({ data: files.map(file => ({ fileId: file.id, productId })) });
+    const before = current.map(file => file.originalName).sort();
+    return { before, after: [...before, ...files.map(file => file.originalName)].sort() };
+  }
+
+  /**
+   * Makes a pending image the product image inside the product save. The bytes are checked again, so a file
+   * sent through the generic route never becomes an image. Purge `replaced` after the commit.
+   */
+  async linkProductImage(tx: Prisma.TransactionClient, productId: string, fileId: string, authorId: string) {
+    const file = await this.claimImage(tx, fileId, authorId);
+    const { imageFile } = await tx.product.findUniqueOrThrow({ where: { id: productId }, select: { imageFile: { select: { id: true, originalName: true } } } });
+    if (imageFile) await tx.storedFile.update({ where: { id: imageFile.id }, data: { available: false } });
+    await tx.product.update({ where: { id: productId }, data: { imageFileId: file.id } });
+    return { before: imageFile?.originalName ?? null, after: file.originalName, replaced: imageFile?.id ?? null };
+  }
+
+  /**
+   * Makes a pending image the company logo inside the letterhead save, or removes the logo with `null`.
+   * Purge `replaced` after the commit.
+   */
+  async linkCompanyLogo(tx: Prisma.TransactionClient, fileId: string | null, authorId: string) {
+    const file = fileId ? await this.claimImage(tx, fileId, authorId) : null;
+    const { logoFile } = await tx.companySettings.findUniqueOrThrow({ where: { id: 'default' }, select: { logoFile: { select: { id: true, originalName: true } } } });
+    if (logoFile) await tx.storedFile.update({ where: { id: logoFile.id }, data: { available: false } });
+    await tx.companySettings.update({ where: { id: 'default' }, data: { logoFileId: file?.id ?? null } });
+    return { before: logoFile?.originalName ?? null, after: file?.originalName ?? null, replaced: logoFile?.id ?? null };
+  }
+
+  /** Claims one pending file as an image. The bytes are checked again, so a file sent through the generic route never becomes an image. */
+  private async claimImage(tx: Prisma.TransactionClient, fileId: string, authorId: string) {
+    const [file] = await this.claimPending(tx, [fileId], authorId);
+    if (file.sizeBytes > productImageLimit || !matchesImageContent(file.originalName, await this.head(file.storageKey))) {
+      throw new UnsupportedMediaTypeException(productImageMessage);
+    }
+    return file;
+  }
+
+  private async claimPending(tx: Prisma.TransactionClient, ids: string[], authorId: string) {
+    const files = await tx.storedFile.findMany({
+      where: { id: { in: ids }, available: true, createdById: authorId, ...unowned },
+      select: { id: true, originalName: true, sizeBytes: true, storageKey: true },
+    });
+    if (files.length !== new Set(ids).size) throw new NotFoundException('Um arquivo enviado não está mais disponível. Envie de novo.');
+    return files;
+  }
+
+  /** The first bytes of a stored file, enough for the signature checks. */
+  private async head(key: string) {
+    const content = await this.storage.open(key);
+    let head = Buffer.alloc(0);
+    if (!content) return head;
+    for await (const chunk of content) {
+      head = Buffer.concat([head, chunk as Buffer]);
+      if (head.length >= 64) break;
+    }
+    content.destroy();
+    return head;
+  }
+
   /** The temporary file is gone after a successful save; on any failure this clears it. */
   discard(upload: Express.Multer.File) { return this.storage.discard(upload.path); }
 
@@ -75,11 +153,10 @@ export class FileService {
     }
   }
 
-  /** Finishes uploads and removals that a crash interrupted. */
+  /** Finishes uploads and removals that a crash interrupted, and clears pending files that no save linked. */
   async maintain() {
-    // An image is linked right after its upload, so a crash in between leaves a file without an owner.
     await this.db.storedFile.updateMany({
-      where: { available: true, updatedAt: { lt: new Date(Date.now() - hour) }, product: { is: null }, productImage: { is: null }, purchaseDocument: { is: null } },
+      where: { available: true, updatedAt: { lt: new Date(Date.now() - hour) }, ...unowned },
       data: { available: false },
     });
     const stale = await this.db.storedFile.findMany({ where: { available: false, updatedAt: { lt: new Date(Date.now() - hour) } }, select: { id: true } });
@@ -124,6 +201,8 @@ export class FileService {
   }
 
   openProductImage(productId: string) { return this.open({ productImage: { id: productId } }); }
+
+  openCompanyLogo() { return this.open({ companyLogo: { id: 'default' } }); }
 
   /** The new image is complete before it replaces the old one, so a failed upload keeps what was there. */
   async setProductImage(productId: string, upload: Express.Multer.File, authorId: string) {
@@ -189,6 +268,41 @@ export class FileMaintenance extends DailyTask {
 
   protected async run() {
     await this.files.maintain().catch(() => console.error('Falha na manutenção dos arquivos.'));
+  }
+}
+
+/**
+ * Uploads made before the product exists. Nothing is audited here: the file only enters the
+ * catalog when the product save links it, and that save records its name.
+ */
+@Controller('catalog/uploads')
+export class PendingUploadController {
+  constructor(@Inject(FileService) private files: FileService) {}
+
+  @Require('catalog:operate')
+  @Audit(false)
+  @Post('image')
+  @FileUpload(productImageLimit, { name: hasImageExtension, message: productImageMessage })
+  async image(@Req() request: Authenticated, @UploadedFile() file?: Express.Multer.File) {
+    if (!file) throw new BadRequestException('Envie uma imagem.');
+    try {
+      return await this.files.storePending(file, request.identity.id, true);
+    } finally {
+      await this.files.discard(file);
+    }
+  }
+
+  @Require('catalog:operate')
+  @Audit(false)
+  @Post('file')
+  @FileUpload(productFileLimit)
+  async file(@Req() request: Authenticated, @UploadedFile() file?: Express.Multer.File) {
+    if (!file) throw new BadRequestException('Envie um arquivo.');
+    try {
+      return await this.files.storePending(file, request.identity.id, false);
+    } finally {
+      await this.files.discard(file);
+    }
   }
 }
 

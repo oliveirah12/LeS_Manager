@@ -20,11 +20,13 @@ function legacy(rows) {
 
 test('the template has the load, technical sheet and list tabs with dropdowns', async () => {
   const workbook = await template();
-  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['Carga inicial', 'Ficha técnica', 'Medidas', 'Listas']);
-  const [load, recipes, measures, lists] = workbook.worksheets;
+  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['Carga inicial', 'Ficha técnica', 'Medidas', 'Custos', 'Listas']);
+  const [load, recipes, measures, costs, lists] = workbook.worksheets;
   assert.deepEqual(measures.getRow(1).values.slice(1), ['SKU', 'Nome', 'Valor', 'Unidade']);
   assert.equal(measures.getCell('D2').dataValidation, undefined);
-  assert.deepEqual(load.getRow(1).values.slice(20), ['Data da compra', 'Fornecedor', 'Despesas da compra']);
+  assert.deepEqual(load.getRow(1).values.slice(20), [
+    'Data da compra', 'Fornecedor', 'Despesas da compra', 'Tempo por peça (min)', 'Impressora', 'Custos vinculados',
+  ]);
   assert.deepEqual(load.getRow(1).values.slice(12, 20), [
     'Estoque mínimo', 'Margem (%)', 'Preço de venda', 'Comprimento (mm)', 'Largura (mm)', 'Altura (mm)', 'Diâmetro (mm)', 'URL de compra',
   ]);
@@ -34,6 +36,10 @@ test('the template has the load, technical sheet and list tabs with dropdowns', 
   assert.deepEqual(load.getCell('C2').dataValidation.formulae, ['Listas!$A$2:$A$3']);
   assert.deepEqual(recipes.getCell('D501').dataValidation.formulae, ['Listas!$B$2:$B$4']);
   assert.equal(load.getCell('H2').dataValidation, undefined);
+  assert.deepEqual(costs.getRow(1).values.slice(1), ['Descrição', 'Tipo do custo', 'Base do %', 'Valor']);
+  assert.deepEqual([lists.getCell('D1').value, lists.getCell('E3').value], ['Tipo do custo', 'Venda']);
+  assert.deepEqual(costs.getCell('B2').dataValidation.formulae, ['Listas!$D$2:$D$3']);
+  assert.equal(costs.getCell('D2').dataValidation, undefined);
 });
 
 test('an empty template with dropdowns reads as no rows', async () => {
@@ -50,6 +56,44 @@ test('reads the new columns and the technical sheet', async () => {
   assert.equal(data.rows[1].wastePercent, '5');
   assert.deepEqual(data.recipes, [{ product: 'peca', input: 'pla', quantity: '120', unit: 'g' }]);
   assert.equal(initialFields.safeParse(data).success, true);
+});
+
+test('reads print time, printer and linked costs, also from a stored preview', async () => {
+  const workbook = await template({ Tipo: ['Impresso 3D'], Unidade: ['un'], Impressora: ['Bambu A1'] });
+  const load = workbook.worksheets[0];
+  const column = header => load.getRow(1).values.indexOf(header);
+  load.getRow(2).values = ['peca', 'Peça', 'Impresso 3D', 'un', 0];
+  load.getCell(2, column('Tempo por peça (min)')).value = 45.5;
+  load.getCell(2, column('Impressora')).value = 'Bambu A1';
+  load.getCell(2, column('Custos vinculados')).value = 'Embalagem; Taxa da loja ;';
+  assert.deepEqual(load.getCell(2, column('Impressora')).dataValidation.formulae.length, 1);
+  const data = await workbookRows('initial', await asFile(workbook));
+  assert.deepEqual([data.rows[0].printMinutes, data.rows[0].printer, data.rows[0].linkedCosts], ['45.5', 'Bambu A1', 'Embalagem; Taxa da loja ;']);
+  const parsed = initialFields.parse(data);
+  assert.deepEqual([parsed.rows[0].printMinutes.toFixed(), parsed.rows[0].linkedCosts], ['45.5', ['Embalagem', 'Taxa da loja']]);
+  const stored = JSON.parse(JSON.stringify({ ...data, rows: [{ ...data.rows[0], linkedCosts: parsed.rows[0].linkedCosts }] }));
+  assert.deepEqual(initialFields.parse(stored).rows[0].linkedCosts, ['Embalagem', 'Taxa da loja']);
+  assert.equal(initialFields.safeParse({ rows: [{ ...data.rows[0], printMinutes: '0' }] }).success, false);
+});
+
+test('reads the cost tab by its labels and applies the cost rules', async () => {
+  const workbook = await template();
+  workbook.worksheets[0].getRow(2).values = ['pla', 'PLA', 'Filamento', 'kg', 0];
+  const costs = workbook.getWorksheet('Custos');
+  costs.getRow(2).values = ['Embalagem', 'Valor', 'Venda', 2.5];
+  costs.getRow(3).values = ['Imposto', 'Percentual', 'Venda', 6];
+  costs.getRow(4).values = ['Perda', 'Percentual', null, '3'];
+  const data = await workbookRows('initial', await asFile(workbook));
+  assert.deepEqual(data.costs[0], { name: 'Embalagem', mode: 'Valor', base: 'Venda', value: '2.5' });
+  const parsed = initialFields.parse(data);
+  assert.deepEqual(parsed.costs.map(cost => [cost.name, cost.mode, cost.base, cost.value.toFixed()]), [
+    ['Embalagem', 'VALUE', 'COST', '2.5'], ['Imposto', 'PERCENT', 'SALE', '6'], ['Perda', 'PERCENT', 'COST', '3'],
+  ]);
+  // A stored preview keeps the ids, and they read back the same way.
+  const stored = JSON.parse(JSON.stringify({ ...data, costs: parsed.costs.map(cost => ({ ...cost, value: cost.value.toFixed() })) }));
+  assert.deepEqual(initialFields.parse(stored).costs.map(cost => cost.base), ['COST', 'SALE', 'COST']);
+  costs.getRow(5).values = ['Taxa', 'Outro', null, 1];
+  assert.equal(initialFields.safeParse(await workbookRows('initial', await asFile(workbook))).success, false);
 });
 
 test('an older file keeps Custo as the cost per declared unit', async () => {

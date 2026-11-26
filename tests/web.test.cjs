@@ -3,7 +3,7 @@ const { test } = require('node:test');
 // tsx loads the panel's TypeScript directly, without a separate build.
 const { require: load } = require('tsx/cjs/api');
 const {
-  accessible, applyFilters, brl, compareDecimal, decimal, displayDate, fileSize, marginShortfall, nextSort, pageFromHash, sortParam, sortRows, suggestedConsumption, suggestedPrice, yesNo,
+  accessible, applyFilters, brl, compareDecimal, decimal, displayDate, fileSize, marginShortfall, nextSort, pageFromHash, sortParam, sortRows, suggestedConsumption, suggestedMinutes, suggestedPrice, yesNo,
 } = load('../web/format.ts', __filename);
 const { clashingPeriods, dayPeriods, localValue, monthDays } = load('../web/slots.ts', __filename);
 const { Prisma } = require('@prisma/client');
@@ -20,7 +20,7 @@ test('the products line adds exact quantities only within one unit', () => {
 });
 
 const { orderReport } = load('../web/order-report.ts', __filename);
-const { renderPdf, wrapText } = load('../web/pdf.ts', __filename);
+const { fitImage, imageKind, renderPdf, wrapText } = load('../web/pdf.ts', __filename);
 const { PDFDocument } = require('pdf-lib');
 const period = (number, start, end) => ({ number, start: start.toISOString(), end: end.toISOString() });
 const reportOrder = (values = {}) => ({
@@ -47,6 +47,92 @@ test('the PDF keeps long orders on new pages and survives characters outside its
   const bytes = await renderPdf(orderReport(reportOrder({ items }), 'Concluída', true, []));
   assert.equal(Buffer.from(bytes.slice(0, 4)).toString(), '%PDF');
   assert.ok((await PDFDocument.load(bytes)).getPageCount() > 1);
+});
+
+test('report images are told apart by their bytes and fit without stretching', () => {
+  const bytes = text => new Uint8Array(Buffer.from(text, 'latin1'));
+  assert.equal(imageKind(bytes('\x89PNG\r\n\x1a\n')), 'png');
+  assert.equal(imageKind(bytes('\xff\xd8\xff\xe0')), 'jpg');
+  assert.equal(imageKind(bytes('RIFF\0\0\0\0WEBPVP8 ')), 'webp');
+  assert.equal(imageKind(bytes('GIF89a')), null);
+  assert.deepEqual(fitImage(200, 50, 120, 56), { width: 120, height: 30 });
+  assert.deepEqual(fitImage(28, 112, 120, 56), { width: 14, height: 56 });
+  assert.deepEqual(fitImage(20, 10, 120, 56), { width: 20, height: 10 });
+});
+
+test('the branded PDF carries the logo, section images, the highlighted total and the footer', async () => {
+  const png = { kind: 'png', bytes: new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')) };
+  const broken = { kind: 'jpg', bytes: new Uint8Array([0xff, 0xd8, 0xff, 0]) };
+  const report = {
+    title: 'Orçamento', status: 'Exemplo', generated: 'Hoje', footer: 'Obrigado pela preferência\nPix: 00.000.000/0001-00',
+    brand: { name: 'Lar&Stock3D', tagline: 'Impressão 3D', contact: '(11) 90000-0000\ncontato@exemplo.com', logo: png },
+    sections: [
+      { heading: 'Produto', image: png, notes: ['Estatueta'] },
+      { heading: 'Imagem danificada', image: broken },
+      { heading: 'Valores', total: { lines: [['Valor por unidade', 'R$ 16,00'], ['Quantidade', '32']], label: 'VALOR TOTAL', value: 'R$ 512,00' } },
+    ],
+  };
+  const bytes = await renderPdf(report);
+  const doc = await PDFDocument.load(bytes);
+  assert.equal(doc.getPageCount(), 1);
+  // The image appears twice, in the letterhead and in the section; its transparency travels as a mask. The damaged one is skipped.
+  const { PDFName } = require('pdf-lib');
+  const images = doc.context.enumerateIndirectObjects().filter(([, object]) => object.dict?.get(PDFName.of('Subtype'))?.toString() === '/Image' && object.dict.has(PDFName.of('SMask')));
+  assert.equal(images.length, 2);
+  // Without a brand the plain internal header stays as it was.
+  assert.equal(Buffer.from((await renderPdf({ ...report, brand: undefined, sections: [] })).slice(0, 4)).toString(), '%PDF');
+});
+
+const { quoteReport } = load('../web/quote-report.ts', __filename);
+const fullQuote = (values = {}) => ({
+  id: 'q', number: 7, status: 'SENT', actions: [], customerName: 'Maria Cliente', customerContact: '(11) 98888-0000', title: 'Estatueta decorativa',
+  description: 'Peça pintada à mão', details: [{ label: 'Tamanho', value: '15 cm' }, { label: 'Cores', value: 'Dourado' }],
+  printPlates: 2, estimatedMinutes: 330, deliveryDays: 7, validUntil: '2026-12-10', expired: false, notes: 'Cliente pediu urgência interna',
+  printer: { id: 'p', name: 'Impressora Secreta' }, user: { name: 'Vendedor' }, createdAt: '2026-11-25T12:00:00.000Z', sentAt: null, decidedAt: null, productionOrder: null,
+  discountPercent: '10', paymentMethodId: 'm', paymentName: 'Pix', feePercent: '3.5', customFee: false,
+  items: [{ productId: 'x', sku: 'EST-01', name: 'Estatueta', symbol: 'un', imageFileId: null, quantity: '32', salePrice: '16', total: '512', marginPercent: '41.37' }],
+  expenses: [{ title: 'Frete do insumo', value: '9.91' }],
+  sale: { gross: '512', discount: '51.2', total: '460.8', fee: '16.128', net: '444.672', profit: '213.47', marginPercent: '46.33' },
+  budget: {
+    machineCost: '7.77', expenseCost: '9.91', materialCost: '221.13', totalCost: '238.81', partialCost: false, missingCost: [],
+    items: [{ productId: 'x', totalCost: '238.81', unitCost: '7.4628', pricedCost: '8.1234', suggestedPrice: '13.97', realMargin: '49.22', belowTargetMargin: false }],
+  },
+  ...values,
+});
+const letterhead = { brand: { name: 'Lar&Stock3D', tagline: 'Impressão 3D' }, footer: 'Obrigado pela preferência' };
+
+test('the customer quote shows the sale and never a cost, input, margin or internal note', async () => {
+  const report = quoteReport(fullQuote(), letterhead, null, new Date('2026-11-25T12:00:00Z'));
+  const text = JSON.stringify(report);
+  for (const hidden of ['Custo', 'custo', 'Margem', 'margem', 'Insumo', 'insumo', 'Resultado', 'Líquido', 'Taxa', 'Frete do insumo', 'Impressora Secreta', 'urgência interna',
+    '238', '221', '7,77', '7,46', '13,97', '41,37', '46,33', '49,22', '213', '444', '16,13', '9,91']) {
+    assert.ok(!text.includes(hidden), 'O PDF do cliente mostrou ' + hidden);
+  }
+  const pedido = report.sections.find(section => section.heading === 'Pedido').table.rows;
+  assert.deepEqual(pedido, [
+    ['Produto', 'Estatueta'], ['Tamanho', '15 cm'], ['Cores', 'Dourado'], ['Quantidade', '32 un'], ['Tempo estimado', '2 placas · 5 h 30 min'], ['Prazo de entrega', '7 dias'],
+  ]);
+  const total = report.sections.find(section => section.total).total;
+  assert.equal(total.label, 'VALOR TOTAL');
+  assert.match(total.value, /460,80/);
+  assert.deepEqual(total.lines.map(([label]) => label), ['Valor por unidade', 'Quantidade', 'Subtotal', 'Desconto (10%)']);
+  assert.equal(report.status, 'Válido até 10/12/2026');
+  assert.equal(report.footer, 'Obrigado pela preferência');
+  assert.equal(Buffer.from((await renderPdf(report)).slice(0, 4)).toString(), '%PDF');
+});
+
+test('a quote with several products lists each line, and no discount means no discount line', () => {
+  const items = [
+    { productId: 'a', sku: 'A', name: 'Vaso', symbol: 'un', imageFileId: null, quantity: '2', salePrice: '10.5', total: '21' },
+    { productId: 'b', sku: 'B', name: 'Placa', symbol: 'un', imageFileId: null, quantity: '1', salePrice: '30', total: '30' },
+  ];
+  const report = quoteReport(fullQuote({ items, discountPercent: '0', printPlates: null, deliveryDays: null, sale: { gross: '51', discount: '0', total: '51' } }), letterhead, null);
+  const rows = report.sections.find(section => section.heading === 'Pedido').table.rows;
+  assert.deepEqual(rows.slice(0, 2), [['Produto 1', 'Vaso · 2 un'], ['Produto 2', 'Placa · 1 un']]);
+  assert.ok(!rows.some(([label]) => label === 'Prazo de entrega' || label === 'Quantidade'));
+  const total = report.sections.find(section => section.total).total;
+  assert.equal(total.lines.length, 2);
+  assert.ok(!total.lines.some(([label]) => label.startsWith('Desconto')));
 });
 
 test('text wraps by words and breaks a word only when it is too long', () => {
@@ -93,6 +179,27 @@ test('the price preview matches the API rule exactly', () => {
   }
   assert.equal(suggestedPrice('60', '40,5'), '100.85');
   for (const [cost, margin] of [[null, '40'], ['0', '40'], ['60', '100'], ['60', '1.234'], ['60', 'x'], ['60', '']]) assert.equal(suggestedPrice(cost, margin), null);
+});
+
+test('the price preview with registered costs matches the API rule', () => {
+  const costs = [{ mode: 'VALUE', base: 'COST', value: '2.5' }, { mode: 'PERCENT', base: 'COST', value: '3.333' }, { mode: 'PERCENT', base: 'SALE', value: '12' }];
+  const exact = costs.map(row => ({ ...row, value: new Prisma.Decimal(row.value) }));
+  for (const [cost, margin] of [['60', '40'], ['20', '30'], ['0.0853', '40'], ['7.77', '12.34'], ['123456.789012345678', '0.01']]) {
+    const api = salePricing(null, new Prisma.Decimal(cost), new Prisma.Decimal(margin), exact).suggestedPrice.toFixed();
+    assert.equal(suggestedPrice(cost, margin, costs), api, cost + ' / ' + margin);
+    assert.equal(marginShortfall(api, cost, margin, costs), null, cost + ' / ' + margin);
+  }
+  assert.equal(suggestedPrice('60', '40', [{ mode: 'PERCENT', base: 'SALE', value: '60' }]), null);
+  assert.equal(marginShortfall('100', '60', '30', [{ mode: 'PERCENT', base: 'SALE', value: '10' }]), null);
+  assert.equal(marginShortfall('99.99', '60', '30', [{ mode: 'PERCENT', base: 'SALE', value: '10' }]), '29.99');
+});
+
+test('the order time comes from the recipes only when every product has one', () => {
+  assert.equal(suggestedMinutes([{ quantity: '32', printMinutes: '15' }, { quantity: '2,5', printMinutes: '10.2' }]), 506);
+  assert.equal(suggestedMinutes([{ quantity: '3', printMinutes: '30' }]), 90);
+  assert.equal(suggestedMinutes([{ quantity: '3', printMinutes: '30' }, { quantity: '1', printMinutes: null }]), null);
+  assert.equal(suggestedMinutes([{ quantity: '', printMinutes: '30' }]), null);
+  assert.equal(suggestedMinutes([]), null);
 });
 
 test('the margin warning shows the real margin without rounding it up', () => {

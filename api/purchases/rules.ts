@@ -38,7 +38,7 @@ export function mergeLines(lines: (PurchaseLine & { baseUnit: string })[]): Merg
   return [...merged.values()];
 }
 
-export type CostInput = { title: string; mode: 'VALUE' | 'PERCENT'; value: Prisma.Decimal; split: 'VALUE' | 'QUANTITY' };
+export type CostInput = { costItemId?: string | null; title: string; mode: 'VALUE' | 'PERCENT'; value: Prisma.Decimal; split: 'VALUE' | 'QUANTITY' };
 
 /** Resolves each extra cost and how it falls on the items. Base quantities of different families cannot be compared. */
 export function splitCosts(items: Pick<PurchaseLine, 'familyId' | 'quantity' | 'total'>[], costs: CostInput[]) {

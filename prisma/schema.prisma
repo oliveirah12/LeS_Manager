@@ -33,6 +33,12 @@ enum PurchaseCostMode {
   PERCENT
 }
 
+/// What a percentage cost is applied to when pricing a product. A fixed value ignores it.
+enum CostBase {
+  COST
+  SALE
+}
+
 enum PurchaseCostSplit {
   VALUE
   QUANTITY
@@ -48,6 +54,13 @@ enum ProductionStatus {
   PRINTING
   DONE
   CANCELED
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
 }
 
 model Profile {
@@ -78,6 +91,7 @@ model User {
   purchases         Purchase[]       @relation("PurchaseAuthor")
   purchaseReversals Purchase[]       @relation("PurchaseReverser")
   productionRevisions ProductionRevision[]
+  quotes            Quote[]
 }
 
 model Session {
@@ -96,6 +110,8 @@ model Reference {
   brands      Product[]     @relation("ProductBrand")
   colors      Product[]     @relation("ProductColor")
   departments Product[]     @relation("ProductDepartment")
+  colorInputGroups ColorInput[] @relation("ColorInputGroup")
+  colorInputColors ColorInput[] @relation("ColorInputColor")
   @@unique([kind, name])
 }
 
@@ -103,6 +119,7 @@ model UnitFamily {
   id    String @id @default(uuid())
   name  String @unique
   units Unit[]
+  colorInputs ColorInput[]
 }
 
 model Unit {
@@ -122,6 +139,7 @@ model ProductType {
   isInput        Boolean   @default(false)
   isManufactured Boolean   @default(false)
   products       Product[]
+  colorInputs    ColorInput[]
 }
 
 model Product {
@@ -153,6 +171,10 @@ model Product {
   active        Boolean         @default(true)
   revision      Int             @default(0)
   wastePercent  Decimal         @default(0) @db.Decimal(5, 2)
+  /// Print time of one piece, in minutes, and the printer that prices it. Both come from the recipe.
+  printMinutes  Decimal?        @db.Decimal(12, 2)
+  printerId     String?
+  printer       Printer?        @relation(fields: [printerId], references: [id])
   lengthMm      Decimal?        @db.Decimal(30, 12)
   widthMm       Decimal?        @db.Decimal(30, 12)
   heightMm      Decimal?        @db.Decimal(30, 12)
@@ -165,6 +187,7 @@ model Product {
   kitComponents KitComponent[]
   inventoryRows InventoryRow[]
   recipe        ProductInput[]  @relation("Recipe")
+  colorRecipe   ProductColorInput[]
   usedInRecipes ProductInput[]  @relation("RecipeInput")
   productionItems  ProductionItem[]
   productionInputs ProductionConsumption[] @relation("ConsumptionInput")
@@ -172,6 +195,18 @@ model Product {
   productionExpenses ProductionExpense[]
   files         ProductFile[]
   purchaseItems PurchaseItem[]
+  costs         ProductCost[]
+  quoteItems    QuoteItem[]
+}
+
+/// Registered cost that prices a product. The product reads its current value, so editing the cost reprices every product.
+model ProductCost {
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  costItemId String
+  costItem   CostItem @relation(fields: [costItemId], references: [id], onDelete: Restrict)
+  @@id([productId, costItemId])
+  @@index([costItemId])
 }
 
 /// Extra measure of a product, such as thread pitch or nozzle size. It has no meaning without the product.
@@ -202,6 +237,7 @@ model StoredFile {
   product      ProductFile?
   productImage Product?     @relation("ProductImage")
   purchaseDocument PurchaseDocument?
+  companyLogo  CompanySettings? @relation("CompanyLogo")
   @@index([available, updatedAt])
 }
 
@@ -225,6 +261,36 @@ model ProductInput {
   @@index([inputId])
 }
 
+/**
+ * Any active input of this type, material group and color, in this unit family. Members are derived, never linked,
+ * so a brand bought later already fills the recipes. The migration keeps it unique per type, group and color, an empty group included.
+ */
+model ColorInput {
+  id          String              @id @default(uuid())
+  typeId      String
+  type        ProductType         @relation(fields: [typeId], references: [id])
+  groupId     String?
+  group       Reference?          @relation("ColorInputGroup", fields: [groupId], references: [id], onDelete: Restrict)
+  colorId     String
+  color       Reference           @relation("ColorInputColor", fields: [colorId], references: [id])
+  familyId    String
+  family      UnitFamily          @relation(fields: [familyId], references: [id])
+  recipes     ProductColorInput[]
+  consumption ProductionConsumption[]
+  @@index([colorId])
+}
+
+/// Recipe line that accepts any brand of a color, in the base unit of its family.
+model ProductColorInput {
+  productId    String
+  product      Product    @relation(fields: [productId], references: [id])
+  colorInputId String
+  colorInput   ColorInput @relation(fields: [colorInputId], references: [id])
+  quantity     Decimal    @db.Decimal(30, 12)
+  @@id([productId, colorInputId])
+  @@index([colorInputId])
+}
+
 model Printer {
   id         String  @id @default(uuid())
   name       String  @unique
@@ -232,12 +298,26 @@ model Printer {
   hourlyCost Decimal @db.Decimal(30, 12)
   active     Boolean @default(true)
   orders     ProductionOrder[]
+  products   Product[]
+  quotes     Quote[]
 }
 
 /// Single row with the values shared by every production order.
 model ProductionSettings {
   id         String  @id @default("default")
   energyRate Decimal @default(0) @db.Decimal(30, 12)
+}
+
+/// Single row with the company letterhead printed on the documents sent to customers.
+model CompanySettings {
+  id                String      @id @default("default")
+  name              String      @default("")
+  tagline           String?
+  footer            String?
+  contact           String?
+  logoFileId        String?     @unique
+  logoFile          StoredFile? @relation("CompanyLogo", fields: [logoFileId], references: [id], onDelete: SetNull)
+  quoteValidityDays Int         @default(15)
 }
 
 /// A print job. Machine values and costs are frozen when it finishes, so later changes never rewrite it.
@@ -282,6 +362,7 @@ model ProductionOrder {
   expenses         ProductionExpense[]
   items            ProductionItem[]
   movements        Movement[]
+  quote            Quote?
   @@index([status])
   @@index([printerId])
   @@index([paymentMethodId])
@@ -289,6 +370,66 @@ model ProductionOrder {
 
 /// One audited correction of a finished order. Original movements never change: differences become new movements.
 /// costInStock went into the current average, and costIssued belongs to pieces that had already left and stays here.
+/// A proposal to a customer. Nothing moves in stock or in the agenda until it is approved, when a planned order is created from it.
+/// Costs are never stored here: they are estimated on every read, like the budget of a planned order.
+model Quote {
+  id                String        @id @default(uuid())
+  number            Int           @unique @default(autoincrement())
+  status            QuoteStatus   @default(DRAFT)
+  customerName      String
+  customerContact   String?
+  title             String
+  description       String?
+  /// Free label and value lines shown to the customer, such as size, colors and personalization.
+  details           Json          @default("[]")
+  printPlates       Int?
+  estimatedMinutes  Int
+  deliveryDays      Int?
+  validUntil        DateTime      @db.Date
+  printerId         String
+  printer           Printer       @relation(fields: [printerId], references: [id])
+  discountPercent   Decimal       @default(0) @db.Decimal(5, 2)
+  paymentMethodId   String?
+  paymentMethod     PaymentMethod? @relation(fields: [paymentMethodId], references: [id])
+  feePercent        Decimal?      @db.Decimal(5, 2)
+  notes             String?
+  userId            String
+  user              User          @relation(fields: [userId], references: [id])
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  sentAt            DateTime?
+  decidedAt         DateTime?
+  /// Set on approval. The quote is locked from then on.
+  productionOrderId String?       @unique
+  productionOrder   ProductionOrder? @relation(fields: [productionOrderId], references: [id])
+  items             QuoteItem[]
+  expenses          QuoteExpense[]
+  @@index([status])
+  @@index([createdAt])
+}
+
+model QuoteItem {
+  quoteId       String
+  quote         Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id])
+  quantity      Decimal  @db.Decimal(30, 12)
+  salePrice     Decimal  @db.Decimal(30, 12)
+  marginPercent Decimal? @db.Decimal(5, 2)
+  @@id([quoteId, productId])
+  @@index([productId])
+}
+
+/// Expenses typed for this quote only. Purchase expenses of the inputs are suggested by the consumption, as in the order.
+model QuoteExpense {
+  id      String  @id @default(uuid())
+  quoteId String
+  quote   Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  title   String
+  value   Decimal @db.Decimal(30, 12)
+  @@index([quoteId])
+}
+
 model ProductionRevision {
   id          String          @id @default(uuid())
   orderId     String
@@ -307,12 +448,25 @@ model ProductionRevision {
 }
 
 /// How a sale is paid. The optional fee lowers the net value and the margin, never the cost.
+/// A reusable extra cost. Purchases copy its title, mode and value; products will read its current value.
+model CostItem {
+  id            String           @id @default(uuid())
+  name          String           @unique
+  mode          PurchaseCostMode
+  base          CostBase         @default(COST)
+  value         Decimal          @db.Decimal(30, 12)
+  active        Boolean          @default(true)
+  purchaseCosts PurchaseCost[]
+  products      ProductCost[]
+}
+
 model PaymentMethod {
   id         String            @id @default(uuid())
   name       String            @unique
   feePercent Decimal?          @db.Decimal(5, 2)
   active     Boolean           @default(true)
   orders     ProductionOrder[]
+  quotes     Quote[]
 }
 
 model ProductionItem {
@@ -344,12 +498,16 @@ model ProductionConsumption {
   /// Recipe input this line replaced in a planned order. Empty when it is the recipe's own input.
   originalInputId String?
   originalInput   Product? @relation("ConsumptionOriginal", fields: [originalInputId], references: [id], onDelete: Restrict)
+  /// Color of the recipe this brand fills. Several brands of one color are several lines.
+  colorInputId    String?
+  colorInput      ColorInput? @relation(fields: [colorInputId], references: [id], onDelete: Restrict)
   planned   Decimal        @db.Decimal(30, 12)
   used      Decimal?       @db.Decimal(30, 12)
   unitCost  Decimal?       @db.Decimal(30, 12)
   @@id([orderId, productId, inputId])
   @@index([inputId])
   @@index([originalInputId])
+  @@index([colorInputId])
 }
 
 /// Extra cost of an order. An INPUT row follows the last purchase expense × consumption until someone types a value.
@@ -481,6 +639,9 @@ model PurchaseCost {
   id         String             @id @default(uuid())
   purchaseId String
   purchase   Purchase           @relation(fields: [purchaseId], references: [id])
+  /// Reference only: the values below are copies, so editing the registered cost never changes the purchase.
+  costItemId String?
+  costItem   CostItem?          @relation(fields: [costItemId], references: [id], onDelete: Restrict)
   title      String
   mode       PurchaseCostMode
   value      Decimal            @db.Decimal(30, 12)
@@ -488,6 +649,7 @@ model PurchaseCost {
   amount     Decimal            @db.Decimal(30, 12)
   shares     PurchaseItemCost[]
   @@index([purchaseId])
+  @@index([costItemId])
 }
 
 /// How much of one extra cost fell on one item.

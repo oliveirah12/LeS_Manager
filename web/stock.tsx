@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeftRight, ClipboardList, Download, Eye, FileSpreadsheet, PackageMinus, Plus, SlidersHorizontal } from 'lucide-react';
-import { CommercialForm } from './product-form';
+import { costBaseLabel, CostItem, costTypeLabel, costValue } from './costs';
+import { PricingSection } from './pricing';
 import {
   api, Badge, baseUnit, brl, by, dateTime, Field, fields, FileField, Filters, Form, Kit, Loading, matches, message, Modal, ModalForm, PageActions,
   Product, productOptions, quantity, SearchInput, Segmented, Select, sortParam, SortState, StockKit, StockProduct, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
@@ -16,6 +17,7 @@ type InitialPreview = {
   rows: ({ sku: string; name: string; unit: string; quantity: string; typeName: string; totalCost?: string; declaredCost: string | null; wastePercent?: string } & InitialRegistry)[];
   recipes: { product: string; input: string; quantity: string; unit: string }[];
   measures: { sku: string; name: string; value: string; unit: string }[];
+  costs: Pick<CostItem, 'name' | 'mode' | 'base' | 'value'>[];
 };
 type InitialRegistry = {
   minStock?: string; marginPercent?: string; salePrice?: string; lengthMm?: string; widthMm?: string; heightMm?: string; diameterMm?: string; purchaseUrl?: string;
@@ -55,8 +57,8 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
       {tab === 'history' && <HistoryTab key={version} products={data.products} />}
     </>}
 
-    {dialog?.kind === 'settings' && <Modal title={'Estoque e venda de ' + dialog.product.sku} subtitle={dialog.product.name} close={() => setDialog(undefined)}>
-      <CommercialForm closeOnSave product={{ ...dialog.product, symbol: baseUnit(dialog.product).symbol }} saved={() => saved('Estoque e venda salvos.')} />
+    {dialog?.kind === 'settings' && <Modal wide title={'Formação de preço de ' + dialog.product.sku} subtitle={dialog.product.name} close={() => setDialog(undefined)}>
+      <PricingSection closeOnSave id={dialog.product.id} saved={() => saved('Preço e estoque salvos.')} />
     </Modal>}
     {data && dialog?.kind === 'movement' && <Modal title="Registrar movimentação" close={() => setDialog(undefined)}>
       <MovementForm data={data} initial={dialog.product} saved={saved} /></Modal>}
@@ -341,6 +343,11 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
       <Table columns={['SKU', 'Medida', { label: 'Valor', end: true }]}
         rows={preview.measures.map(row => [row.sku, row.name, by(row.value, quantity(row.value) + ' ' + row.unit)])} />
     </>}
+    {preview.costs.length > 0 && <>
+      <h3>Custos cadastrados</h3>
+      <Table columns={['Custo', 'Tipo', 'Base do %', { label: 'Valor', end: true }]}
+        rows={preview.costs.map(row => [row.name, costTypeLabel(row), costBaseLabel(row), by(row.value, costValue(row))])} />
+    </>}
     <Form key={preview.id} label="Confirmar carga inicial" extra={<button type="button" className="btn secondary" onClick={() => setPreview(undefined)}>Voltar</button>}
       action={async () => {
         await api('stock/initial/' + preview.id + '/confirm', {});
@@ -350,7 +357,7 @@ function InitialImport({ saved }: { saved: (text: string) => Promise<void> }) {
   </div>;
   return <div className="stack">
     <div className="info">Use SKUs novos e os tipos, unidades e classificações da aba Listas. Informe o custo total da linha, e o sistema calcula o valor por unidade.
-      Para produtos fabricados, preencha a aba Ficha técnica com o consumo de uma unidade. Mínimo, margem, preço, dimensões, URL, dados da compra e a aba Medidas são opcionais. As despesas da compra ficam fora do custo médio.</div>
+      Para produtos fabricados, preencha a aba Ficha técnica com o consumo de uma unidade. Mínimo, margem, preço, dimensões, URL, dados da compra e a aba Medidas são opcionais. As despesas da compra ficam fora do custo médio. Na aba Custos, cadastre custos reutilizáveis, como embalagem e impostos, com descrições novas. Para fabricados, informe também o tempo por peça e a impressora. Em Custos vinculados, liste os custos do produto separados por ponto e vírgula.</div>
     <a className="btn secondary" style={{ alignSelf: 'flex-start' }} href="/api/stock/initial/template"><Download size={16} aria-hidden="true" />Baixar modelo</a>
     <Upload action={async file => { setPreview(undefined); setPreview(await api<InitialPreview>('stock/initial/preview', file)); }} />
   </div>;

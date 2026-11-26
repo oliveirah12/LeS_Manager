@@ -197,6 +197,9 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .preview-box { display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--sunken); }
 .component-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
 .purchase-row { grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr)) auto; }
+.cost-row { grid-template-columns: repeat(2, minmax(0, 1.5fr)) repeat(3, minmax(0, 1fr)) auto; }
+.purchase-pricing { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.purchase-pricing label:not(.check) { flex: 0 1 220px; }
 
 /* ---------- Feedback ---------- */
 .alert, .success, .info {

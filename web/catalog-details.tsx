@@ -15,7 +15,7 @@ type ProductDetails = {
     quantity: string; reserved: string; available: string; currentCost: string | null; value: string; lastPurchaseCost: string | null;
     lastPurchase: { date: string | null; unitExpense: string | null; supplier: string | null; number: number | null; expenses: { title: string; amount: string; unit: string }[] };
     minStock: string | null; belowMinimum: boolean; salePrice: string | null; margin: { profit: string; percent: string } | null;
-    marginPercent: string | null; suggestedPrice: string | null; belowTargetMargin: boolean;
+    marginPercent: string | null; suggestedPrice: string | null; belowTargetMargin: boolean; priceCost: string | null; linkedCosts: { name: string; active: boolean }[];
     lastMovement: { kind: string; quantity: string; createdAt: string } | null;
     purchases: { quantity: string; unitCost: string | null; createdAt: string }[];
     estimate: { unitCost: string; partialCost: boolean; producible: string; limiting: string } | null;
@@ -69,6 +69,8 @@ function ProductPanel({ id }: { id: string }) {
         <div><dt>Preço de venda</dt><dd>{brl(stock.salePrice)}</dd></div>
         <div><dt>Margem</dt><dd>{stock.margin ? quantity(stock.margin.percent) + '% · ' + brl(stock.margin.profit) + ' por ' + symbol : '—'}{stock.belowTargetMargin && <> <Badge tone="warn">Abaixo da desejada</Badge></>}</dd></div>
         <div><dt>Margem desejada</dt><dd>{stock.marginPercent === null ? '—' : quantity(stock.marginPercent) + '%'}</dd></div>
+        <div><dt>Custo para o preço</dt><dd>{brl(stock.priceCost)}{stock.linkedCosts.length > 0 && <span className="hint" style={{ display: 'block' }}>
+          Com {stock.linkedCosts.map(cost => cost.name + (cost.active ? '' : ' (inativo)')).join(', ')}</span>}</dd></div>
         <div><dt>Preço sugerido</dt><dd>{brl(stock.suggestedPrice)}</dd></div>
         <div><dt>Última movimentação</dt><dd>{stock.lastMovement
           ? (movementNames[stock.lastMovement.kind] ?? stock.lastMovement.kind) + ' · ' + dateTime(stock.lastMovement.createdAt) : '—'}</dd></div>
@@ -110,7 +112,7 @@ function ProductPanel({ id }: { id: string }) {
       <Table responsive={false} columns={['Data', { label: 'Quantidade', end: true }, { label: 'Custo unitário', end: true }]}
         rows={stock.purchases.map(row => [by(Date.parse(row.createdAt), dateTime(row.createdAt)), by(row.quantity, amount(row.quantity)), by(row.unitCost, brl(row.unitCost))])} />
     </>}
-    <ProductFiles productId={id} edit={false} />
+    <ProductFiles productId={id} />
   </div>;
 }
 

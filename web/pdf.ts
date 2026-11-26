@@ -1,8 +1,53 @@
 export type ReportColumn = { label: string; end?: boolean; weight?: number };
+/** An image ready for the PDF. Only PNG and JPG embed directly; `loadReportImage` converts the rest. */
+export type ReportImage = { bytes: Uint8Array; kind: 'png' | 'jpg' };
+/** Lines above the highlighted value, such as unit price and discount, then the value itself. */
+export type ReportTotal = { lines?: [string, string][]; label: string; value: string };
 export type ReportSection = {
   heading: string; notes?: string[]; fields?: [string, string][]; table?: { columns: ReportColumn[]; rows: string[][] };
+  image?: ReportImage | null; total?: ReportTotal;
 };
-export type Report = { title: string; status: string; generated: string; sections: ReportSection[] };
+/** The company letterhead. Without it the document keeps the plain internal header. */
+export type ReportBrand = { name: string; tagline?: string | null; contact?: string | null; logo?: ReportImage | null };
+export type Report = { title: string; status: string; generated: string; sections: ReportSection[]; brand?: ReportBrand; footer?: string | null };
+
+/** Tells the image format by its first bytes, never by the name or the declared type. */
+export function imageKind(bytes: Uint8Array): ReportImage['kind'] | 'webp' | null {
+  const ascii = (start: number, end: number) => String.fromCharCode(...bytes.slice(start, end));
+  if (bytes[0] === 0x89 && ascii(1, 4) === 'PNG') return 'png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'jpg';
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'webp';
+  return null;
+}
+
+/** Fits a width and height inside a box, keeping the proportion and never enlarging. */
+export function fitImage(width: number, height: number, maxWidth: number, maxHeight: number) {
+  const scale = Math.min(1, maxWidth / width, maxHeight / height);
+  return { width: width * scale, height: height * scale };
+}
+
+/** Reads an image of the panel for the PDF. WebP becomes PNG through a canvas, in the browser. Missing or unreadable images give null. */
+export async function loadReportImage(url: string): Promise<ReportImage | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const kind = imageKind(bytes);
+    if (kind === 'png' || kind === 'jpg') return { bytes, kind };
+    if (kind !== 'webp') return null;
+    const bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const png = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+    return png ? { bytes: new Uint8Array(await png.arrayBuffer()), kind: 'png' } : null;
+  } catch {
+    return null;
+  }
+}
 
 const pageSize: [number, number] = [595.28, 841.89];
 const margin = 40;
@@ -45,6 +90,12 @@ export async function renderPdf(report: Report) {
   const clean = (text: string) => [...text.normalize('NFC').replace(/≈/g, '~').replace(/−/g, '-').replace(/[   \r\n\t]/g, ' ')]
     .map(char => known.has(char.codePointAt(0)!) ? char : '?').join('');
   const lines = (text: string, width: number, size: number, font: Font = regular) => wrapText(clean(text), width, part => font.widthOfTextAtSize(part, size));
+  // A damaged image leaves its space empty instead of stopping the document.
+  const embed = async (image?: ReportImage | null) => {
+    if (!image) return null;
+    try { return await (image.kind === 'png' ? doc.embedPng(image.bytes) : doc.embedJpg(image.bytes)); } catch { return null; }
+  };
+  const white = rgb(1, 1, 1);
 
   let page = doc.addPage(pageSize);
   let y = pageTop;
@@ -57,10 +108,33 @@ export async function renderPdf(report: Report) {
   };
 
   const status = clean(report.status);
-  write(clean(report.title), margin, y - 16, 18, bold);
-  write(status, margin + contentWidth - bold.widthOfTextAtSize(status, 11), y - 14, 11, bold, brand);
-  write(clean(report.generated), margin, y - 32, 9, regular, muted);
-  y -= 42;
+  const right = (text: string, baseline: number, size: number, font: Font = regular, color = ink) => write(text, margin + contentWidth - font.widthOfTextAtSize(text, size), baseline, size, font, color);
+  if (report.brand) {
+    // Letterhead: logo and company on the left, the document on the right.
+    const logo = await embed(report.brand.logo);
+    const box = logo ? fitImage(logo.width, logo.height, 120, 56) : { width: 0, height: 0 };
+    if (logo) page.drawImage(logo, { x: margin, y: y - box.height, ...box });
+    const left = margin + (logo ? box.width + 12 : 0);
+    const titleWidth = Math.max(bold.widthOfTextAtSize(clean(report.title), 16), bold.widthOfTextAtSize(status, 10));
+    const textWidth = Math.max(80, margin + contentWidth - titleWidth - 16 - left);
+    const name = lines(report.brand.name, textWidth, 14, bold);
+    const tagline = report.brand.tagline ? lines(report.brand.tagline, textWidth, 9) : [];
+    const contact = (report.brand.contact ?? '').split(/\r?\n/).flatMap(line => line.trim() ? lines(line, textWidth, 8) : []);
+    let text = y;
+    name.forEach(part => { write(part, left, text - 14, 14, bold); text -= 17; });
+    tagline.forEach(part => { write(part, left, text - 9, 9, regular, muted); text -= 11; });
+    if (contact.length) text -= 3;
+    contact.forEach(part => { write(part, left, text - 8, 8, regular, muted); text -= 10; });
+    right(clean(report.title), y - 14, 16, bold);
+    right(status, y - 29, 10, bold, brand);
+    right(clean(report.generated), y - 42, 8, regular, muted);
+    y = Math.min(y - box.height, text, y - 46) - 10;
+  } else {
+    write(clean(report.title), margin, y - 16, 18, bold);
+    right(status, y - 14, 11, bold, brand);
+    write(clean(report.generated), margin, y - 32, 9, regular, muted);
+    y -= 42;
+  }
   page.drawLine({ start: { x: margin, y }, end: { x: margin + contentWidth, y }, thickness: 1, color: rule });
   y -= 6;
 
@@ -108,6 +182,33 @@ export async function renderPdf(report: Report) {
     y -= 4;
   }
 
+  async function drawImage(image: ReportImage) {
+    const embedded = await embed(image);
+    if (!embedded) return;
+    const box = fitImage(embedded.width, embedded.height, contentWidth, 240);
+    fits(box.height + 8);
+    page.drawImage(embedded, { x: margin, y: y - box.height, ...box });
+    y -= box.height + 8;
+  }
+
+  // Right-aligned block: the supporting lines, then the value on a colored band.
+  function drawTotal(total: ReportTotal) {
+    const width = Math.min(contentWidth, 240), x = margin + contentWidth - width;
+    const supporting = (total.lines ?? []).map(([label, value]) => [clean(label), clean(value)]);
+    fits(supporting.length * 15 + 34);
+    for (const [label, value] of supporting) {
+      write(label, x + 10, y - 11, 9.5, regular, muted);
+      write(value, margin + contentWidth - 10 - regular.widthOfTextAtSize(value, 9.5), y - 11, 9.5);
+      y -= 15;
+    }
+    y -= 4;
+    page.drawRectangle({ x, y: y - 28, width, height: 28, color: brand });
+    write(clean(total.label), x + 10, y - 18, 10, bold, white);
+    const value = clean(total.value);
+    write(value, margin + contentWidth - 10 - bold.widthOfTextAtSize(value, 13), y - 19, 13, bold, white);
+    y -= 34;
+  }
+
   for (const section of report.sections) {
     fits(52);
     y -= 12;
@@ -119,8 +220,19 @@ export async function renderPdf(report: Report) {
       wrappedNote.forEach((text, row) => write(text, margin, y - 9 - row * 12, 9, regular, muted));
       y -= wrappedNote.length * 12 + 2;
     }
+    if (section.image) await drawImage(section.image);
     if (section.fields?.length) drawFields(section.fields);
     if (section.table?.rows.length) drawTable(section.table);
+    if (section.total) drawTotal(section.total);
+  }
+
+  if (report.footer?.trim()) {
+    const footer = report.footer.split(/\r?\n/).flatMap(line => line.trim() ? lines(line, contentWidth, 9) : []);
+    fits(footer.length * 12 + 18);
+    y -= 8;
+    page.drawLine({ start: { x: margin, y }, end: { x: margin + contentWidth, y }, thickness: .5, color: rule });
+    y -= 6;
+    footer.forEach(text => { write(text, margin + (contentWidth - regular.widthOfTextAtSize(text, 9)) / 2, y - 9, 9, regular, muted); y -= 12; });
   }
 
   const pages = doc.getPages();

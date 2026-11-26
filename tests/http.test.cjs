@@ -60,6 +60,7 @@ test('API REST com PostgreSQL', {
       status: response.status,
       cookie: response.headers.get('set-cookie')?.split(';')[0],
       cacheControl: response.headers.get('cache-control'),
+      headers: response.headers,
       data,
     };
   }
@@ -92,12 +93,12 @@ test('API REST com PostgreSQL', {
     await workbook.xlsx.load(Buffer.from(bytes));
     return workbook;
   }
-  async function uploadWorkbook(path, workbook) {
+  async function uploadWorkbook(path, workbook, caller = admin) {
     const bytes = await workbook.xlsx.writeBuffer();
     const file = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const body = new FormData();
     body.append('file', file, 'estoque.xlsx');
-    return post(path, body);
+    return caller(path, { method: 'POST', body });
   }
   const createFamily = (name, baseSymbol) => post('/catalog/families', { name: sku(name), baseSymbol }).then(response => expectStatus(response, 201));
   const createProduct = (name, unitId) => post('/catalog/products', {
@@ -302,6 +303,7 @@ test('API REST com PostgreSQL', {
     const cataloger = await session('COM-CATALOGO', ['catalog:operate']);
     expectStatus(await cataloger(settings, { method: 'PATCH', body }), 403);
     expectStatus(await cataloger('/catalog/products/' + product.id, { method: 'PATCH', body: { name: 'COMERCIAL', ...body } }), 200);
+    expectStatus(await cataloger('/catalog/products/' + product.id, { method: 'PATCH', body: { name: 'COMERCIAL', commercial: { ...body, minStock: '2' } } }), 403);
     const untouched = await productRow(product.id);
     assert.deepEqual([untouched.minStock, untouched.salePrice, untouched.marginPercent], [null, null, null]);
     const hidden = expectStatus(await cataloger(details), 200);
@@ -590,6 +592,19 @@ test('API REST com PostgreSQL', {
     const recipe = expectStatus(await admin(`/catalog/products/${printed.id}/recipe`), 200);
     assert.equal(recipe.wastePercent, '5');
     assert.deepEqual(recipe.inputs, [{ inputId: filament.id, quantity: '120' }]);
+    // Print time and default printer live on the recipe, and the printer cannot be deleted while it is the default.
+    const recipePrinter = expectStatus(await post('/production/printers', { name: sku('FICHA-IMPRESSORA'), powerWatts: '100', hourlyCost: '1' }), 201);
+    const timedRecipe = printMinutes => admin(`/catalog/products/${printed.id}/recipe`, {
+      method: 'PUT', body: { wastePercent: '5', inputs: line(filament.id), printMinutes, printerId: recipePrinter.id },
+    });
+    expectStatus(await timedRecipe('0'), 400);
+    expectStatus(await timedRecipe('45.555'), 400);
+    expectStatus(await timedRecipe('45.5'), 200);
+    const timed = expectStatus(await admin(`/catalog/products/${printed.id}/recipe`), 200);
+    assert.deepEqual([timed.printMinutes, timed.printerId, timed.printers.some(row => row.id === recipePrinter.id)], ['45.5', recipePrinter.id, true]);
+    expectStatus(await admin('/production/printers/' + recipePrinter.id, { method: 'DELETE' }), 409);
+    expectStatus(await post(`/production/printers/${recipePrinter.id}/status`, { active: false }), 200);
+    expectStatus(await timedRecipe('45.5'), 200);
     const listed = expectStatus(await admin('/catalog'), 200).products;
     assert.equal(listed.find(row => row.id === printed.id).hasRecipe, true);
     assert.equal(listed.find(row => row.id === filament.id).hasRecipe, false);
@@ -601,8 +616,16 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/catalog/product-types/' + filamentType, {
       method: 'PATCH', body: { name: 'Filamento', isInput: false, isManufactured: false },
     }), 409);
-    expectStatus(await saveRecipe(printed.id, '0', []), 200);
+    // Without inputs the recipe keeps its time and printer, which leave the product when it stops being manufactured.
+    expectStatus(await admin(`/catalog/products/${printed.id}/recipe`, {
+      method: 'PUT', body: { wastePercent: '0', inputs: [], printMinutes: '10', printerId: recipePrinter.id },
+    }), 200);
     expectStatus(await admin('/catalog/products/' + filament.id, { method: 'DELETE' }), 200);
+    expectStatus(await admin('/production/printers/' + recipePrinter.id, { method: 'DELETE' }), 409);
+    expectStatus(await patch(printed.id, 'Impresso', standard), 200);
+    const plain = await productRow(printed.id);
+    assert.deepEqual([plain.printMinutes, plain.printerId], [null, null]);
+    expectStatus(await admin('/production/printers/' + recipePrinter.id, { method: 'DELETE' }), 200);
   });
 
   await t.test('impressoras somam energia e desgaste no custo por hora', async () => {
@@ -741,6 +764,98 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/payment-methods/' + method.id, { method: 'PATCH', body: { name: name + '-NOVO', feePercent: '50', active: false } }), 200);
     const frozen = expectStatus(await admin('/production/orders'), 200).orders.find(row => row.id === order.id);
     assert.deepEqual([frozen.sale.paymentName, frozen.sale.feePercent, frozen.sale.values.net], [name, '5', '42.75']);
+  });
+
+  await t.test('custos cadastrados respeitam acessos e só são excluídos sem uso', async () => {
+    const reader = await session('CUSTO-LEITURA', ['registrations:view']);
+    const operator = await session('CUSTO-OPERA', ['registrations:operate']);
+    const stranger = await session('CUSTO-SEM', ['purchases:view']);
+    const name = sku('EMBALAGEM');
+    expectStatus(await stranger('/costs'), 403);
+    expectStatus(await reader('/costs'), 200);
+    expectStatus(await reader('/costs', { method: 'POST', body: { name, mode: 'VALUE', value: '2' } }), 403);
+    expectStatus(await operator('/costs', { method: 'POST', body: { name, mode: 'PERCENT', base: 'SALE', value: '100' } }), 400);
+    const cost = expectStatus(await operator('/costs', { method: 'POST', body: { name, mode: 'VALUE', base: 'SALE', value: '2.5' } }), 201);
+    assert.equal(cost.base, 'COST');
+    expectStatus(await operator('/costs/' + cost.id, { method: 'PATCH', body: { name, mode: 'PERCENT', base: 'SALE', value: '6' } }), 400);
+    const edited = expectStatus(await operator('/costs/' + cost.id, { method: 'PATCH', body: { name, mode: 'PERCENT', base: 'SALE', value: '6', active: false } }), 200);
+    assert.deepEqual([edited.base, edited.value, edited.active], ['SALE', '6', false]);
+    const listed = expectStatus(await reader('/costs'), 200).find(row => row.id === cost.id);
+    assert.deepEqual([listed.purchases, listed.deleteBlock], [0, null]);
+    expectStatus(await reader('/costs/' + cost.id, { method: 'DELETE' }), 403);
+    expectStatus(await operator('/costs/' + cost.id, { method: 'DELETE' }), 200);
+    expectStatus(await operator('/costs/' + cost.id, { method: 'DELETE' }), 404);
+
+    // The purchase copies the typed values, so later edits to the registered cost never reach it.
+    const freight = expectStatus(await operator('/costs', { method: 'POST', body: { name: sku('FRETE'), mode: 'PERCENT', value: '10' } }), 201);
+    const hidden = expectStatus(await operator('/costs', { method: 'POST', body: { name: sku('FRETE-INATIVO'), mode: 'VALUE', value: '3', active: false } }), 201);
+    const options = expectStatus(await admin('/purchases/options'), 200);
+    assert.deepEqual(options.costs.filter(row => [freight.id, hidden.id].includes(row.id)).map(row => row.id), [freight.id]);
+    const product = await createProduct('CUSTO-COMPRA', unit.id);
+    const items = [{ productId: product.id, unitId: unit.id, quantity: '10', totalCost: '200' }];
+    expectStatus(await post('/purchases', { purchaseDate: '2026-01-01', items, costs: [{ costItemId: hidden.id, title: 'Frete', mode: 'VALUE', value: '3', split: 'VALUE' }] }), 409);
+    const purchase = expectStatus(await post('/purchases', {
+      purchaseDate: '2026-01-01', items, costs: [{ costItemId: freight.id, title: 'Frete expresso', mode: 'PERCENT', value: '5', split: 'VALUE' }],
+    }), 201);
+    expectStatus(await operator('/costs/' + freight.id, { method: 'PATCH', body: { name: freight.name, mode: 'VALUE', value: '99', active: true } }), 200);
+    const [stored] = expectStatus(await admin('/purchases/' + purchase.id), 200).costs;
+    assert.deepEqual([stored.costItemId, stored.title, stored.mode, stored.value, stored.amount], [freight.id, 'Frete expresso', 'PERCENT', '5', '10']);
+    const used = expectStatus(await reader('/costs'), 200).find(row => row.id === freight.id);
+    assert.deepEqual([used.purchases, typeof used.deleteBlock], [1, 'string']);
+    expectStatus(await operator('/costs/' + freight.id, { method: 'DELETE' }), 409);
+  });
+
+  await t.test('formação de preço lê os custos vinculados e bloqueia margem impossível', async () => {
+    const product = await createProduct('PRECO', unit.id);
+    expectStatus(await movement(product.id, unit.id, 'PURCHASE', '1', '60'), 201);
+    const settings = '/stock/products/' + product.id + '/settings';
+    const pricing = '/stock/products/' + product.id + '/pricing';
+    const save = body => admin(settings, { method: 'PATCH', body: { minStock: null, salePrice: '90', ...body } });
+    const reader = await session('PRECO-LEITURA', ['stock:view']);
+    expectStatus(await reader(pricing), 403);
+    const fee = expectStatus(await post('/costs', { name: sku('TAXA-VENDA'), mode: 'PERCENT', base: 'SALE', value: '10' }), 201);
+    const pack = expectStatus(await post('/costs', { name: sku('EMBALAGEM-PRECO'), mode: 'VALUE', value: '2' }), 201);
+    const off = expectStatus(await post('/costs', { name: sku('INATIVO-PRECO'), mode: 'VALUE', value: '5', active: false }), 201);
+    expectStatus(await save({ marginPercent: '30', costItemIds: [off.id] }), 409);
+    expectStatus(await save({ marginPercent: '30', costItemIds: [fee.id, fee.id] }), 400);
+    expectStatus(await save({ marginPercent: '90', costItemIds: [fee.id] }), 400);
+    expectStatus(await save({ marginPercent: '30', costItemIds: [fee.id, pack.id] }), 200);
+    // (60 + 2) ÷ (1 − 30% − 10%) = 103.33…, rounded up.
+    const view = expectStatus(await admin(pricing), 200);
+    assert.deepEqual([view.baseCost, view.totalCost, view.suggestedPrice, view.costs.length], ['60', '62', '103.34', 2]);
+    assert.deepEqual([view.options.some(row => row.id === fee.id), view.options.some(row => row.id === off.id)], [true, false]);
+
+    // Editing the registered cost reprices the product, but never to a margin no price can cover.
+    expectStatus(await admin('/costs/' + pack.id, { method: 'PATCH', body: { name: pack.name, mode: 'VALUE', value: '8', active: true } }), 200);
+    assert.equal(expectStatus(await admin(pricing), 200).suggestedPrice, '113.34');
+    expectStatus(await admin('/costs/' + fee.id, { method: 'PATCH', body: { name: fee.name, mode: 'PERCENT', base: 'SALE', value: '70', active: true } }), 409);
+    const stockRow = expectStatus(await admin('/stock'), 200).products.find(row => row.id === product.id);
+    assert.deepEqual([stockRow.suggestedPrice, stockRow.belowTargetMargin, 'costs' in stockRow], ['113.34', true, false]);
+    assert.equal(expectStatus(await admin('/catalog/products/' + product.id + '/details'), 200).stock.priceCost, '68');
+    const listed = expectStatus(await admin('/costs'), 200).find(row => row.id === pack.id);
+    assert.deepEqual([listed.products, typeof listed.deleteBlock], [1, 'string']);
+    expectStatus(await admin('/costs/' + pack.id, { method: 'DELETE' }), 409);
+
+    // A client without the costs keeps the links, and an empty list frees the cost for deletion.
+    expectStatus(await save({}), 200);
+    assert.equal(expectStatus(await admin(pricing), 200).costs.length, 2);
+    expectStatus(await save({ costItemIds: [] }), 200);
+    expectStatus(await admin('/costs/' + pack.id, { method: 'DELETE' }), 200);
+    const { events } = expectStatus(await admin('/audit?' + new URLSearchParams({ action: 'Alterar parâmetros de estoque' })), 200);
+    assert.ok(events.some(row => row.targetId === product.id && row.details?.after?.['Custos vinculados']?.length === 2));
+
+    // The purchase may update the sale price in its own transaction, which takes stock:operate.
+    const buyer = await session('PRECO-COMPRA', ['purchases:operate']);
+    const item = { productId: product.id, unitId: unit.id, quantity: '1', totalCost: '70', salePrice: '120' };
+    expectStatus(await buyer('/purchases', { method: 'POST', body: { purchaseDate: '2026-01-02', items: [item] } }), 403);
+    const hidden = expectStatus(await buyer('/purchases/options'), 200).products.find(row => row.id === product.id);
+    assert.deepEqual(['marginPercent' in hidden, 'salePrice' in hidden, 'costs' in hidden], [false, false, false]);
+    const shown = expectStatus(await admin('/purchases/options'), 200).products.find(row => row.id === product.id);
+    assert.deepEqual([shown.marginPercent, shown.salePrice, shown.costs], ['30', '90', []]);
+    const purchase = expectStatus(await post('/purchases', { purchaseDate: '2026-01-02', items: [item] }), 201);
+    assert.equal((await productRow(product.id)).salePrice.toFixed(), '120');
+    const registered = expectStatus(await admin('/audit?' + new URLSearchParams({ action: 'Registrar compra' })), 200).events.find(row => row.targetId === purchase.id);
+    assert.deepEqual(registered.details.after['Preços de venda atualizados'], [product.sku + ': 90 → 120']);
   });
 
   await t.test('despesas entram uma única vez no custo e na média do fabricado', async () => {
@@ -1225,24 +1340,43 @@ test('API REST com PostgreSQL', {
     sheet.getRow(2).values = [filament, 'PLA da carga', 'Filamento', kilogram.symbol, '3', '300'];
     sheet.getRow(3).values = [printed, 'Peça da carga', 'Produto normal', unit.symbol, '0', '', '5'];
     recipes.getRow(2).values = [printed, filament, '120', gram.symbol];
+    const packing = sku('CARGA-EMBALAGEM');
+    workbook.getWorksheet('Custos').getRow(2).values = [packing, 'Percentual', 'Venda', '6'];
+    // The piece takes its print time, printer and a cost of this same batch, and the margin must leave room for it.
+    const loadPrinter = expectStatus(await post('/production/printers', { name: sku('CARGA-IMPRESSORA'), powerWatts: '100', hourlyCost: '1' }), 201);
+    const column = header => sheet.getRow(1).values.indexOf(header);
+    sheet.getCell(3, column('Tempo por peça (min)')).value = '30';
+    sheet.getCell(3, column('Impressora')).value = loadPrinter.name;
+    sheet.getCell(3, column('Custos vinculados')).value = packing;
+    sheet.getCell(3, column('Margem (%)')).value = '95';
     const upload = () => uploadWorkbook('/stock/initial/preview', workbook);
     const stored = () => db.product.count({ where: { sku: { in: [filament, printed] } } });
+    // Costs are registrations, so loading them also needs registrations:operate.
+    const loader = await session('CARGA-SEM-CUSTOS', ['catalog:operate', 'stock:operate']);
+    expectStatus(await uploadWorkbook('/stock/initial/preview', workbook, loader), 403);
 
     expectStatus(await upload(), 400);
     sheet.getCell('C3').value = 'Impresso 3D';
     recipes.getCell('B2').value = printed;
     expectStatus(await upload(), 400);
     recipes.getCell('B2').value = filament;
+    expectStatus(await upload(), 400);
+    sheet.getCell(3, column('Margem (%)')).value = '30';
     const batch = expectStatus(await upload(), 201);
     assert.equal(batch.rows[0].declaredCost, '100');
     assert.equal(batch.rows[1].typeName, 'Impresso 3D');
+    assert.deepEqual(batch.costs, [{ name: packing, mode: 'PERCENT', base: 'SALE', value: '6', active: true }]);
     assert.equal(await stored(), 0);
+    assert.equal(await db.costItem.count({ where: { name: packing } }), 0);
 
     expectStatus(await post(`/stock/initial/${batch.id}/confirm`), [200, 201]);
+    const cost = await db.costItem.findUniqueOrThrow({ where: { name: packing } });
+    assert.deepEqual([cost.mode, cost.base, cost.value.toString(), cost.active], ['PERCENT', 'SALE', '6', true]);
     const [input, product] = await Promise.all([
       db.product.findUniqueOrThrow({ where: { sku: filament } }),
-      db.product.findUniqueOrThrow({ where: { sku: printed }, include: { recipe: true } }),
+      db.product.findUniqueOrThrow({ where: { sku: printed }, include: { recipe: true, costs: true } }),
     ]);
+    assert.deepEqual([product.printMinutes.toString(), product.printerId, product.costs.map(row => row.costItemId)], ['30', loadPrinter.id, [cost.id]]);
     assert.equal(input.quantity.toString(), '3000');
     assert.equal(input.currentCost.toString(), '0.1');
     assert.equal(product.wastePercent.toString(), '5');
@@ -1353,6 +1487,263 @@ test('API REST com PostgreSQL', {
     expectStatus(await admin('/catalog/products/' + pictured.id, { method: 'DELETE' }), 200);
     assert.equal(await db.storedFile.count({ where: { id: last.id } }), 0);
     assert.deepEqual(stored(), [], 'excluir o produto leva a imagem junto');
+  });
+
+  await t.test('produto salvo de uma vez: arquivos pendentes, ficha, preço, permissões e atomicidade', async () => {
+    const form = (bytes, name, type = 'application/pdf') => {
+      const body = new FormData();
+      body.append('file', new Blob([bytes], { type }), name);
+      return body;
+    };
+    const png = Buffer.from('89504e470d0a1a0a00', 'hex');
+    const viewer = await session('UMA-VEZ-VER', ['catalog:view']);
+    const cataloger = await session('UMA-VEZ-CAT', ['catalog:operate']);
+    const stranger = await session('UMA-VEZ-OUTRO', ['catalog:operate']);
+    const seller = await session('UMA-VEZ-PRECO', ['catalog:operate', 'stock:operate']);
+    const upload = (caller, kind, ...file) => caller('/catalog/uploads/' + kind, { method: 'POST', body: form(...file) });
+
+    expectStatus(await upload(viewer, 'file', 'x', 'a.pdf'), 403);
+    expectStatus(await upload(viewer, 'image', png, 'foto.png', 'image/png'), 403);
+    expectStatus(await upload(cataloger, 'image', 'texto', 'foto.png', 'image/png'), 415);
+    expectStatus(await upload(cataloger, 'file', 'x', 'setup.exe'), 415);
+    const image = expectStatus(await upload(seller, 'image', png, 'foto.png', 'image/png'), 201);
+    const manual = expectStatus(await upload(seller, 'file', 'manual', 'manual.pdf'), 201);
+    const fake = expectStatus(await upload(seller, 'file', 'texto', 'falsa.png', 'image/png'), 201);
+    assert.equal(await db.productFile.count({ where: { fileId: manual.id } }), 0, 'o arquivo pendente não tem dono');
+
+    const filament = await createProduct('UMA-VEZ-FILAMENTO', unit.id);
+    expectStatus(await admin('/catalog/products/' + filament.id, { method: 'PATCH', body: { name: filament.name, typeId: '00000000-0000-4000-8000-000000000002' } }), 200);
+    const fee = expectStatus(await post('/costs', { name: sku('UMA-VEZ-TAXA'), mode: 'PERCENT', base: 'SALE', value: '10' }), 201);
+    const product = (name, extra = {}) => ({
+      sku: sku(name), name, unitId: unit.id, typeId: '00000000-0000-4000-8000-000000000003',
+      recipe: { wastePercent: '5', inputs: [{ inputId: filament.id, unitId: unit.id, quantity: '2' }], printMinutes: '30', printerId: null },
+      ...extra,
+    });
+    const commercial = { minStock: '1', salePrice: '50', marginPercent: '30', costItemIds: [fee.id] };
+
+    // The price keeps its own permission, and nobody links a file someone else sent.
+    expectStatus(await cataloger('/catalog/products', { method: 'POST', body: product('UMA-VEZ-SEM', { commercial }) }), 403);
+    expectStatus(await stranger('/catalog/products', { method: 'POST', body: product('UMA-VEZ-ALHEIO', { fileIds: [manual.id] }) }), 404);
+    expectStatus(await seller('/catalog/products', { method: 'POST', body: product('UMA-VEZ-FALSA', { imageFileId: fake.id }) }), 415);
+    // A failing part undoes the whole save: no product, and the files stay pending for the next try.
+    expectStatus(await seller('/catalog/products', {
+      method: 'POST', body: product('UMA-VEZ-FALHA', { imageFileId: image.id, fileIds: [manual.id], commercial: { ...commercial, marginPercent: '95' } }),
+    }), 400);
+    expectStatus(await seller('/catalog/products', {
+      method: 'POST', body: product('UMA-VEZ-FALHA', { imageFileId: image.id, fileIds: [manual.id], commercial: { ...commercial, costItemIds: [randomUUID()] } }),
+    }), 404);
+    assert.equal(await db.product.count({ where: { sku: { in: ['UMA-VEZ-SEM', 'UMA-VEZ-ALHEIO', 'UMA-VEZ-FALSA', 'UMA-VEZ-FALHA'].map(sku) } } }), 0);
+    assert.equal(await db.productFile.count({ where: { fileId: manual.id } }), 0);
+
+    const created = expectStatus(await seller('/catalog/products', {
+      method: 'POST', body: product('UMA-VEZ', { imageFileId: image.id, fileIds: [manual.id], commercial }),
+    }), 201);
+    assert.equal(created.imageFileId, image.id);
+    const row = await db.product.findUniqueOrThrow({ where: { id: created.id }, include: { recipe: true, costs: true, files: true } });
+    assert.deepEqual([row.salePrice.toString(), row.marginPercent.toString(), row.minStock.toString(), row.printMinutes.toString(), row.wastePercent.toString()], ['50', '30', '1', '30', '5']);
+    assert.deepEqual(row.recipe.map(item => [item.inputId, item.quantity.toString()]), [[filament.id, '2']]);
+    assert.deepEqual([row.costs.map(item => item.costItemId), row.files.map(item => item.fileId)], [[fee.id], [manual.id]]);
+    const audit = await waitForAuditEvent({ action: 'Criar produto' }, event => event.targetId === created.id);
+    assert.equal(audit.details.before ?? null, null, "a criação não tem estado anterior");
+    assert.deepEqual([audit.details.after.Imagem, audit.details.after.Arquivos, audit.details.after['Preço de venda'], audit.details.after['Tempo por peça (min)']],
+      ['foto.png', ['manual.pdf'], '50', '30']);
+    // A linked file is no longer pending, so it cannot move to another product.
+    expectStatus(await seller('/catalog/products', { method: 'POST', body: product('UMA-VEZ-DE-NOVO', { fileIds: [manual.id] }) }), 404);
+
+    const second = expectStatus(await upload(seller, 'image', png, 'nova.png', 'image/png'), 201);
+    expectStatus(await cataloger('/catalog/products/' + created.id, { method: 'PATCH', body: { name: 'UMA-VEZ', commercial } }), 403);
+    expectStatus(await seller('/catalog/products/' + created.id, { method: 'PATCH', body: { name: 'UMA-VEZ', imageFileId: second.id, commercial: { ...commercial, salePrice: '60' } } }), 200);
+    assert.equal(await db.storedFile.count({ where: { id: image.id } }), 0, 'a imagem trocada sai do banco');
+    assert.deepEqual([(await productRow(created.id)).imageFileId, (await productRow(created.id)).salePrice.toString()], [second.id, '60']);
+    const change = await waitForAuditEvent({ action: 'Alterar produto' }, event => event.targetId === created.id);
+    assert.deepEqual([change.details.before.Imagem, change.details.after.Imagem, change.details.before['Preço de venda'], change.details.after['Preço de venda']],
+      ['foto.png', 'nova.png', '50', '60']);
+  });
+
+  await t.test('cadastro da empresa: acessos, logo pendente e auditoria', async () => {
+    const form = (bytes, name, type) => {
+      const body = new FormData();
+      body.append('file', new Blob([bytes], { type }), name);
+      return body;
+    };
+    const png = Buffer.from('89504e470d0a1a0a00', 'hex');
+    const reader = await session('EMPRESA-VER', ['registrations:view']);
+    const operator = await session('EMPRESA-OPERA', ['registrations:operate']);
+    const other = await session('EMPRESA-OUTRA', ['registrations:operate']);
+    const stranger = await session('EMPRESA-SEM', ['catalog:operate']);
+    const upload = (caller, ...file) => caller('/company/uploads/logo', { method: 'POST', body: form(...file) });
+    const data = { name: 'Lar&Stock3D', tagline: 'Impressão 3D', contact: '(11) 90000-0000', footer: 'Obrigado pela preferência', quoteValidityDays: 10 };
+
+    expectStatus(await stranger('/company'), 403);
+    expectStatus(await stranger('/company/logo'), 403);
+    expectStatus(await upload(stranger, png, 'logo.png', 'image/png'), 403);
+    expectStatus(await upload(reader, png, 'logo.png', 'image/png'), 403);
+    expectStatus(await reader('/company', { method: 'PUT', body: data }), 403);
+    expectStatus(await operator('/company', { method: 'PUT', body: { ...data, quoteValidityDays: 0 } }), 400);
+    expectStatus(await upload(operator, 'texto', 'logo.png', 'image/png'), 415);
+    const logo = expectStatus(await upload(operator, png, 'logo.png', 'image/png'), 201);
+    // Only who sent the logo links it, and a failed save keeps it pending.
+    expectStatus(await other('/company', { method: 'PUT', body: { ...data, logoFileId: logo.id } }), 404);
+    const saved = expectStatus(await operator('/company', { method: 'PUT', body: { ...data, tagline: ' ', logoFileId: logo.id } }), 200);
+    assert.deepEqual([saved.name, saved.tagline, saved.quoteValidityDays, saved.logoFileId, saved.logoName], ['Lar&Stock3D', null, 10, logo.id, 'logo.png']);
+    const shown = await reader('/company/logo');
+    assert.deepEqual([shown.status, shown.headers.get('content-type')], [200, 'image/png']);
+    const audit = await waitForAuditEvent({ action: 'Alterar dados da empresa' }, event => event.details.after?.Logo === 'logo.png');
+    assert.deepEqual([audit.details.after.Nome, audit.details.after['Validade do orçamento (dias)']], ['Lar&Stock3D', 10]);
+    // The logo now has an owner, so the product form cannot take it.
+    expectStatus(await admin('/catalog/products', { method: 'POST', body: { sku: sku('EMPRESA-LOGO'), name: 'Logo', unitId: unit.id, typeId: '00000000-0000-4000-8000-000000000003', imageFileId: logo.id } }), 404);
+
+    // Leaving the logo out keeps it, and null removes it from the disk too.
+    assert.equal(expectStatus(await operator('/company', { method: 'PUT', body: data }), 200).logoFileId, logo.id);
+    assert.equal(expectStatus(await operator('/company', { method: 'PUT', body: { ...data, logoFileId: null } }), 200).logoName, null);
+    assert.equal(await db.storedFile.count({ where: { id: logo.id } }), 0);
+    expectStatus(await reader('/company/logo'), 404);
+  });
+
+  await t.test('ficha por cor: aceita qualquer marca do tipo, grupo e cor, audita e protege o tipo', async () => {
+    const printedType = '00000000-0000-4000-8000-000000000003';
+    const typeName = 'Tipo ' + sku('COR');
+    const filamentType = expectStatus(await admin('/catalog/product-types', { method: 'POST', body: { name: typeName, isInput: true, isManufactured: false } }), 201).id;
+    const reference = (kind, name) => admin('/catalog/references', { method: 'POST', body: { kind, name: sku(name) } }).then(response => expectStatus(response, 201));
+    const [black, pla, brandA, brandB] = await Promise.all([reference('COR', 'PRETO'), reference('GRUPO', 'PLA'), reference('MARCA', 'A'), reference('MARCA', 'B')]);
+    const typed = async (name, typeId, extra = {}) => {
+      const product = await createProduct(name, unit.id);
+      expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name, typeId, ...extra } }), 200);
+      return product;
+    };
+    const brandAProduct = await typed('COR-PLA-A', filamentType, { colorId: black.id, groupId: pla.id, brandId: brandA.id });
+    const brandBProduct = await typed('COR-PLA-B', filamentType, { colorId: black.id, groupId: pla.id, brandId: brandB.id });
+    const piece = await typed('COR-PECA', printedType);
+    const options = expectStatus(await admin('/catalog/products/' + piece.id + '/recipe'), 200);
+    const offered = options.colors.find(row => row.colorId === black.id && row.groupId === pla.id);
+    assert.equal(offered.brands, 2);
+    const line = { typeId: filamentType, groupId: pla.id, colorId: black.id, unitId: unit.id, quantity: '30' };
+    const save = colorInputs => admin('/catalog/products/' + piece.id + '/recipe', { method: 'PUT', body: { wastePercent: '0', inputs: [], colorInputs } });
+    expectStatus(await save([line, line]), 400);
+    expectStatus(await save([{ ...line, typeId: printedType }]), 400);
+    expectStatus(await save([{ ...line, colorId: pla.id }]), 404);
+    expectStatus(await save([line]), 200);
+    const saved = expectStatus(await admin('/catalog/products/' + piece.id + '/recipe'), 200);
+    assert.deepEqual(saved.colorInputs.map(row => [row.colorId, row.groupId, row.quantity]), [[black.id, pla.id, '30']]);
+    const audit = await waitForAuditEvent({ action: 'Alterar ficha técnica' }, event => event.details.after?.['Insumos por cor']?.length === 1);
+    assert.equal(audit.details.after['Insumos por cor'][0], [typeName, pla.name, black.name].join(' · ') + ' × 30');
+    // Saving the same color again reuses it, and the product now counts as having a recipe.
+    expectStatus(await save([{ ...line, quantity: '25' }]), 200);
+    assert.equal(await db.colorInput.count({ where: { colorId: black.id } }), 1);
+    const listed = expectStatus(await admin('/catalog'), 200).products.find(row => row.id === piece.id);
+    assert.deepEqual([listed.hasRecipe, listed.deleteBlock], [true, 'O produto tem ficha técnica.']);
+    expectStatus(await admin('/catalog/product-types/' + filamentType, { method: 'PATCH', body: { name: typeName, isInput: false, isManufactured: false } }), 409);
+    // The estimate weighs each brand by its balance: 1000 g at 0.10 and 3000 g at 0.14 average 0.13, so 25 g cost 3.25.
+    expectStatus(await movement(brandAProduct.id, unit.id, 'PURCHASE', '1000', '0.1'), 201);
+    expectStatus(await movement(brandBProduct.id, unit.id, 'PURCHASE', '3000', '0.14'), 201);
+    const pricing = expectStatus(await admin('/stock/products/' + piece.id + '/pricing'), 200);
+    assert.deepEqual([pricing.source, pricing.materialCost, pricing.partialCost], ['RECIPE', '3.25', false]);
+    const details = expectStatus(await admin('/catalog/products/' + piece.id + '/details'), 200);
+    assert.deepEqual([details.stock.estimate.unitCost, details.stock.estimate.producible], ['3.25', '160']);
+
+    // The order takes the brand with the most free balance, and an edit can split the color between brands.
+    const printer = expectStatus(await post('/production/printers', { name: sku('COR-IMPRESSORA'), powerWatts: '100', hourlyCost: '1' }), 201);
+    const plan = { printerId: printer.id, plannedStart: '2027-03-01T10:00:00.000Z', estimatedMinutes: 60, items: [{ productId: piece.id, quantity: '10' }] };
+    const order = expectStatus(await post('/production/orders', plan), 201);
+    assert.deepEqual(order.inputs.map(input => [input.inputId, input.planned, input.colors.length]), [[brandBProduct.id, '250', 1]]);
+    const colorInputId = order.inputs[0].colors[0].id;
+    const edit = colorSplits => admin('/production/orders/' + order.id, { method: 'PATCH', body: { ...plan, colorSplits } });
+    expectStatus(await edit([{ colorInputId, lines: [{ inputId: piece.id, planned: '10' }] }]), 409);
+    expectStatus(await edit([{ colorInputId: brandAProduct.id, lines: [{ inputId: brandAProduct.id, planned: '10' }] }]), 400);
+    const split = expectStatus(await edit([{ colorInputId, lines: [{ inputId: brandAProduct.id, planned: '100' }, { inputId: brandBProduct.id, planned: '150' }] }]), 200);
+    assert.deepEqual(split.inputs.map(input => [input.inputId, input.planned]).sort(), [[brandAProduct.id, '100'], [brandBProduct.id, '150']].sort());
+    // Starting reserves each brand, and finishing takes each brand at its own cost: 100 × 0.10 + 150 × 0.14 = 31.
+    expectStatus(await post('/production/orders/' + order.id + '/start', { startedAt: '2027-03-01T10:00:00.000Z' }), 200);
+    const done = expectStatus(await post('/production/orders/' + order.id + '/finish', { finishedAt: '2027-03-01T11:00:00.000Z', items: [{ productId: piece.id, lost: '0' }], inputs: [] }), 200);
+    assert.equal(done.inputs.reduce((sum, input) => sum + Number(input.used), 0), 250);
+    const balances = await db.product.findMany({ where: { id: { in: [brandAProduct.id, brandBProduct.id] } }, select: { id: true, quantity: true } });
+    assert.deepEqual(balances.map(row => [row.id, row.quantity.toString()]).sort(), [[brandAProduct.id, '900'], [brandBProduct.id, '2850']].sort());
+    const movements = await db.movement.findMany({ where: { productionOrderId: order.id, productId: { in: [brandAProduct.id, brandBProduct.id] } }, select: { productId: true, unitCost: true } });
+    assert.deepEqual(movements.map(row => [row.productId, row.unitCost.toString()]).sort(), [[brandAProduct.id, '0.1'], [brandBProduct.id, '0.14']].sort());
+  });
+
+  await t.test('orçamentos: acessos, custo oculto, aprovação gera a ordem e exclusão só do recusado', async () => {
+    const [filamentType, printedType] = [2, 3].map(n => '00000000-0000-4000-8000-00000000000' + n);
+    const typed = async (name, typeId) => {
+      const product = await createProduct(name, unit.id);
+      expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name, typeId } }), 200);
+      return product;
+    };
+    const filament = await typed('ORC-FILAMENTO', filamentType);
+    const statue = await typed('ORC-ESTATUETA', printedType);
+    expectStatus(await movement(filament.id, unit.id, 'PURCHASE', '1000', '0.1'), 201);
+    expectStatus(await admin('/catalog/products/' + statue.id + '/recipe', { method: 'PUT', body: { wastePercent: '0', inputs: [{ inputId: filament.id, unitId: unit.id, quantity: '20' }] } }), 200);
+    const printer = expectStatus(await post('/production/printers', { name: sku('ORC-IMPRESSORA'), powerWatts: '200', hourlyCost: '1' }), 201);
+    const stranger = await session('ORC-SEM', ['production:operate']);
+    const viewer = await session('ORC-VER', ['quotes:view']);
+    const seller = await session('ORC-VENDE', ['quotes:operate']);
+    const approver = await session('ORC-APROVA', ['quotes:operate', 'production:operate']);
+    const body = (extra = {}) => ({
+      customerName: 'Cliente Orçamento', customerContact: '(11) 90000-0000', title: 'Estatuetas', description: 'Peças pintadas',
+      details: [{ label: 'Tamanho', value: '10 cm' }], printPlates: 2, estimatedMinutes: 300, deliveryDays: 7, printerId: printer.id,
+      discountPercent: '10', items: [{ productId: statue.id, quantity: '32', salePrice: '16', marginPercent: '40' }],
+      manualExpenses: [{ title: 'Embalagem', value: '5' }], ...extra,
+    });
+    const action = (caller, id, name, payload = {}) => caller('/quotes/' + id + '/' + name, { method: 'POST', body: payload });
+
+    expectStatus(await stranger('/quotes'), 403);
+    expectStatus(await viewer('/quotes', { method: 'POST', body: body() }), 403);
+    // Only a manufactured product with a recipe can become an order.
+    expectStatus(await seller('/quotes', { method: 'POST', body: body({ items: [{ productId: filament.id, quantity: '1', salePrice: '1' }] }) }), 409);
+    const draft = expectStatus(await seller('/quotes', { method: 'POST', body: body() }), 201);
+    assert.equal(draft.status, 'DRAFT');
+    assert.deepEqual(draft.actions, ['edit', 'send', 'approve', 'reject']);
+    assert.equal(draft.sale.total, '460.8');
+    // Without stock:view the margin, the budget and the result stay in the API.
+    assert.equal(draft.budget, null);
+    assert.equal(draft.items[0].marginPercent, undefined);
+    assert.equal(draft.sale.profit, undefined);
+    // The margin the seller sent was ignored, as only stock:view sets it. Someone who sees costs edits it.
+    assert.equal(expectStatus(await admin('/quotes?search=' + draft.number), 200).quotes.find(row => row.id === draft.id).items[0].marginPercent, null);
+    expectStatus(await admin('/quotes/' + draft.id, { method: 'PATCH', body: body() }), 200);
+    const company = expectStatus(await admin('/company'), 200);
+    const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+    const expected = new Date(Date.parse(today + 'T12:00:00Z') + company.quoteValidityDays * 86_400_000).toISOString().slice(0, 10);
+    assert.equal(draft.validUntil, expected);
+    assert.ok(expectStatus(await viewer('/quotes?search=' + encodeURIComponent('orçamento')), 200).quotes.some(row => row.id === draft.id));
+    assert.ok(expectStatus(await viewer('/quotes?search=' + draft.number), 200).quotes.some(row => row.id === draft.id));
+    expectStatus(await viewer('/quotes/letterhead'), 200);
+    expectStatus(await viewer('/quotes/products/' + statue.id + '/image'), 404);
+    const full = expectStatus(await admin('/quotes?status=DRAFT'), 200).quotes.find(row => row.id === draft.id);
+    assert.ok(full.budget.totalCost);
+    assert.equal(full.items[0].marginPercent, '40');
+
+    expectStatus(await action(seller, draft.id, 'send'), 200);
+    expectStatus(await action(seller, draft.id, 'send'), 409);
+    expectStatus(await seller('/quotes/' + draft.id, { method: 'DELETE' }), 409);
+    expectStatus(await action(seller, draft.id, 'approve', { plannedStart: '2099-05-01T10:00:00.000Z' }), 403);
+    const approved = expectStatus(await action(approver, draft.id, 'approve', { plannedStart: '2099-05-01T10:00:00.000Z' }), 200);
+    assert.equal(approved.status, 'APPROVED');
+    assert.deepEqual(approved.actions, []);
+    const order = await db.productionOrder.findUniqueOrThrow({ where: { id: approved.productionOrder.id }, include: { items: true, expenses: true } });
+    assert.deepEqual([order.status, order.printerId, order.estimatedMinutes, order.discountPercent.toFixed()], ['PLANNED', printer.id, 300, '10']);
+    assert.deepEqual([order.items[0].planned.toFixed(), order.items[0].salePrice.toFixed(), order.items[0].marginPercent.toFixed()], ['32', '16', '40']);
+    assert.ok(order.expenses.some(row => row.source === 'MANUAL' && row.title === 'Embalagem' && row.value.toFixed() === '5'));
+    expectStatus(await seller('/quotes/' + draft.id, { method: 'PATCH', body: body() }), 409);
+    expectStatus(await action(seller, draft.id, 'reject'), 409);
+    const audit = await waitForAuditEvent({ action: 'Aprovar orçamento' }, event => event.details?.after?.['Ordem de produção'] === approved.productionOrder.number);
+    assert.equal(audit.details.after['Situação'], 'Aprovado');
+
+    // A busy printer stops the approval, and nothing is saved.
+    const clash = expectStatus(await seller('/quotes', { method: 'POST', body: body() }), 201);
+    expectStatus(await action(approver, clash.id, 'approve', { plannedStart: '2099-05-01T11:00:00.000Z' }), 409);
+    const kept = await db.quote.findUniqueOrThrow({ where: { id: clash.id } });
+    assert.deepEqual([kept.status, kept.productionOrderId], ['DRAFT', null]);
+    assert.equal(await db.productionOrder.count({ where: { printerId: printer.id } }), 1);
+
+    expectStatus(await seller('/quotes/' + clash.id, { method: 'DELETE' }), 409);
+    expectStatus(await action(seller, clash.id, 'reject'), 200);
+    expectStatus(await viewer('/quotes/' + clash.id, { method: 'DELETE' }), 403);
+    expectStatus(await seller('/quotes/' + clash.id, { method: 'DELETE' }), 200);
+    assert.equal(await db.quote.count({ where: { id: clash.id } }), 0);
+    await waitForAuditEvent({ action: 'Excluir orçamento' }, event => event.details?.before?.['Orçamento'] === clash.number);
+    // A printer named in a quote stays in use.
+    expectStatus(await admin('/production/printers/' + printer.id, { method: 'DELETE' }), 409);
   });
 
   await t.test('compras: permissões, produto repetido, rateio, atomicidade e estorno', async () => {

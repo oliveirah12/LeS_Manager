@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Prisma } = require('@prisma/client');
-const { averageCost, belowMinimum, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, recipeEstimate, saleMargin, salePricing } = require('../dist/api/stock/cost.js');
+const { averageCost, belowMinimum, colorAverage, costPerBaseUnit, kitCosting, printerHourCost, productionBudget, productionCosting, pricingBreakdown, recipeEstimate, saleMargin, salePricing } = require('../dist/api/stock/cost.js');
 
 const { orderSale, saleResult } = require('../dist/api/production/sale.js');
 
@@ -36,6 +36,42 @@ test('warns only when the confirmed price is below the desired margin', () => {
 test('there is no suggestion without a known cost or a margin', () => {
   for (const args of [['90', null, '40'], ['90', '0', '40'], ['90', '60', null]]) assert.deepEqual(pricing(...args), [null, false]);
 });
+const cost = (mode, base, value) => ({ mode, base, value: d(value) });
+const breakdown = (base, costs, margin, price = null) => {
+  const result = pricingBreakdown(base === null ? null : d(base), costs, margin === null ? null : d(margin), price === null ? null : d(price));
+  return Object.fromEntries(Object.entries(result).map(([key, value]) => [key, value instanceof Prisma.Decimal ? value.toFixed() : value]));
+};
+
+test('a percentage over the cost is added to the base before the margin', () => {
+  const result = breakdown('50', [cost('VALUE', 'COST', '2'), cost('PERCENT', 'COST', '10')], '40');
+  assert.deepEqual([result.fixedCost, result.percentCost, result.totalCost, result.suggestedPrice], ['2', '5', '57', '95']);
+});
+
+test('a percentage over the sale is taken from the price with the margin', () => {
+  // 60 ÷ (1 − 30% − 10%) = 100, and the marketplace keeps R$ 10 of it.
+  const result = breakdown('60', [cost('PERCENT', 'SALE', '10')], '30', '100');
+  assert.deepEqual([result.suggestedPrice, result.saleCost, result.realMargin, result.belowTargetMargin], ['100', '10', '30', false]);
+  assert.equal(breakdown('60', [cost('PERCENT', 'SALE', '10')], '30', '99.99').belowTargetMargin, true);
+});
+
+test('margin and sale percentages that reach 100% leave no possible price', () => {
+  const result = breakdown('60', [cost('PERCENT', 'SALE', '40'), cost('PERCENT', 'SALE', '10')], '50');
+  assert.deepEqual([result.impossible, result.suggestedPrice], [true, null]);
+  assert.equal(breakdown('60', [cost('PERCENT', 'SALE', '10')], '89.99').impossible, false);
+});
+
+test('the breakdown rounds the price up and keeps the costs exact', () => {
+  const result = breakdown('20', [cost('PERCENT', 'COST', '3.333')], '30');
+  assert.deepEqual([result.totalCost, result.suggestedPrice], ['20.6666', '29.53']);
+  assert.equal(breakdown('0.0853', [], '40').suggestedPrice, '0.1422');
+  assert.equal(breakdown('20', [cost('PERCENT', 'SALE', '5')], '30', result.suggestedPrice).belowTargetMargin, true);
+});
+
+test('without a base cost or a margin the costs are listed but no price is suggested', () => {
+  assert.deepEqual([breakdown(null, [cost('VALUE', 'COST', '2')], '40').suggestedPrice, breakdown('10', [], null).suggestedPrice], [null, null]);
+  assert.equal(breakdown(null, [cost('VALUE', 'COST', '2')], '40').fixedCost, '2');
+});
+
 const average = (balance, current, quantity, cost) =>
   averageCost(d(balance), current === null ? null : d(current), d(quantity), d(cost)).toString();
 
@@ -292,4 +328,12 @@ test('the budget separates expenses from materials', () => {
     minutes: 60, hourCost: d('2'), expenses: [{ inputId: 'pla', value: d('3') }],
   });
   assert.deepEqual([budget.materialCost, budget.machineCost, budget.expenseCost, budget.totalCost].map(value => value.toString()), ['10', '2', '3', '15']);
+});
+
+test('a cor custa a média das marcas ponderada pelo saldo, ou a média simples sem saldo', () => {
+  const brand = (quantity, value) => ({ quantity: d(quantity), value: value === null ? null : d(value) });
+  assert.equal(colorAverage([brand('1000', '0.1'), brand('3000', '0.14'), brand('0', '9')]).toString(), '0.13');
+  assert.equal(colorAverage([brand('0', '0.1'), brand('0', '0.2'), brand('0', null)]).toString(), '0.15');
+  assert.equal(colorAverage([brand('500', null)]), null);
+  assert.equal(colorAverage([]), null);
 });

@@ -3,11 +3,16 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { MovementKind, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
+import { canAccess } from '../access/security';
 import { Audit } from '../audit/recorder';
-import { CatalogService, stockSettingsFields } from '../catalog/catalog';
+import { CatalogService } from '../catalog/catalog';
+import { PricingService, stockSettingsFields } from '../catalog/pricing';
 import { Database, dayRange, idField, parse, sortField } from '../shared';
 import { countFields, initialFields, kitOutFields, movementFields, StockService } from './stock';
 import { WorkbookKind, WorkbookLists, workbookRows, workbookTemplate } from './workbooks';
+
+// Costs in the load are registrations, so they also need that permission.
+const registersCosts = (request: Authenticated) => canAccess(request.identity.permissions, 'registrations:operate');
 
 const pageSize = 100;
 // Only required columns of the movement: a cursor cannot continue past a NULL in the sorted column.
@@ -32,6 +37,7 @@ export class StockController {
   constructor(
     @Inject(StockService) private stock: StockService,
     @Inject(CatalogService) private catalog: CatalogService,
+    @Inject(PricingService) private pricing: PricingService,
     @Inject(Database) private db: Database,
   ) {}
 
@@ -67,11 +73,22 @@ export class StockController {
     return this.stock.movement(parse(movementFields, body), request.identity.id);
   }
 
+  /** The price panel: base cost, linked costs and the active costs that can be linked. */
+  @Require('stock:operate')
+  @Get('pricing-options')
+  pricingOptions() { return this.pricing.options(); }
+
+  @Require('stock:operate')
+  @Get('products/:id/pricing')
+  pricingView(@Param('id') id: string) {
+    return this.pricing.view(parse(idField, id));
+  }
+
   @Require('stock:operate')
   @Audit('Alterar parâmetros de estoque')
   @Patch('products/:id/settings')
   settings(@Param('id') id: string, @Body() body: unknown) {
-    return this.catalog.saveStockSettings(parse(idField, id), parse(stockSettingsFields, body));
+    return this.pricing.saveSettings(parse(idField, id), parse(stockSettingsFields, body));
   }
 
   @Require('stock:operate')
@@ -110,13 +127,15 @@ export class StockController {
   @Require('catalog:operate', 'stock:operate')
   @Get('initial/template')
   async initialTemplate() {
-    const [{ productTypes, units, references }, suppliers] = await Promise.all([
+    const [{ productTypes, units, references }, suppliers, printers] = await Promise.all([
       this.catalog.registrations(), this.db.supplier.findMany({ where: { active: true }, select: { name: true }, orderBy: { name: 'asc' } }),
+      this.db.printer.findMany({ where: { active: true }, select: { name: true }, orderBy: { name: 'asc' } }),
     ]);
     const names = (kind: string) => references.filter(item => item.kind === kind).map(item => item.name);
     return template('initial', {
       Tipo: productTypes.map(type => type.name), Unidade: units.map(unit => unit.symbol), Grupo: names('GRUPO'),
       Marca: names('MARCA'), Cor: names('COR'), Departamento: names('DEPARTAMENTO'), Fornecedor: suppliers.map(supplier => supplier.name),
+      Impressora: printers.map(printer => printer.name),
     });
   }
 
@@ -125,13 +144,13 @@ export class StockController {
   @Post('initial/preview')
   @Upload()
   async initialPreview(@Req() request: Authenticated, @UploadedFile() file?: Express.Multer.File) {
-    return this.stock.previewInitial(parse(initialFields, await workbookRows('initial', file)), request.identity.id);
+    return this.stock.previewInitial(parse(initialFields, await workbookRows('initial', file)), request.identity.id, registersCosts(request));
   }
 
   @Require('catalog:operate', 'stock:operate')
   @Audit('Confirmar carga inicial')
   @Post('initial/:id/confirm')
   initialConfirm(@Req() request: Authenticated, @Param('id') id: string) {
-    return this.stock.confirmInitial(parse(idField, id), request.identity.id);
+    return this.stock.confirmInitial(parse(idField, id), request.identity.id, registersCosts(request));
   }
 }

@@ -3,7 +3,7 @@ const { test } = require('node:test');
 require('reflect-metadata');
 const { Prisma } = require('@prisma/client');
 const { presentOrder, ProductionOrderService } = require('../dist/api/production/orders.js');
-const { planExpenses, setInputTotals, substituteInputs } = require('../dist/api/production/plan.js');
+const { pickBrands, planExpenses, setInputTotals, splitColor, substituteInputs } = require('../dist/api/production/plan.js');
 
 const d = value => new Prisma.Decimal(value);
 const date = new Date('2026-11-21T10:00:00.000Z');
@@ -101,7 +101,25 @@ test('the finish preview charges the input expense on the real consumption', asy
   assert.equal(preview.totalCost.toFixed(), '2.8');
 });
 
-const planRow = (productId, inputId, planned, originalInputId = null) => ({ productId, inputId, planned: d(planned), originalInputId });
+const planRow = (productId, inputId, planned, originalInputId = null, colorInputId = null) => ({ productId, inputId, planned: d(planned), originalInputId, colorInputId });
+
+test('a cor sugere a marca com mais saldo livre e completa com a próxima', () => {
+  const show = rows => rows.map(row => row.inputId + ':' + row.planned.toString());
+  const brands = [{ id: 'a', free: d(100) }, { id: 'b', free: d(300) }, { id: 'c', free: d(0) }];
+  assert.deepEqual(show(pickBrands(d(250), brands)), ['b:250']);
+  assert.deepEqual(show(pickBrands(d(350), brands)), ['b:300', 'a:50']);
+  // What no balance covers stays on the brand with the most balance.
+  assert.deepEqual(show(pickBrands(d(500), brands)), ['b:400', 'a:100']);
+  assert.deepEqual(show(pickBrands(d(10), [{ id: 'a', free: d(0) }, { id: 'b', free: d(-5) }])), ['a:10']);
+});
+
+test('dividir a cor entre marcas mantém a parte de cada produto e fecha cada total', () => {
+  const rows = [planRow('x', 'a', 30, null, 'preto'), planRow('y', 'a', 10, null, 'preto'), planRow('x', 'pla', 5)];
+  const split = splitColor(rows, 'preto', [{ inputId: 'a', planned: d(20) }, { inputId: 'b', planned: d(40) }]);
+  assert.deepEqual(split.map(row => [row.productId, row.inputId, row.planned.toString(), row.colorInputId]), [
+    ['x', 'pla', '5', null], ['x', 'a', '15', 'preto'], ['y', 'a', '5', 'preto'], ['x', 'b', '30', 'preto'], ['y', 'b', '10', 'preto'],
+  ]);
+});
 
 test('a substitute keeps the original input and joins repeated lines', () => {
   const rows = substituteInputs([planRow('a', 'pla', 10), planRow('a', 'petg', 5), planRow('b', 'pla', 3)], new Map([['pla', 'petg']]));

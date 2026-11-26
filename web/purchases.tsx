@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { Eye, Pencil, Plus, Trash2, Undo2 } from 'lucide-react';
+import { CostItem, costModes, costValue } from './costs';
+import { PricingCost, suggestedPrice } from './format';
 import { PurchaseAttachments } from './purchase-documents';
 import {
-  api, Badge, brl, by, dateTime, Field, fields, Loading, message, Modal, ModalForm, notify, PageActions, Product, productOptions, quantity, Select, Table, Title, today, Unit, unitOptions, useData,
+  api, Badge, baseUnit, brl, by, dateTime, Field, fields, Loading, message, Modal, ModalForm, notify, PageActions, Product, productOptions, quantity, Select, Table, Title, today, Unit, unitOptions, useData,
 } from './ui';
 
 type Row = {
@@ -10,7 +12,12 @@ type Row = {
   supplier: { name: string } | null; user: { name: string }; _count: { items: number };
 };
 type Page = { purchases: Row[]; nextCursor: string | null };
-type Options = { suppliers: { id: string; name: string }[]; products: Product[]; units: Unit[] };
+/** Price, margin and linked costs only come with stock:operate, which the price update also requires. */
+type PricedProduct = Product & { salePrice?: string | null; marginPercent?: string | null; costs?: PricingCost[] };
+type Options = { suppliers: { id: string; name: string }[]; products: PricedProduct[]; units: Unit[]; costs: Pick<CostItem, 'id' | 'name' | 'mode' | 'value'>[] };
+type ItemRow = { key: number; productId: string; quantity: string; unitId: string; total: string; reprice: boolean; salePrice: string };
+const blankItem = (key: number): ItemRow => ({ key, productId: '', quantity: '', unitId: '', total: '', reprice: false, salePrice: '' });
+type CostRow = { key: number; costItemId: string; title: string; mode: string; value: string; filled: number };
 type Details = Omit<Row, 'supplier' | '_count'> & {
   supplierId: string | null; supplier: { id: string; name: string } | null; notes: string | null; createdAt: string; reversalReason: string | null; reversedBy: { name: string } | null;
   reversalBlock: string | null;
@@ -21,7 +28,6 @@ type Details = Omit<Row, 'supplier' | '_count'> & {
   }[];
 };
 type Dialog = { kind: 'new' } | { kind: 'view' | 'edit' | 'reverse'; id: string };
-const modes = [{ id: 'VALUE', name: 'Valor (R$)' }, { id: 'PERCENT', name: 'Percentual (%)' }];
 const splits = [{ id: 'VALUE', name: 'Por valor' }, { id: 'QUANTITY', name: 'Por quantidade' }];
 const shortDate = (value: string) => new Date(value).toLocaleDateString('pt-BR', { timeZone: 'UTC' });
 const typed = (value: string) => { const number = Number(value.replace(',', '.')); return Number.isFinite(number) ? number : 0; };
@@ -64,11 +70,16 @@ export function Purchases({ edit }: { edit: boolean }) {
 
 function NewPurchase({ close, saved }: { close: () => void; saved: (text: string) => Promise<void> }) {
   const { data, error } = useData<Options>('purchases/options');
-  const [items, setItems] = useState([{ key: 0, productId: '', total: '' }]);
-  const [costs, setCosts] = useState<{ key: number; mode: string; value: string }[]>([]);
+  const [items, setItems] = useState<ItemRow[]>([blankItem(0)]);
+  const [costs, setCosts] = useState<CostRow[]>([]);
   if (!data) return <Modal wide title="Nova compra" close={close}>{message(error)}{!error && <Loading label="Carregando…" />}</Modal>;
-  const patchItem = (key: number, patch: Partial<typeof items[number]>) => setItems(rows => rows.map(row => row.key === key ? { ...row, ...patch } : row));
-  const patchCost = (key: number, patch: Partial<typeof costs[number]>) => setCosts(rows => rows.map(row => row.key === key ? { ...row, ...patch } : row));
+  const patchItem = (key: number, patch: Partial<ItemRow>) => setItems(rows => rows.map(row => row.key === key ? { ...row, ...patch } : row));
+  const patchCost = (key: number, patch: Partial<CostRow>) => setCosts(rows => rows.map(row => row.key === key ? { ...row, ...patch } : row));
+  // A registered cost fills a copy of its values. They stay editable, and the purchase keeps what was typed.
+  const pickCost = (row: CostRow, costItemId: string) => {
+    const cost = data.costs.find(item => item.id === costItemId);
+    patchCost(row.key, cost ? { costItemId, title: cost.name, mode: cost.mode, value: cost.value, filled: row.filled + 1 } : { costItemId: '' });
+  };
   const goods = items.reduce((total, row) => total + typed(row.total), 0);
   const extra = costs.reduce((total, row) => total + (row.mode === 'PERCENT' ? goods * typed(row.value) / 100 : typed(row.value)), 0);
   const manufactured = items.flatMap(row => { const product = data.products.find(item => item.id === row.productId); return product?.type?.isManufactured ? [product.sku] : []; });
@@ -76,8 +87,11 @@ function NewPurchase({ close, saved }: { close: () => void; saved: (text: string
     const input = fields(values);
     await api('purchases', {
       supplierId: input.supplierId, documentNumber: input.documentNumber, purchaseDate: input.purchaseDate, notes: input.notes,
-      items: items.map(({ key }) => ({ productId: input['product' + key], unitId: input['unit' + key], quantity: input['quantity' + key], totalCost: input['total' + key] })),
-      costs: costs.map(({ key }) => ({ title: input['title' + key], mode: input['mode' + key], value: input['value' + key], split: input['split' + key] })),
+      items: items.map(({ key, reprice, salePrice }) => ({
+        productId: input['product' + key], unitId: input['unit' + key], quantity: input['quantity' + key], totalCost: input['total' + key],
+        ...(reprice && salePrice.trim() ? { salePrice: salePrice.trim() } : {}),
+      })),
+      costs: costs.map(({ key, costItemId }) => ({ costItemId: costItemId || null, title: input['title' + key], mode: input['mode' + key], value: input['value' + key], split: input['split' + key] })),
       ...(manufactured.length ? { acknowledgeNoInputs: values.has('acknowledgeNoInputs') } : {}),
     });
     await saved('Compra lançada.');
@@ -89,29 +103,36 @@ function NewPurchase({ close, saved }: { close: () => void; saved: (text: string
       <Field name="notes" label="Observações" required={false} />
     </div>
     <h3>Itens</h3>
-    {items.map(({ key, productId, total }, index) => {
+    {items.map((row, index) => {
+      const { key, productId, total } = row;
       const product = data.products.find(item => item.id === productId);
-      return <div className="component-row purchase-row" key={key}>
-        <Select name={'product' + key} label={'Produto ' + (index + 1)} options={productOptions(data.products)} onChange={value => patchItem(key, { productId: value })} />
-        <Field name={'quantity' + key} label="Quantidade" inputMode="decimal" />
-        <Select key={productId} name={'unit' + key} label="Unidade" defaultValue={product?.unit.id}
-          options={unitOptions(data.units.filter(unit => unit.familyId === product?.unit.familyId))} />
-        <label>Total da mercadoria (R$)<input name={'total' + key} inputMode="decimal" required value={total} onChange={event => patchItem(key, { total: event.target.value })} /></label>
-        {items.length > 1 && <button type="button" className="btn ghost small" aria-label={'Remover produto ' + (index + 1)} onClick={() => setItems(items.filter(row => row.key !== key))}><Trash2 size={14} aria-hidden="true" /></button>}
+      return <div className="stack" style={{ gap: 4 }} key={key}>
+        <div className="component-row purchase-row">
+          <Select name={'product' + key} label={'Produto ' + (index + 1)} options={productOptions(data.products)}
+            onChange={value => patchItem(key, { productId: value, unitId: '', reprice: false, salePrice: '' })} />
+          <label>Quantidade<input name={'quantity' + key} inputMode="decimal" required value={row.quantity} onChange={event => patchItem(key, { quantity: event.target.value })} /></label>
+          <Select key={productId} name={'unit' + key} label="Unidade" defaultValue={product?.unit.id} onChange={unitId => patchItem(key, { unitId })}
+            options={unitOptions(data.units.filter(unit => unit.familyId === product?.unit.familyId))} />
+          <label>Total da mercadoria (R$)<input name={'total' + key} inputMode="decimal" required value={total} onChange={event => patchItem(key, { total: event.target.value })} /></label>
+          {items.length > 1 && <button type="button" className="btn ghost small" aria-label={'Remover produto ' + (index + 1)} onClick={() => setItems(items.filter(item => item.key !== key))}><Trash2 size={14} aria-hidden="true" /></button>}
+        </div>
+        {product?.costs && <ItemPricing row={row} product={product} units={data.units} patch={patch => patchItem(key, patch)} />}
       </div>;
     })}
-    <div><button type="button" className="btn secondary small" onClick={() => setItems([...items, { key: Math.max(...items.map(row => row.key)) + 1, productId: '', total: '' }])}>
+    <div><button type="button" className="btn secondary small" onClick={() => setItems([...items, blankItem(Math.max(...items.map(row => row.key)) + 1)])}>
       <Plus size={14} aria-hidden="true" />Adicionar item</button></div>
     <h3>Custos adicionais</h3>
-    <p className="hint">Frete, taxas e outras despesas ficam fora do custo médio e aparecem nos valores da última compra.</p>
-    {costs.map(({ key, mode, value }, index) => <div className="component-row purchase-row" key={key}>
-      <Field name={'title' + key} label={'Título ' + (index + 1)} placeholder="Frete" />
-      <Select name={'mode' + key} label="Tipo" defaultValue={mode} options={modes} onChange={next => patchCost(key, { mode: next })} />
+    <p className="hint">Frete, taxas e outras despesas ficam fora do custo médio e aparecem nos valores da última compra. O percentual vale sobre o total das mercadorias.</p>
+    {costs.map((row, index) => { const { key, costItemId, title, mode, value, filled } = row; return <div className="component-row cost-row" key={key}>
+      <Select name={'costItem' + key} label={'Custo cadastrado ' + (index + 1)} required={false} placeholder="Digitar manualmente" defaultValue={costItemId}
+        options={data.costs.map(cost => ({ id: cost.id, name: cost.name + ' · ' + costValue(cost) }))} onChange={next => pickCost(row, next)} />
+      <label>Título<input name={'title' + key} required maxLength={160} placeholder="Frete" value={title} onChange={event => patchCost(key, { title: event.target.value })} /></label>
+      <Select key={filled} name={'mode' + key} label="Tipo" defaultValue={mode} options={costModes} onChange={next => patchCost(key, { mode: next })} />
       <label>{mode === 'PERCENT' ? 'Percentual' : 'Valor (R$)'}<input name={'value' + key} inputMode="decimal" required value={value} onChange={event => patchCost(key, { value: event.target.value })} /></label>
       <Select name={'split' + key} label="Rateio" defaultValue="VALUE" options={splits} />
-      <button type="button" className="btn ghost small" aria-label={'Remover custo ' + (index + 1)} onClick={() => setCosts(costs.filter(row => row.key !== key))}><Trash2 size={14} aria-hidden="true" /></button>
-    </div>)}
-    <div><button type="button" className="btn secondary small" onClick={() => setCosts([...costs, { key: Math.max(0, ...costs.map(row => row.key)) + 1, mode: 'VALUE', value: '' }])}>
+      <button type="button" className="btn ghost small" aria-label={'Remover custo ' + (index + 1)} onClick={() => setCosts(costs.filter(item => item.key !== key))}><Trash2 size={14} aria-hidden="true" /></button>
+    </div>; })}
+    <div><button type="button" className="btn secondary small" onClick={() => setCosts([...costs, { key: Math.max(0, ...costs.map(row => row.key)) + 1, costItemId: '', title: '', mode: 'VALUE', value: '', filled: 0 }])}>
       <Plus size={14} aria-hidden="true" />Adicionar custo</button></div>
     <p className="summary">Mercadorias <strong className="num">{brl(goods)}</strong> · custos adicionais <strong className="num">{brl(extra)}</strong> · total <strong className="num">{brl(goods + extra)}</strong></p>
     {manufactured.length > 0 && <div className="info stack" role="alert" style={{ gap: 8 }}>
@@ -119,6 +140,27 @@ function NewPurchase({ close, saved }: { close: () => void; saved: (text: string
       <label className="check"><input name="acknowledgeNoInputs" type="checkbox" required />Estou ciente e quero registrar mesmo assim</label>
     </div>}
   </ModalForm>;
+}
+
+/**
+ * Unit cost of this purchase and the price it suggests with the product's margin and linked costs.
+ * The expenses stay out, as they stay out of the average cost. Display only: the API stores the price the person confirms.
+ */
+function ItemPricing({ row, product, units, patch }: { row: ItemRow; product: PricedProduct; units: Unit[]; patch: (patch: Partial<ItemRow>) => void }) {
+  const unit = units.find(item => item.id === (row.unitId || product.unit.id));
+  const amount = typed(row.quantity) * Number(unit?.factor ?? 0);
+  const cost = amount > 0 && row.total.trim() ? typed(row.total) / amount : null;
+  const suggestion = cost === null ? null : suggestedPrice(cost.toFixed(12), product.marginPercent ?? '', product.costs ?? []);
+  const symbol = baseUnit(product).symbol;
+  return <div className="hint purchase-pricing">
+    <span>Custo unitário: <strong className="num">{cost === null ? '—' : brl(cost) + ' / ' + symbol}</strong>
+      {' · preço atual: ' + (product.salePrice ? brl(product.salePrice) : 'sem preço')}
+      {' · sugerido: '}{suggestion ? <strong className="num">{brl(suggestion)}</strong> : product.marginPercent ? '—' : 'sem margem desejada'}</span>
+    <label className="check"><input type="checkbox" checked={row.reprice}
+      onChange={event => patch({ reprice: event.target.checked, salePrice: row.salePrice || suggestion || product.salePrice || '' })} />Atualizar preço de venda</label>
+    {row.reprice && <label>{'Novo preço por ' + symbol + ' (R$)'}<input inputMode="decimal" required value={row.salePrice}
+      onChange={event => patch({ salePrice: event.target.value })} /></label>}
+  </div>;
 }
 
 function PurchaseDialog({ dialog, edit, setDialog, close, saved }: {

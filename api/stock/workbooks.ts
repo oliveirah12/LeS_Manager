@@ -11,6 +11,7 @@ const formats = {
     ['Estoque mínimo', 'minStock'], ['Margem (%)', 'marginPercent'], ['Preço de venda', 'salePrice'],
     ['Comprimento (mm)', 'lengthMm'], ['Largura (mm)', 'widthMm'], ['Altura (mm)', 'heightMm'], ['Diâmetro (mm)', 'diameterMm'], ['URL de compra', 'purchaseUrl'],
     ['Data da compra', 'purchaseDate'], ['Fornecedor', 'supplier'], ['Despesas da compra', 'purchaseExpenses'],
+    ['Tempo por peça (min)', 'printMinutes'], ['Impressora', 'printer'], ['Custos vinculados', 'linkedCosts'],
   ],
   inventory: [['SKU', 'sku'], ['Quantidade', 'quantity'], ['Unidade', 'unit']],
 } as const satisfies Record<string, readonly Column[]>;
@@ -21,9 +22,13 @@ const recipeSheet = 'Ficha técnica';
 const recipeColumns: readonly Column[] = [['SKU do produto', 'product'], ['SKU do insumo', 'input'], ['Quantidade', 'quantity'], ['Unidade', 'unit']];
 const measureSheet = 'Medidas';
 const measureColumns: readonly Column[] = [['SKU', 'sku'], ['Nome', 'name'], ['Valor', 'value'], ['Unidade', 'unit']];
+const costSheet = 'Custos';
+const costColumns: readonly Column[] = [['Descrição', 'name'], ['Tipo do custo', 'mode'], ['Base do %', 'base'], ['Valor', 'value']];
+/** Fixed choices of the cost tab. The labels are read back by the cost rules of the load. */
+const costLists: WorkbookLists = { 'Tipo do custo': ['Valor', 'Percentual'], 'Base do %': ['Custo', 'Venda'] };
 const requiredInitial = ['SKU', 'Nome', 'Unidade', 'Quantidade'];
 const decimalKeys = new Set([
-  'quantity', 'unitCost', 'totalCost', 'wastePercent', 'minStock', 'marginPercent', 'salePrice', 'lengthMm', 'widthMm', 'heightMm', 'diameterMm', 'value', 'purchaseExpenses',
+  'quantity', 'unitCost', 'totalCost', 'wastePercent', 'minStock', 'marginPercent', 'salePrice', 'lengthMm', 'widthMm', 'heightMm', 'diameterMm', 'value', 'purchaseExpenses', 'printMinutes',
 ]);
 const lastRow = 501;
 /** Current registrations offered as dropdowns, by column header. */
@@ -59,9 +64,10 @@ export async function workbookTemplate(kind: WorkbookKind, lists: WorkbookLists 
   const sheet = addSheet(workbook, 'Carga inicial', formats.initial);
   const recipes = addSheet(workbook, recipeSheet, recipeColumns);
   addSheet(workbook, measureSheet, measureColumns);
+  const costs = addSheet(workbook, costSheet, costColumns);
   const listSheet = workbook.addWorksheet('Listas');
   const ranges = new Map<string, string>();
-  Object.entries(lists).forEach(([header, values], index) => {
+  Object.entries({ ...lists, ...costLists }).forEach(([header, values], index) => {
     const column = listSheet.getColumn(index + 1);
     column.width = 22;
     listSheet.getCell(1, index + 1).value = header;
@@ -71,6 +77,7 @@ export async function workbookTemplate(kind: WorkbookKind, lists: WorkbookLists 
   listSheet.getRow(1).font = { bold: true };
   addDropdowns(sheet, formats.initial, ranges);
   addDropdowns(recipes, recipeColumns, ranges);
+  addDropdowns(costs, costColumns, ranges);
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
@@ -141,10 +148,14 @@ export async function workbookRows(kind: WorkbookKind, file?: Express.Multer.Fil
   const recipes = workbook.getWorksheet(recipeSheet);
   const measureTab = workbook.getWorksheet(measureSheet);
   const measures = measureTab ? readSheet(measureTab, measureColumns, measureColumns.map(([header]) => header)) : [];
+  const costTab = workbook.getWorksheet(costSheet);
+  // The base only matters for a percentage, so it is optional.
+  const costs = costTab ? readSheet(costTab, costColumns, ['Descrição', 'Tipo do custo', 'Valor']) : [];
   return {
     rows: readSheet(sheet, [...formats.initial, legacyCost], requiredInitial),
     recipes: recipes ? readSheet(recipes, recipeColumns, recipeColumns.map(([header]) => header)) : [],
     ...(measures.length ? { measures } : {}),
+    ...(costs.length ? { costs } : {}),
   };
 }
 

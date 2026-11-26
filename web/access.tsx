@@ -11,6 +11,7 @@ type Code = { code: string; expiresAt: string; name: string };
 const modules = [
   { id: 'catalog', name: 'Catálogo' }, { id: 'registrations', name: 'Cadastros' },
   { id: 'stock', name: 'Estoque' }, { id: 'finance', name: 'Financeiro' }, { id: 'production', name: 'Produção' }, { id: 'purchases', name: 'Compras' },
+  { id: 'quotes', name: 'Orçamentos' },
 ];
 const correctPermission = 'production:correct';
 

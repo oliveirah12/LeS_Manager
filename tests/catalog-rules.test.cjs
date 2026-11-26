@@ -5,7 +5,7 @@ const { Prisma } = require('@prisma/client');
 const { CatalogService, measuresField, purchaseUrlField } = require('../dist/api/catalog/catalog.js');
 const { formsCycle } = require('../dist/api/catalog/recipe.js');
 
-const unused = { movements: 0, kitComponents: 0, inventoryRows: 0, recipe: 0, usedInRecipes: 0, productionItems: 0, productionInputs: 0 };
+const unused = { movements: 0, kitComponents: 0, inventoryRows: 0, recipe: 0, colorRecipe: 0, usedInRecipes: 0, productionItems: 0, productionInputs: 0 };
 
 test('finds a product that would consume itself through another input', () => {
   const edges = [{ productId: 'b', inputId: 'c' }, { productId: 'c', inputId: 'a' }];
@@ -35,19 +35,29 @@ test('extra measures are exact, positive and not repeated', () => {
 
 test('the stock view reads products through an explicit field list', async () => {
   const queries = {};
-  const capture = name => async args => { queries[name] = args; return []; };
-  const db = {
-    product: { findMany: capture('product') }, kit: { findMany: capture('kit') },
-    productionConsumption: { groupBy: async () => [] },
+  const d = value => new Prisma.Decimal(value);
+  // One product with the pricing columns, which feed the suggestion and must not leave the API.
+  const row = {
+    id: 'p', quantity: d(1), currentCost: d(60), salePrice: null, marginPercent: d(40), minStock: null, wastePercent: d(5), printMinutes: d(30),
+    type: { isManufactured: false }, printer: null, recipe: [], colorRecipe: [], costs: [{ costItem: { id: 'c', name: 'Taxa', mode: 'PERCENT', base: 'SALE', value: d(10), active: true } }],
   };
-  await new CatalogService(db).stockView();
+  const capture = (name, rows = []) => async args => { queries[name] = args; return rows; };
+  const db = {
+    product: { findMany: capture('product', [row]) }, kit: { findMany: capture('kit') },
+    productionConsumption: { groupBy: async () => [] }, productionSettings: { findUniqueOrThrow: async () => ({ energyRate: d(0) }) },
+  };
+  const view = await new CatalogService(db).stockView();
   const componentQuery = queries.kit.include.components.include.product;
   for (const query of [queries.product, componentQuery]) {
     assert.equal(query.include, undefined);
     assert.equal(query.select.currentCost, true);
-    assert.equal(query.select.wastePercent, undefined);
     assert.equal(query.select.revision, undefined);
   }
+  assert.equal(componentQuery.select.wastePercent, undefined);
+  const [product] = view.products;
+  for (const key of ['wastePercent', 'printMinutes', 'printer', 'recipe', 'colorRecipe', 'costs']) assert.equal(key in product, false, key);
+  // 60 ÷ (1 − 40% − 10%) = 120
+  assert.equal(product.suggestedPrice.toFixed(), '120');
 });
 
 function service(usage, unitFamily = 'mass') {
@@ -66,26 +76,26 @@ function service(usage, unitFamily = 'mass') {
     releaseProductFiles: async () => { calls.push('files'); return { ids: ['f1'], names: ['a.pdf'] }; },
     purge: async ids => { calls.push('purge ' + ids.join()); },
   };
-  return { catalog: new CatalogService({ $transaction: work => work(tx) }, files), calls };
+  return { catalog: new CatalogService({ $transaction: work => work(tx) }, files), calls, tx };
 }
 
 const change = { name: 'Produto', unitId: 'new' };
 
 test('a product with history stays in its unit family', async () => {
-  const { catalog, calls } = service({ ...unused, movements: 1 }, 'volume');
-  await assert.rejects(catalog.updateProduct('id', change), { status: 409 });
+  const { catalog, calls, tx } = service({ ...unused, movements: 1 }, 'volume');
+  await assert.rejects(catalog.updateProduct(tx, 'id', change), { status: 409 });
   assert.deepEqual(calls, []);
 });
 
 test('a product with history can use another unit of the same family', async () => {
-  const { catalog, calls } = service({ ...unused, movements: 1 });
-  await catalog.updateProduct('id', change);
+  const { catalog, calls, tx } = service({ ...unused, movements: 1 });
+  await catalog.updateProduct(tx, 'id', change);
   assert.deepEqual(calls, ['update']);
 });
 
 test('an unused product can move to another family', async () => {
-  const { catalog, calls } = service(unused, 'volume');
-  await catalog.updateProduct('id', change);
+  const { catalog, calls, tx } = service(unused, 'volume');
+  await catalog.updateProduct(tx, 'id', change);
   assert.deepEqual(calls, ['update']);
 });
 

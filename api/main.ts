@@ -10,8 +10,10 @@ import { proxySetting } from './access/attempts';
 import { AuditController } from './audit/audit';
 import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
+import { PricingService } from './catalog/pricing';
+import { ProductController, ProductService } from './catalog/products';
 import { RecipeController, RecipeService } from './catalog/recipe';
-import { FileMaintenance, FileService, ProductFilesController, ProductImageController } from './files/files';
+import { FileMaintenance, FileService, PendingUploadController, ProductFilesController, ProductImageController } from './files/files';
 import { DiskFileStorage, FileStorage } from './files/storage';
 import { BankConnectionService } from './finance/connection';
 import { FinanceController, FinanceService } from './finance/finance';
@@ -22,6 +24,9 @@ import { PaymentMethodController, PaymentMethodService } from './production/paym
 import { ProductionController, ProductionService } from './production/production';
 import { PurchaseDocumentController, PurchaseDocumentSearch, PurchaseDocumentSearchController, PurchaseDocumentService } from './purchases/documents';
 import { PurchaseController, PurchaseService } from './purchases/purchases';
+import { CompanyController, CompanyService } from './registrations/company';
+import { CostItemController, CostItemService } from './registrations/costs';
+import { QuoteController, QuoteService } from './quotes/quotes';
 import { SupplierController, SupplierService } from './purchases/suppliers';
 import { Database, DatabaseErrors } from './shared';
 import { StockController } from './stock/controller';
@@ -35,13 +40,13 @@ class PersistenceModule {}
 class AccessModule {}
 
 @Module({
-  controllers: [ProductFilesController, ProductImageController],
+  controllers: [PendingUploadController, ProductFilesController, ProductImageController],
   providers: [FileService, FileMaintenance, { provide: FileStorage, useClass: DiskFileStorage }],
   exports: [FileService],
 })
 class FilesModule {}
 
-@Module({ imports: [FilesModule], controllers: [CatalogController, RecipeController], providers: [CatalogService, RecipeService], exports: [CatalogService] })
+@Module({ imports: [FilesModule], controllers: [CatalogController, ProductController, RecipeController], providers: [CatalogService, ProductService, RecipeService, PricingService], exports: [CatalogService, PricingService] })
 class CatalogModule {}
 
 @Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService, PreviewCleanup], exports: [StockService] })
@@ -53,6 +58,7 @@ class FinanceModule {}
 @Module({
   imports: [StockModule], controllers: [ProductionController, ProductionCorrectionController, ProductionOrderController, PaymentMethodController],
   providers: [ProductionService, ProductionOrderService, ProductionCorrectionService, PaymentMethodService],
+  exports: [ProductionOrderService],
 })
 class ProductionModule {}
 
@@ -62,11 +68,17 @@ class ProductionModule {}
 })
 class PurchasesModule {}
 
+@Module({ imports: [FilesModule], controllers: [CompanyController, CostItemController], providers: [CompanyService, CostItemService], exports: [CompanyService] })
+class RegistrationsModule {}
+
+@Module({ imports: [ProductionModule, RegistrationsModule, FilesModule], controllers: [QuoteController], providers: [QuoteService] })
+class QuotesModule {}
+
 @Module({ controllers: [AuditController], providers: [AuditRetention] })
 class AuditModule {}
 
 @Module({
-  imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, ProductionModule, PurchasesModule, AuditModule],
+  imports: [PersistenceModule, AccessModule, CatalogModule, StockModule, FinanceModule, ProductionModule, PurchasesModule, RegistrationsModule, QuotesModule, AuditModule],
   controllers: [HealthController],
 })
 class AppModule {}

@@ -19,7 +19,12 @@ const printerValues = (printer: { name: string; powerWatts: Prisma.Decimal; hour
   Nome: printer.name, 'Potência (W)': printer.powerWatts.toFixed(), 'Custo por hora': printer.hourlyCost.toFixed(),
 });
 const situation = (active: boolean) => active ? 'Ativa' : 'Inativa';
-const printerBlock = (orders: number) => orders ? 'A impressora já foi usada em ordens de produção.' : null;
+const printerUsage = { _count: { select: { orders: true, products: true, quotes: true } } } as const;
+function printerBlock(usage: { orders: number; products: number; quotes: number }) {
+  if (usage.orders) return 'A impressora já foi usada em ordens de produção.';
+  if (usage.quotes) return 'A impressora está em orçamentos.';
+  return usage.products ? 'A impressora é a padrão da ficha técnica de ' + usage.products + (usage.products === 1 ? ' produto.' : ' produtos.') : null;
+}
 
 @Injectable()
 export class ProductionService {
@@ -28,12 +33,12 @@ export class ProductionService {
   async printers() {
     const [settings, printers] = await Promise.all([
       this.db.productionSettings.findUniqueOrThrow({ where: { id: settingsId } }),
-      this.db.printer.findMany({ include: { _count: { select: { orders: true } } }, orderBy: { name: 'asc' } }),
+      this.db.printer.findMany({ include: printerUsage, orderBy: { name: 'asc' } }),
     ]);
     return {
       energyRate: settings.energyRate,
       printers: printers.map(({ _count, ...printer }) => ({
-        ...printer, deleteBlock: printerBlock(_count.orders), hourCost: printerHourCost(printer.powerWatts, settings.energyRate, printer.hourlyCost),
+        ...printer, deleteBlock: printerBlock(_count), hourCost: printerHourCost(printer.powerWatts, settings.energyRate, printer.hourlyCost),
       })),
     };
   }
@@ -59,9 +64,9 @@ export class ProductionService {
 
   deletePrinter(id: string) {
     return serial(this.db, async tx => {
-      const printer = await tx.printer.findUnique({ where: { id }, include: { _count: { select: { orders: true } } } });
+      const printer = await tx.printer.findUnique({ where: { id }, include: printerUsage });
       if (!printer) throw new NotFoundException('Impressora não encontrada.');
-      const block = printerBlock(printer._count.orders);
+      const block = printerBlock(printer._count);
       if (block) throw new ConflictException(block + ' Inative a impressora em vez de excluir.');
       await tx.printer.delete({ where: { id } });
       auditChange(printerValues(printer), null);

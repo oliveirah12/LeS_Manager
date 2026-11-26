@@ -60,16 +60,46 @@ export function saleMargin(salePrice: Prisma.Decimal | null, cost: Prisma.Decima
   return { profit, percent: profit.div(salePrice).times(100).toDecimalPlaces(2) };
 }
 
+/** A registered cost as it prices a product: a fixed value, or a percentage over the cost or over the sale price. */
+export type PricingCost = { mode: 'VALUE' | 'PERCENT'; base: 'COST' | 'SALE'; value: Prisma.Decimal };
+
 /**
- * Price that reaches the desired margin over the sale price, and whether the confirmed price falls short of it.
+ * How a price is formed: price = (base + fixed + %cost × base) ÷ (1 − margin − Σ%sale).
  * The suggestion always rounds up, so rounding never takes the price below the margin. Prices under R$ 1,
  * common per gram of filament, keep 4 places because a whole cent would distort their margin.
+ * Without a known base cost or a margin there is no suggestion. When margin and sale percentages reach 100%,
+ * no price can cover them, and `impossible` tells the caller to block the setting.
  */
-export function salePricing(salePrice: Prisma.Decimal | null, cost: Prisma.Decimal | null, marginPercent: Prisma.Decimal | null) {
-  if (cost === null || marginPercent === null || cost.lte(0) || marginPercent.gte(100)) return { suggestedPrice: null, belowTargetMargin: false };
-  const exact = cost.div(new Prisma.Decimal(1).minus(marginPercent.div(100)));
-  const suggestedPrice = exact.toDecimalPlaces(exact.gte(1) ? 2 : 4, Prisma.Decimal.ROUND_UP);
-  const belowTargetMargin = salePrice !== null && salePrice.gt(0) && salePrice.minus(cost).div(salePrice).times(100).lt(marginPercent);
+export function pricingBreakdown(baseCost: Prisma.Decimal | null, costs: PricingCost[], marginPercent: Prisma.Decimal | null, salePrice: Prisma.Decimal | null = null) {
+  const sum = (mode: PricingCost['mode'], base?: PricingCost['base']) =>
+    sumValues(costs.filter(cost => cost.mode === mode && (!base || cost.base === base)).map(cost => cost.value));
+  const fixedCost = sum('VALUE');
+  const costPercent = sum('PERCENT', 'COST');
+  const salePercent = sum('PERCENT', 'SALE');
+  const percentCost = (baseCost ?? new Prisma.Decimal(0)).times(costPercent).div(100);
+  const totalCost = baseCost === null ? null : baseCost.plus(fixedCost).plus(percentCost);
+  const share = new Prisma.Decimal(100).minus(marginPercent ?? 0).minus(salePercent);
+  const impossible = share.lte(0);
+  const known = totalCost !== null && baseCost!.gt(0) && marginPercent !== null;
+  let suggestedPrice: Prisma.Decimal | null = null;
+  if (known && !impossible) {
+    const exact = totalCost.times(100).div(share);
+    suggestedPrice = exact.toDecimalPlaces(exact.gte(1) ? 2 : 4, Prisma.Decimal.ROUND_UP);
+  }
+  // What is left of the confirmed price after every cost, the sale percentages included.
+  const realMargin = totalCost === null || salePrice === null || salePrice.lte(0) ? null
+    : salePrice.minus(totalCost).minus(salePrice.times(salePercent).div(100)).div(salePrice).times(100);
+  return {
+    baseCost, fixedCost, percentCost: percentCost.toDecimalPlaces(12), costPercent, salePercent, totalCost: totalCost?.toDecimalPlaces(12) ?? null, suggestedPrice, impossible,
+    saleCost: suggestedPrice?.times(salePercent).div(100).toDecimalPlaces(12) ?? null,
+    realMargin: realMargin?.toDecimalPlaces(2, Prisma.Decimal.ROUND_DOWN) ?? null,
+    belowTargetMargin: known && realMargin !== null && realMargin.lt(marginPercent),
+  };
+}
+
+/** The suggested price and whether the confirmed price falls short of the desired margin. */
+export function salePricing(salePrice: Prisma.Decimal | null, cost: Prisma.Decimal | null, marginPercent: Prisma.Decimal | null, costs: PricingCost[] = []) {
+  const { suggestedPrice, belowTargetMargin } = pricingBreakdown(cost, costs, marginPercent, salePrice);
   return { suggestedPrice, belowTargetMargin };
 }
 
@@ -151,6 +181,19 @@ export function productionBudget({ items, rows, minutes, hourCost, expenses = []
     totalCost: costing.totalCost, partialCost: costing.partialCost,
     items: costing.items.map(item => ({ productId: item.productId, totalCost: item.totalCost, unitCost: item.fullUnitCost })),
   };
+}
+
+/**
+ * Estimated value of a color from its brands: the average weighted by balance, so the brand with more stock weighs more.
+ * Without balance it is the plain average of the known values, and without any value it is unknown.
+ */
+export function colorAverage(members: { quantity: Prisma.Decimal; value: Prisma.Decimal | null }[]) {
+  const known = members.filter((member): member is { quantity: Prisma.Decimal; value: Prisma.Decimal } => member.value !== null);
+  const stocked = known.filter(member => member.quantity.gt(0));
+  if (stocked.length) {
+    return sumValues(stocked.map(member => member.quantity.times(member.value))).div(sumValues(stocked.map(member => member.quantity))).toDecimalPlaces(12);
+  }
+  return known.length ? sumValues(known.map(member => member.value)).div(known.length).toDecimalPlaces(12) : null;
 }
 
 /**

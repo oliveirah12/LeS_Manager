@@ -16,8 +16,9 @@ export const paymentFields = z.object({
 export const paymentUpdateFields = paymentFields.extend({ active: z.boolean() });
 type PaymentData = z.infer<typeof paymentFields>;
 
-const usage = { _count: { select: { orders: true } } } as const;
-const usedBlock = 'A forma de pagamento já foi usada em ordens de produção. Inative-a para tirá-la das listas.';
+const usage = { _count: { select: { orders: true, quotes: true } } } as const;
+const usedBlock = 'A forma de pagamento já foi usada em ordens de produção ou orçamentos. Inative-a para tirá-la das listas.';
+const used = (count: { orders: number; quotes: number }) => count.orders + count.quotes > 0;
 const values = (method: Pick<PaymentMethod, 'name' | 'feePercent' | 'active'>) => ({
   Nome: method.name, 'Taxa (%)': method.feePercent?.toFixed() ?? null, Situação: method.active ? 'Ativa' : 'Inativa',
 });
@@ -28,7 +29,7 @@ export class PaymentMethodService {
 
   async list() {
     const rows = await this.db.paymentMethod.findMany({ include: usage, orderBy: { name: 'asc' } });
-    return rows.map(({ _count, ...method }) => ({ ...method, orders: _count.orders, deleteBlock: _count.orders ? usedBlock : null }));
+    return rows.map(({ _count, ...method }) => ({ ...method, orders: _count.orders, deleteBlock: used(_count) ? usedBlock : null }));
   }
 
   async create(data: PaymentData) {
@@ -51,7 +52,7 @@ export class PaymentMethodService {
     return serial(this.db, async tx => {
       const method = await tx.paymentMethod.findUnique({ where: { id }, include: usage });
       if (!method) throw new NotFoundException('Forma de pagamento não encontrada.');
-      if (method._count.orders) throw new ConflictException(usedBlock);
+      if (used(method._count)) throw new ConflictException(usedBlock);
       await tx.paymentMethod.delete({ where: { id } });
       auditChange(values(method), null);
       return { id };
