@@ -6,6 +6,19 @@ export type Release = { version: string; date: string; title: string; changes: s
  */
 export const releases: Release[] = [
   {
+    version: '0.10.0',
+    date: '2026-11-26',
+    title: 'Filamento por cor',
+    changes: [
+      'A ficha técnica aceita insumo por cor: em vez de um filamento exato, escolha o tipo, o grupo (material) e a cor, e qualquer marca cadastrada com esses três dados serve.',
+      'Uma marca nova comprada depois já entra na cor, sem editar a ficha. Num filamento colorido, o botão Aceitar qualquer marca troca a linha exata pela cor.',
+      'O preço do produto, a estimativa do catálogo e o orçamento usam a média das marcas da cor, pesada pelo saldo de cada uma.',
+      'Ao criar a ordem, cada cor recebe a marca com mais saldo livre, completando com a próxima se faltar.',
+      'Na ordem planejada, o bloco Insumos por cor permite trocar a marca ou dividir a cor entre marcas. A baixa e o custo seguem a marca realmente usada.',
+      'Um tipo usado em fichas por cor não pode ser excluído nem deixar de ser insumo.',
+    ],
+  },
+  {
     version: '0.9.0',
     date: '2026-11-26',
     title: 'Orçamentos',
