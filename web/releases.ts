@@ -6,6 +6,18 @@ export type Release = { version: string; date: string; title: string; changes: s
  */
 export const releases: Release[] = [
   {
+    version: '0.8.0',
+    date: '2026-11-25',
+    title: 'Cadastro da empresa',
+    changes: [
+      'Nova aba Empresa em Cadastros › Comercial, com nome, slogan, contato, rodapé, logo e a validade padrão dos orçamentos.',
+      'O logo aceita JPG, PNG ou WebP e só é enviado ao clicar em Salvar, junto com os outros dados.',
+      'O botão Prévia do PDF mostra um orçamento de exemplo com o cabeçalho, o valor total em destaque e o rodapé da empresa.',
+      'Esses dados vão para o cabeçalho e o rodapé dos orçamentos, que chegam na próxima versão.',
+      'A auditoria registra cada alteração dos dados da empresa, inclusive a troca do logo.',
+    ],
+  },
+  {
     version: '0.7.0',
     date: '2026-11-25',
     title: 'Produto salvo de uma vez',
