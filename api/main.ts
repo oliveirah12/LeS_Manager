@@ -10,6 +10,7 @@ import { proxySetting } from './access/attempts';
 import { AuditController } from './audit/audit';
 import { AuditInterceptor, AuditRetention } from './audit/recorder';
 import { CatalogController, CatalogService } from './catalog/catalog';
+import { PricingService } from './catalog/pricing';
 import { RecipeController, RecipeService } from './catalog/recipe';
 import { FileMaintenance, FileService, ProductFilesController, ProductImageController } from './files/files';
 import { DiskFileStorage, FileStorage } from './files/storage';
@@ -42,7 +43,7 @@ class AccessModule {}
 })
 class FilesModule {}
 
-@Module({ imports: [FilesModule], controllers: [CatalogController, RecipeController], providers: [CatalogService, RecipeService], exports: [CatalogService] })
+@Module({ imports: [FilesModule], controllers: [CatalogController, RecipeController], providers: [CatalogService, RecipeService, PricingService], exports: [CatalogService, PricingService] })
 class CatalogModule {}
 
 @Module({ imports: [CatalogModule], controllers: [StockController], providers: [StockService, PreviewCleanup], exports: [StockService] })

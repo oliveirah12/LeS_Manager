@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeftRight, ClipboardList, Download, Eye, FileSpreadsheet, PackageMinus, Plus, SlidersHorizontal } from 'lucide-react';
 import { costBaseLabel, CostItem, costTypeLabel, costValue } from './costs';
-import { CommercialForm } from './product-form';
+import { PricingSection } from './pricing';
 import {
   api, Badge, baseUnit, brl, by, dateTime, Field, fields, FileField, Filters, Form, Kit, Loading, matches, message, Modal, ModalForm, PageActions,
   Product, productOptions, quantity, SearchInput, Segmented, Select, sortParam, SortState, StockKit, StockProduct, StockView, Table, Tabs, Title, unitOptions, useClosePanel,
@@ -57,8 +57,8 @@ export function Stock({ edit, importInitial }: { edit: boolean; importInitial: b
       {tab === 'history' && <HistoryTab key={version} products={data.products} />}
     </>}
 
-    {dialog?.kind === 'settings' && <Modal title={'Estoque e venda de ' + dialog.product.sku} subtitle={dialog.product.name} close={() => setDialog(undefined)}>
-      <CommercialForm closeOnSave product={{ ...dialog.product, symbol: baseUnit(dialog.product).symbol }} saved={() => saved('Estoque e venda salvos.')} />
+    {dialog?.kind === 'settings' && <Modal wide title={'Formação de preço de ' + dialog.product.sku} subtitle={dialog.product.name} close={() => setDialog(undefined)}>
+      <PricingSection closeOnSave id={dialog.product.id} saved={() => saved('Preço e estoque salvos.')} />
     </Modal>}
     {data && dialog?.kind === 'movement' && <Modal title="Registrar movimentação" close={() => setDialog(undefined)}>
       <MovementForm data={data} initial={dialog.product} saved={saved} /></Modal>}

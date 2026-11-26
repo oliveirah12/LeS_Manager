@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { Authenticated, Require } from '../access/access';
 import { canAccess } from '../access/security';
 import { Audit } from '../audit/recorder';
-import { CatalogService, stockSettingsFields } from '../catalog/catalog';
+import { CatalogService } from '../catalog/catalog';
+import { PricingService, stockSettingsFields } from '../catalog/pricing';
 import { Database, dayRange, idField, parse, sortField } from '../shared';
 import { countFields, initialFields, kitOutFields, movementFields, StockService } from './stock';
 import { WorkbookKind, WorkbookLists, workbookRows, workbookTemplate } from './workbooks';
@@ -36,6 +37,7 @@ export class StockController {
   constructor(
     @Inject(StockService) private stock: StockService,
     @Inject(CatalogService) private catalog: CatalogService,
+    @Inject(PricingService) private pricing: PricingService,
     @Inject(Database) private db: Database,
   ) {}
 
@@ -71,11 +73,18 @@ export class StockController {
     return this.stock.movement(parse(movementFields, body), request.identity.id);
   }
 
+  /** The price panel: base cost, linked costs and the active costs that can be linked. */
+  @Require('stock:operate')
+  @Get('products/:id/pricing')
+  pricingView(@Param('id') id: string) {
+    return this.pricing.view(parse(idField, id));
+  }
+
   @Require('stock:operate')
   @Audit('Alterar parâmetros de estoque')
   @Patch('products/:id/settings')
   settings(@Param('id') id: string, @Body() body: unknown) {
-    return this.catalog.saveStockSettings(parse(idField, id), parse(stockSettingsFields, body));
+    return this.pricing.saveSettings(parse(idField, id), parse(stockSettingsFields, body));
   }
 
   @Require('stock:operate')

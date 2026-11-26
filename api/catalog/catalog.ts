@@ -8,7 +8,10 @@ import { canAccess } from '../access/security';
 import { Audit, auditChange, auditContext } from '../audit/recorder';
 import { FileService } from '../files/files';
 import { Database, idField, nameField, nonnegative, parse, positive, serial, skuField, storedDecimal } from '../shared';
-import { belowMinimum, kitCosting, recipeEstimate, saleMargin, salePricing, stockValue, sumValues } from '../stock/cost';
+import { belowMinimum, kitCosting, recipeEstimate, saleMargin, stockValue, sumValues } from '../stock/cost';
+import { currentEnergyRate, pricingSelect, productPricing } from './pricing';
+
+export { marginField } from './pricing';
 
 const referenceField = z.object({ kind: z.enum(ReferenceKind), name: nameField });
 export const symbolField = z.string().trim().min(1).max(24);
@@ -44,8 +47,6 @@ const productTypeFields = z.object({ name: nameField, isInput: z.boolean(), isMa
 /** Default type of every product, created by the migration. */
 export const defaultProductType = '00000000-0000-4000-8000-000000000001';
 const statusFields = z.strictObject({ active: z.boolean() });
-export const marginField = nonnegative.refine(value => value.lt(100) && value.decimalPlaces() <= 2, 'Informe a margem abaixo de 100, com até 2 casas');
-export const stockSettingsFields = z.strictObject({ minStock: nonnegative.nullable(), salePrice: positive.nullable(), marginPercent: marginField.nullish() });
 const situation = (active: boolean) => active ? 'Ativo' : 'Inativo';
 const kitFields = z.object({
   sku: skuField, name: nameField,
@@ -299,26 +300,6 @@ export class CatalogService {
     });
   }
 
-  saveStockSettings(id: string, data: z.infer<typeof stockSettingsFields>) {
-    const minStock = data.minStock && storedDecimal(data.minStock);
-    const salePrice = data.salePrice && storedDecimal(data.salePrice);
-    const values = (row: { minStock: Prisma.Decimal | null; salePrice: Prisma.Decimal | null; marginPercent: Prisma.Decimal | null }) => ({
-      'Estoque mínimo': row.minStock?.toFixed() ?? null, 'Preço de venda': row.salePrice?.toFixed() ?? null,
-      'Margem desejada (%)': row.marginPercent?.toFixed() ?? null,
-    });
-    return serial(this.db, async tx => {
-      const before = await tx.product.findUnique({ where: { id }, select: { sku: true, minStock: true, salePrice: true, marginPercent: true } });
-      if (!before) throw new NotFoundException('Produto não encontrado.');
-      // A client that does not send the margin keeps the stored one.
-      const marginPercent = data.marginPercent === undefined ? before.marginPercent : data.marginPercent;
-      auditContext({ Produto: before.sku });
-      auditChange(values(before), values({ minStock, salePrice, marginPercent }));
-      return tx.product.update({
-        where: { id }, data: { minStock, salePrice, marginPercent }, select: { id: true, minStock: true, salePrice: true, marginPercent: true },
-      });
-    });
-  }
-
   private async reservedById() {
     const rows = await this.db.productionConsumption.groupBy({ by: ['inputId'], where: { item: { order: { status: 'PRINTING' } } }, _sum: { planned: true } });
     const reserved = new Map(rows.map(row => [row.inputId, row._sum.planned ?? new Prisma.Decimal(0)]));
@@ -335,6 +316,7 @@ export class CatalogService {
       select: {
         id: true, sku: true, name: true, active: true, quantity: true, currentCost: true, lastPurchaseCost: true, lastPurchaseAt: true, lastPurchaseExpense: true, lastSupplier: { select: { name: true } }, minStock: true, salePrice: true, marginPercent: true, wastePercent: true, ...productInclude, ...technicalProduct,
         type: { select: { name: true, isInput: true, isManufactured: true } },
+        printMinutes: true, printer: pricingSelect.printer, costs: pricingSelect.costs,
         kitComponents: { select: { quantity: true, kit: { select: { sku: true, name: true, active: true } } }, orderBy: { kitId: 'asc' } },
         usedInRecipes: { select: { quantity: true, product: { select: { sku: true, name: true, active: true } } }, orderBy: { productId: 'asc' } },
         recipe: { orderBy: { inputId: 'asc' }, select: {
@@ -344,7 +326,8 @@ export class CatalogService {
     });
     if (!product) throw new NotFoundException('Produto não encontrado.');
     const symbol = (row: { unit: { symbol: string; family: { units: { symbol: string }[] } } }) => row.unit.family.units[0]?.symbol ?? row.unit.symbol;
-    const reserved = seeStock ? await this.reservedById() : null;
+    const [reserved, energyRate] = seeStock ? await Promise.all([this.reservedById(), currentEnergyRate(this.db)]) : [null, null];
+    const pricing = energyRate && productPricing(product, energyRate);
     const [lastMovement, purchases, lastItem, consumption] = await Promise.all([
       seeStock ? this.db.movement.findFirst({ where: { productId: id }, orderBy: { createdAt: 'desc' }, select: { kind: true, quantity: true, createdAt: true } }) : null,
       seeStock ? this.db.movement.findMany({
@@ -387,7 +370,8 @@ export class CatalogService {
         },
         lastMovement, purchases, minStock: product.minStock, belowMinimum: belowMinimum(product.quantity, held, product.minStock),
         salePrice: product.salePrice, margin: saleMargin(product.salePrice, product.currentCost), marginPercent: product.marginPercent,
-        ...salePricing(product.salePrice, product.currentCost, product.marginPercent),
+        suggestedPrice: pricing!.suggestedPrice, belowTargetMargin: pricing!.belowTargetMargin, priceCost: pricing!.totalCost,
+        linkedCosts: pricing!.costs.map(cost => ({ name: cost.name, active: cost.active })),
         estimate: product.type.isManufactured && product.recipe.length ? recipeEstimate(product.wastePercent, product.recipe.map(row => ({
           sku: row.input.sku, quantity: row.quantity, active: row.input.active, balance: row.input.quantity,
           reserved: reserved!(row.inputId), unitCost: row.input.currentCost,
@@ -416,24 +400,27 @@ export class CatalogService {
   }
 
   async stockView() {
-    const [products, kits, reservations] = await Promise.all([
-      this.db.product.findMany({
-        where: { active: true }, select: { ...stockProduct, type: { select: { isManufactured: true } } }, orderBy: { sku: 'asc' },
-      }),
+    const [products, kits, reservations, energyRate] = await Promise.all([
+      this.db.product.findMany({ where: { active: true }, select: { ...stockProduct, ...pricingSelect }, orderBy: { sku: 'asc' } }),
       this.db.kit.findMany({
         where: { active: true }, include: { components: { include: { product: { select: stockProduct } } } }, orderBy: { sku: 'asc' },
       }),
       this.db.productionConsumption.groupBy({ by: ['inputId'], where: { item: { order: { status: 'PRINTING' } } }, _sum: { planned: true } }),
+      currentEnergyRate(this.db),
     ]);
     const reserved = (id: string) => reservations.find(row => row.inputId === id)?._sum.planned ?? new Prisma.Decimal(0);
     // Values are computed here with exact decimals, so the panel only formats them.
-    const valued = products.map(product => ({
-      ...product, reserved: reserved(product.id), value: stockValue(product.quantity, product.currentCost),
-      available: Prisma.Decimal.max(0, product.quantity.minus(reserved(product.id))),
-      belowMinimum: belowMinimum(product.quantity, reserved(product.id), product.minStock),
-      margin: saleMargin(product.salePrice, product.currentCost),
-      ...salePricing(product.salePrice, product.currentCost, product.marginPercent),
-    }));
+    const valued = products.map(row => {
+      // The pricing columns only feed the suggestion, so they stay out of the response.
+      const { wastePercent: _waste, printMinutes: _minutes, printer: _printer, recipe: _recipe, costs: _costs, ...product } = row;
+      const { suggestedPrice, belowTargetMargin } = productPricing(row, energyRate);
+      return {
+        ...product, reserved: reserved(product.id), value: stockValue(product.quantity, product.currentCost),
+        available: Prisma.Decimal.max(0, product.quantity.minus(reserved(product.id))),
+        belowMinimum: belowMinimum(product.quantity, reserved(product.id), product.minStock),
+        margin: saleMargin(product.salePrice, product.currentCost), suggestedPrice, belowTargetMargin,
+      };
+    });
     return {
       products: valued,
       kits: kits.map(kit => ({

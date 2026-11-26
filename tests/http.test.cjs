@@ -796,6 +796,46 @@ test('API REST com PostgreSQL', {
     expectStatus(await operator('/costs/' + freight.id, { method: 'DELETE' }), 409);
   });
 
+  await t.test('formação de preço lê os custos vinculados e bloqueia margem impossível', async () => {
+    const product = await createProduct('PRECO', unit.id);
+    expectStatus(await movement(product.id, unit.id, 'PURCHASE', '1', '60'), 201);
+    const settings = '/stock/products/' + product.id + '/settings';
+    const pricing = '/stock/products/' + product.id + '/pricing';
+    const save = body => admin(settings, { method: 'PATCH', body: { minStock: null, salePrice: '90', ...body } });
+    const reader = await session('PRECO-LEITURA', ['stock:view']);
+    expectStatus(await reader(pricing), 403);
+    const fee = expectStatus(await post('/costs', { name: sku('TAXA-VENDA'), mode: 'PERCENT', base: 'SALE', value: '10' }), 201);
+    const pack = expectStatus(await post('/costs', { name: sku('EMBALAGEM-PRECO'), mode: 'VALUE', value: '2' }), 201);
+    const off = expectStatus(await post('/costs', { name: sku('INATIVO-PRECO'), mode: 'VALUE', value: '5', active: false }), 201);
+    expectStatus(await save({ marginPercent: '30', costItemIds: [off.id] }), 409);
+    expectStatus(await save({ marginPercent: '30', costItemIds: [fee.id, fee.id] }), 400);
+    expectStatus(await save({ marginPercent: '90', costItemIds: [fee.id] }), 400);
+    expectStatus(await save({ marginPercent: '30', costItemIds: [fee.id, pack.id] }), 200);
+    // (60 + 2) ÷ (1 − 30% − 10%) = 103.33…, rounded up.
+    const view = expectStatus(await admin(pricing), 200);
+    assert.deepEqual([view.baseCost, view.totalCost, view.suggestedPrice, view.costs.length], ['60', '62', '103.34', 2]);
+    assert.deepEqual([view.options.some(row => row.id === fee.id), view.options.some(row => row.id === off.id)], [true, false]);
+
+    // Editing the registered cost reprices the product, but never to a margin no price can cover.
+    expectStatus(await admin('/costs/' + pack.id, { method: 'PATCH', body: { name: pack.name, mode: 'VALUE', value: '8', active: true } }), 200);
+    assert.equal(expectStatus(await admin(pricing), 200).suggestedPrice, '113.34');
+    expectStatus(await admin('/costs/' + fee.id, { method: 'PATCH', body: { name: fee.name, mode: 'PERCENT', base: 'SALE', value: '70', active: true } }), 409);
+    const stockRow = expectStatus(await admin('/stock'), 200).products.find(row => row.id === product.id);
+    assert.deepEqual([stockRow.suggestedPrice, stockRow.belowTargetMargin, 'costs' in stockRow], ['113.34', true, false]);
+    assert.equal(expectStatus(await admin('/catalog/products/' + product.id + '/details'), 200).stock.priceCost, '68');
+    const listed = expectStatus(await admin('/costs'), 200).find(row => row.id === pack.id);
+    assert.deepEqual([listed.products, typeof listed.deleteBlock], [1, 'string']);
+    expectStatus(await admin('/costs/' + pack.id, { method: 'DELETE' }), 409);
+
+    // A client without the costs keeps the links, and an empty list frees the cost for deletion.
+    expectStatus(await save({}), 200);
+    assert.equal(expectStatus(await admin(pricing), 200).costs.length, 2);
+    expectStatus(await save({ costItemIds: [] }), 200);
+    expectStatus(await admin('/costs/' + pack.id, { method: 'DELETE' }), 200);
+    const { events } = expectStatus(await admin('/audit?' + new URLSearchParams({ action: 'Alterar parâmetros de estoque' })), 200);
+    assert.ok(events.some(row => row.targetId === product.id && row.details?.after?.['Custos vinculados']?.length === 2));
+  });
+
   await t.test('despesas entram uma única vez no custo e na média do fabricado', async () => {
     const input = await createProduct('DESPESA-INSUMO', unit.id);
     const piece = await createProduct('DESPESA-PECA', unit.id);

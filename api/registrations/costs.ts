@@ -3,6 +3,7 @@ import { CostItem } from '@prisma/client';
 import { z } from 'zod';
 import { Require } from '../access/access';
 import { Audit, auditChange } from '../audit/recorder';
+import { coverable } from '../catalog/pricing';
 import { Database, idField, nameField, parse, positive, serial } from '../shared';
 
 const costModeLabels = { VALUE: 'Valor (R$)', PERCENT: 'Percentual (%)' } as const;
@@ -66,6 +67,15 @@ export class CostItemService {
       const before = await tx.costItem.findUnique({ where: { id } });
       if (!before) throw new NotFoundException('Custo não encontrado.');
       const cost = await tx.costItem.update({ where: { id }, data });
+      // Linked products read the new value, so none of them may be left without a possible price.
+      const linked = await tx.product.findMany({
+        where: { costs: { some: { costItemId: id } } },
+        select: { sku: true, marginPercent: true, costs: { select: { costItem: { select: { mode: true, base: true, value: true, active: true } } } } },
+      });
+      const blocked = linked.filter(product => !coverable(product.marginPercent, product.costs.map(link => link.costItem))).map(product => product.sku);
+      if (blocked.length) {
+        throw new ConflictException('Com este valor, a margem e os custos sobre a venda chegariam a 100% em ' + blocked.sort().join(', ') + '. Ajuste esses produtos antes.');
+      }
       auditChange(values(before), values(cost));
       return cost;
     });

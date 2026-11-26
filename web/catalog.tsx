@@ -132,7 +132,7 @@ export function Catalog({ page, edit, seeStock = false, editStock = false }: {
 
     {data && edit && product !== undefined && <Modal wide title={product ? 'Editar produto' : 'Novo produto'} subtitle={product?.sku} close={() => setProduct(undefined)}>
       <ProductForm data={data} product={product} editStock={editStock} save={payload => save('products', payload, product?.id)}
-        savedStock={async () => { notify('Estoque e venda salvos.'); }} filesChanged={reload} />
+        savedStock={async () => { notify('Preço e estoque salvos.'); }} filesChanged={reload} />
     </Modal>}
     {data && edit && kit !== undefined && <Modal wide title={kit ? 'Editar kit' : 'Novo kit'} subtitle={kit?.sku} close={() => setKit(undefined)}>
       <KitForm data={data} kit={kit ?? undefined} save={payload => save('kits', payload, kit?.id)} />

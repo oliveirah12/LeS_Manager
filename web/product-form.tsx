@@ -1,7 +1,6 @@
-import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { marginShortfall, suggestedPrice } from './format';
-import { api, brl, Field, Form, Loading, message, Product, quantity, useClosePanel, useData } from './ui';
+import { PricingSection } from './pricing';
+import { Field, Product } from './ui';
 
 export type MeasureRow = { key: number; name: string; value: string; unit: string };
 export const measureRows = (product?: Product | null): MeasureRow[] => (product?.measures ?? []).map((row, key) => ({ ...row, key }));
@@ -41,50 +40,9 @@ export function TechnicalFields({ product, rows, setRows }: {
   </>;
 }
 
-type CommercialValues = { id: string; symbol: string; currentCost: string | null; minStock: string | null; salePrice: string | null; marginPercent: string | null };
-
-/** Minimum, margin and price. The margin only suggests a price: what is saved is the price the person confirms. */
-export function CommercialForm({ product, saved, closeOnSave = false }: { product: CommercialValues; saved: () => Promise<void>; closeOnSave?: boolean }) {
-  const [margin, setMargin] = useState(product.marginPercent ?? '');
-  const [price, setPrice] = useState(product.salePrice ?? '');
-  const closePanel = useClosePanel();
-  const suggestion = suggestedPrice(product.currentCost, margin);
-  const shortfall = marginShortfall(price, product.currentCost, margin);
-  return <Form label="Salvar estoque e venda" cancel={closeOnSave ? 'Cancelar' : undefined} action={async values => {
-    await api('stock/products/' + product.id + '/settings', {
-      minStock: String(values.get('minStock') ?? '').trim() || null, salePrice: price.trim() || null, marginPercent: margin.trim() || null,
-    }, 'PATCH');
-    await saved();
-    if (closeOnSave) closePanel?.();
-  }}>
-    <Field name="minStock" label={'Estoque mínimo (' + product.symbol + ')'} inputMode="decimal" required={false}
-      defaultValue={product.minStock ?? undefined} hint="Vazio: sem alerta. O aviso compara com o saldo livre, sem o que está reservado." />
-    <div className="form-grid">
-      <label>Margem desejada (%)
-        <input name="marginPercent" inputMode="decimal" value={margin} onChange={event => setMargin(event.target.value)} />
-        <span className="hint">Parte do preço que fica como lucro.</span>
-      </label>
-      <label>{'Preço de venda por ' + product.symbol + ' (R$)'}
-        <input name="salePrice" inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} />
-        <span className="hint">Custo médio atual: {brl(product.currentCost)}</span>
-      </label>
-    </div>
-    {suggestion && <div className="section-head">
-      <span>Preço sugerido: <strong className="num">{brl(suggestion)}</strong></span>
-      <button type="button" className="btn secondary small" onClick={() => setPrice(suggestion)}>Usar sugestão</button>
-    </div>}
-    {shortfall && <div className="info" role="alert">A margem real é de <strong>{quantity(shortfall)}%</strong>, abaixo da desejada de {quantity(margin.replace(',', '.'))}%.</div>}
-  </Form>;
-}
-
-type CommercialDetails = { symbol: string; stock: { currentCost: string | null; minStock: string | null; salePrice: string | null; marginPercent: string | null } | null };
-
 export function CommercialSection({ id, saved }: { id: string; saved: () => Promise<void> }) {
-  const { data, error, loading } = useData<CommercialDetails>('catalog/products/' + id + '/details');
   return <section className="preview-box">
-    <div className="section-head"><h3>Estoque e venda</h3></div>
-    {message(error)}
-    {!data ? loading && <Loading label="Carregando valores…" />
-      : data.stock && <CommercialForm product={{ id, symbol: data.symbol, ...data.stock }} saved={saved} />}
+    <div className="section-head"><h3>Formação de preço</h3></div>
+    <PricingSection id={id} saved={saved} />
   </section>;
 }

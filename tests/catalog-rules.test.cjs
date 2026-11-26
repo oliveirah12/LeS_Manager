@@ -35,19 +35,29 @@ test('extra measures are exact, positive and not repeated', () => {
 
 test('the stock view reads products through an explicit field list', async () => {
   const queries = {};
-  const capture = name => async args => { queries[name] = args; return []; };
-  const db = {
-    product: { findMany: capture('product') }, kit: { findMany: capture('kit') },
-    productionConsumption: { groupBy: async () => [] },
+  const d = value => new Prisma.Decimal(value);
+  // One product with the pricing columns, which feed the suggestion and must not leave the API.
+  const row = {
+    id: 'p', quantity: d(1), currentCost: d(60), salePrice: null, marginPercent: d(40), minStock: null, wastePercent: d(5), printMinutes: d(30),
+    type: { isManufactured: false }, printer: null, recipe: [], costs: [{ costItem: { id: 'c', name: 'Taxa', mode: 'PERCENT', base: 'SALE', value: d(10), active: true } }],
   };
-  await new CatalogService(db).stockView();
+  const capture = (name, rows = []) => async args => { queries[name] = args; return rows; };
+  const db = {
+    product: { findMany: capture('product', [row]) }, kit: { findMany: capture('kit') },
+    productionConsumption: { groupBy: async () => [] }, productionSettings: { findUniqueOrThrow: async () => ({ energyRate: d(0) }) },
+  };
+  const view = await new CatalogService(db).stockView();
   const componentQuery = queries.kit.include.components.include.product;
   for (const query of [queries.product, componentQuery]) {
     assert.equal(query.include, undefined);
     assert.equal(query.select.currentCost, true);
-    assert.equal(query.select.wastePercent, undefined);
     assert.equal(query.select.revision, undefined);
   }
+  assert.equal(componentQuery.select.wastePercent, undefined);
+  const [product] = view.products;
+  for (const key of ['wastePercent', 'printMinutes', 'printer', 'recipe', 'costs']) assert.equal(key in product, false, key);
+  // 60 ÷ (1 − 40% − 10%) = 120
+  assert.equal(product.suggestedPrice.toFixed(), '120');
 });
 
 function service(usage, unitFamily = 'mass') {
