@@ -68,7 +68,7 @@ export function ProductForm({ data, product, editStock, save, changed }: {
   const [pricing, setPricing] = useState<{ draft: PricingDraft; changed: boolean }>();
   useEffect(() => {
     const view = recipeView.data;
-    if (view) setRecipe(current => current ?? { draft: recipeDraft(view), changed: false });
+    if (view) setRecipe(current => current ?? { draft: recipeDraft(view, data.units), changed: false });
   }, [recipeView.data]);
   useEffect(() => {
     const view = pricingView.data;

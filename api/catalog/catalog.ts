@@ -8,6 +8,7 @@ import { canAccess } from '../access/security';
 import { Audit, auditChange } from '../audit/recorder';
 import { FileService } from '../files/files';
 import { Database, idField, nameField, parse, positive, serial, skuField, storedDecimal } from '../shared';
+import { colorLabel, colorLabelSelect } from './colors';
 import { belowMinimum, kitCosting, recipeEstimate, saleMargin, stockValue, sumValues } from '../stock/cost';
 import { currentEnergyRate, pricingSelect, productPricing } from './pricing';
 
@@ -93,27 +94,28 @@ const kitValues = (kit: AuditedKit) => ({
 const kitAudit = { components: { include: { product: { select: { sku: true } } } } } as const;
 const productUsage = {
   _count: { select: {
-    movements: true, kitComponents: true, recipe: true, usedInRecipes: true, productionItems: true, productionInputs: true, replacedInputs: true, quoteItems: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } },
+    movements: true, kitComponents: true, recipe: true, colorRecipe: true, usedInRecipes: true, productionItems: true, productionInputs: true, replacedInputs: true, quoteItems: true, inventoryRows: { where: { batch: { confirmedAt: { not: null } } } },
   } },
 } as const;
 const kitUsage = { _count: { select: { movements: true } } } as const;
 
 /** Why a product is in use. Such a product cannot be deleted or moved to another unit family. */
 function productBlock(usage: {
-  movements: number; kitComponents: number; inventoryRows: number; recipe: number; usedInRecipes: number; productionItems: number; productionInputs: number; replacedInputs: number; quoteItems: number;
+  movements: number; kitComponents: number; inventoryRows: number; recipe: number; colorRecipe: number; usedInRecipes: number; productionItems: number; productionInputs: number; replacedInputs: number; quoteItems: number;
 }) {
   if (usage.movements) return 'O produto tem movimentações no histórico.';
   if (usage.productionItems || usage.productionInputs || usage.replacedInputs) return 'O produto consta em ordens de produção.';
   if (usage.quoteItems) return 'O produto consta em orçamentos.';
   if (usage.kitComponents) return 'O produto compõe um kit.';
   if (usage.inventoryRows) return 'O produto consta em inventário confirmado.';
-  if (usage.recipe) return 'O produto tem ficha técnica.';
+  if (usage.recipe || usage.colorRecipe) return 'O produto tem ficha técnica.';
   return usage.usedInRecipes ? 'O produto é insumo de uma ficha técnica.' : null;
 }
 const kitBlock = (usage: { movements: number }) => usage.movements ? 'O kit tem saídas no histórico.' : null;
-function productTypeBlock(id: string, products: number) {
+function productTypeBlock(id: string, products: number, colorInputs = 0) {
   if (id === defaultProductType) return 'Este é o tipo padrão dos produtos.';
-  return products ? 'O tipo está em uso por ' + products + (products === 1 ? ' produto.' : ' produtos.') : null;
+  if (products) return 'O tipo está em uso por ' + products + (products === 1 ? ' produto.' : ' produtos.');
+  return colorInputs ? 'O tipo está em fichas técnicas por cor.' : null;
 }
 /**
  * Stored quantities do not record the unit that was typed, so any balance or history
@@ -122,7 +124,7 @@ function productTypeBlock(id: string, products: number) {
 const usedProduct: Prisma.ProductWhereInput = {
   OR: [
     { quantity: { not: 0 } }, { movements: { some: {} } }, { kitComponents: { some: {} } }, { inventoryRows: { some: {} } },
-    { recipe: { some: {} } }, { usedInRecipes: { some: {} } }, { productionItems: { some: {} } }, { productionInputs: { some: {} } },
+    { recipe: { some: {} } }, { colorRecipe: { some: {} } }, { usedInRecipes: { some: {} } }, { productionItems: { some: {} } }, { productionInputs: { some: {} } },
   ],
 };
 const familyInUseMessage = 'A família já tem saldo ou histórico.';
@@ -161,11 +163,11 @@ export class CatalogService {
         include: { _count: { select: { groups: true, brands: true, colors: true, departments: true } } },
         orderBy: [{ kind: 'asc' }, { name: 'asc' }],
       }),
-      this.db.productType.findMany({ include: { _count: { select: { products: true } } }, orderBy: { name: 'asc' } }),
+      this.db.productType.findMany({ include: { _count: { select: { products: true, colorInputs: true } } }, orderBy: { name: 'asc' } }),
       this.db.unit.findMany({ where: { products: { some: usedProduct } }, select: { familyId: true }, distinct: ['familyId'] }),
     ]);
     const productTypes = types.map(({ _count, ...type }) => ({
-      ...type, products: _count.products, isDefault: type.id === defaultProductType, deleteBlock: productTypeBlock(type.id, _count.products),
+      ...type, products: _count.products, isDefault: type.id === defaultProductType, deleteBlock: productTypeBlock(type.id, _count.products, _count.colorInputs),
     }));
     const inUse = new Set(usedUnits.map(unit => unit.familyId));
     const references = storedReferences.map(({ _count, ...reference }) => ({
@@ -245,10 +247,12 @@ export class CatalogService {
     return serial(this.db, async tx => {
       const before = id ? await tx.productType.findUnique({ where: { id } }) : null;
       if (id && !before) throw new NotFoundException('Tipo de produto não encontrado.');
-      if (before?.isManufactured && !data.isManufactured && await tx.productInput.count({ where: { product: { typeId: id } } })) {
+      const withRecipe = async () => await tx.productInput.count({ where: { product: { typeId: id } } }) + await tx.productColorInput.count({ where: { product: { typeId: id } } });
+      if (before?.isManufactured && !data.isManufactured && await withRecipe()) {
         throw new ConflictException('Há produtos deste tipo com ficha técnica, então ele precisa continuar fabricado.');
       }
-      if (before?.isInput && !data.isInput && await tx.productInput.count({ where: { input: { typeId: id } } })) {
+      const inRecipes = async () => await tx.productInput.count({ where: { input: { typeId: id } } }) + await tx.productColorInput.count({ where: { colorInput: { typeId: id } } });
+      if (before?.isInput && !data.isInput && await inRecipes()) {
         throw new ConflictException('Há produtos deste tipo em fichas técnicas, então ele precisa continuar como insumo.');
       }
       auditChange(before && productTypeValues(before), productTypeValues(data));
@@ -258,9 +262,9 @@ export class CatalogService {
 
   deleteProductType(id: string) {
     return serial(this.db, async tx => {
-      const type = await tx.productType.findUnique({ where: { id }, include: { _count: { select: { products: true } } } });
+      const type = await tx.productType.findUnique({ where: { id }, include: { _count: { select: { products: true, colorInputs: true } } } });
       if (!type) throw new NotFoundException('Tipo de produto não encontrado.');
-      const block = productTypeBlock(id, type._count.products);
+      const block = productTypeBlock(id, type._count.products, type._count.colorInputs);
       if (block) throw new ConflictException(block);
       await tx.productType.delete({ where: { id } });
       auditChange(productTypeValues(type), null);
@@ -281,7 +285,7 @@ export class CatalogService {
     ]);
     return {
       ...registrations,
-      products: products.map(({ _count, ...product }) => ({ ...product, hasRecipe: _count.recipe > 0, fileCount: _count.files, deleteBlock: productBlock(_count) })),
+      products: products.map(({ _count, ...product }) => ({ ...product, hasRecipe: _count.recipe + _count.colorRecipe > 0, fileCount: _count.files, deleteBlock: productBlock(_count) })),
       kits: kits.map(({ _count, ...kit }) => ({ ...kit, deleteBlock: kitBlock(_count) })),
     };
   }
@@ -320,6 +324,7 @@ export class CatalogService {
         printMinutes: true, printer: pricingSelect.printer, costs: pricingSelect.costs,
         kitComponents: { select: { quantity: true, kit: { select: { sku: true, name: true, active: true } } }, orderBy: { kitId: 'asc' } },
         usedInRecipes: { select: { quantity: true, product: { select: { sku: true, name: true, active: true } } }, orderBy: { productId: 'asc' } },
+        colorRecipe: { select: { quantity: true, colorInput: { select: { ...colorLabelSelect, family: { select: { units: { where: { isBase: true }, select: { symbol: true } } } } } } } },
         recipe: { orderBy: { inputId: 'asc' }, select: {
           quantity: true, inputId: true, input: { select: { sku: true, name: true, active: true, quantity: true, currentCost: true, ...productInclude } },
         } },
@@ -358,7 +363,10 @@ export class CatalogService {
       kits: product.kitComponents.map(row => ({ ...row.kit, quantity: row.quantity })),
       recipe: seeRecipe ? {
         wastePercent: product.wastePercent,
-        inputs: product.recipe.map(row => ({ sku: row.input.sku, name: row.input.name, symbol: symbol(row.input), quantity: row.quantity })),
+        inputs: [
+          ...product.recipe.map(row => ({ sku: row.input.sku, name: row.input.name, symbol: symbol(row.input), quantity: row.quantity })),
+          ...product.colorRecipe.map(row => ({ sku: 'Qualquer marca', name: colorLabel(row.colorInput), symbol: row.colorInput.family.units[0]?.symbol ?? '', quantity: row.quantity })),
+        ],
         usedIn: product.usedInRecipes.map(row => ({ ...row.product, quantity: row.quantity })),
       } : null,
       orders: seeOrders ? [...orders.values()].sort((a, b) => b.number - a.number) : null,

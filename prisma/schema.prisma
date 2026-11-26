@@ -110,6 +110,8 @@ model Reference {
   brands      Product[]     @relation("ProductBrand")
   colors      Product[]     @relation("ProductColor")
   departments Product[]     @relation("ProductDepartment")
+  colorInputGroups ColorInput[] @relation("ColorInputGroup")
+  colorInputColors ColorInput[] @relation("ColorInputColor")
   @@unique([kind, name])
 }
 
@@ -117,6 +119,7 @@ model UnitFamily {
   id    String @id @default(uuid())
   name  String @unique
   units Unit[]
+  colorInputs ColorInput[]
 }
 
 model Unit {
@@ -136,6 +139,7 @@ model ProductType {
   isInput        Boolean   @default(false)
   isManufactured Boolean   @default(false)
   products       Product[]
+  colorInputs    ColorInput[]
 }
 
 model Product {
@@ -183,6 +187,7 @@ model Product {
   kitComponents KitComponent[]
   inventoryRows InventoryRow[]
   recipe        ProductInput[]  @relation("Recipe")
+  colorRecipe   ProductColorInput[]
   usedInRecipes ProductInput[]  @relation("RecipeInput")
   productionItems  ProductionItem[]
   productionInputs ProductionConsumption[] @relation("ConsumptionInput")
@@ -254,6 +259,36 @@ model ProductInput {
   quantity  Decimal @db.Decimal(30, 12)
   @@id([productId, inputId])
   @@index([inputId])
+}
+
+/**
+ * Any active input of this type, material group and color, in this unit family. Members are derived, never linked,
+ * so a brand bought later already fills the recipes. The migration keeps it unique per type, group and color, an empty group included.
+ */
+model ColorInput {
+  id          String              @id @default(uuid())
+  typeId      String
+  type        ProductType         @relation(fields: [typeId], references: [id])
+  groupId     String?
+  group       Reference?          @relation("ColorInputGroup", fields: [groupId], references: [id], onDelete: Restrict)
+  colorId     String
+  color       Reference           @relation("ColorInputColor", fields: [colorId], references: [id])
+  familyId    String
+  family      UnitFamily          @relation(fields: [familyId], references: [id])
+  recipes     ProductColorInput[]
+  consumption ProductionConsumption[]
+  @@index([colorId])
+}
+
+/// Recipe line that accepts any brand of a color, in the base unit of its family.
+model ProductColorInput {
+  productId    String
+  product      Product    @relation(fields: [productId], references: [id])
+  colorInputId String
+  colorInput   ColorInput @relation(fields: [colorInputId], references: [id])
+  quantity     Decimal    @db.Decimal(30, 12)
+  @@id([productId, colorInputId])
+  @@index([colorInputId])
 }
 
 model Printer {
@@ -463,12 +498,16 @@ model ProductionConsumption {
   /// Recipe input this line replaced in a planned order. Empty when it is the recipe's own input.
   originalInputId String?
   originalInput   Product? @relation("ConsumptionOriginal", fields: [originalInputId], references: [id], onDelete: Restrict)
+  /// Color of the recipe this brand fills. Several brands of one color are several lines.
+  colorInputId    String?
+  colorInput      ColorInput? @relation(fields: [colorInputId], references: [id], onDelete: Restrict)
   planned   Decimal        @db.Decimal(30, 12)
   used      Decimal?       @db.Decimal(30, 12)
   unitCost  Decimal?       @db.Decimal(30, 12)
   @@id([orderId, productId, inputId])
   @@index([inputId])
   @@index([originalInputId])
+  @@index([colorInputId])
 }
 
 /// Extra cost of an order. An INPUT row follows the last purchase expense × consumption until someone types a value.

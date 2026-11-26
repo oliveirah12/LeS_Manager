@@ -5,7 +5,7 @@ const { Prisma } = require('@prisma/client');
 const { CatalogService, measuresField, purchaseUrlField } = require('../dist/api/catalog/catalog.js');
 const { formsCycle } = require('../dist/api/catalog/recipe.js');
 
-const unused = { movements: 0, kitComponents: 0, inventoryRows: 0, recipe: 0, usedInRecipes: 0, productionItems: 0, productionInputs: 0 };
+const unused = { movements: 0, kitComponents: 0, inventoryRows: 0, recipe: 0, colorRecipe: 0, usedInRecipes: 0, productionItems: 0, productionInputs: 0 };
 
 test('finds a product that would consume itself through another input', () => {
   const edges = [{ productId: 'b', inputId: 'c' }, { productId: 'c', inputId: 'a' }];

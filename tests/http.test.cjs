@@ -1600,6 +1600,41 @@ test('API REST com PostgreSQL', {
     expectStatus(await reader('/company/logo'), 404);
   });
 
+  await t.test('ficha por cor: aceita qualquer marca do tipo, grupo e cor, audita e protege o tipo', async () => {
+    const printedType = '00000000-0000-4000-8000-000000000003';
+    const typeName = 'Tipo ' + sku('COR');
+    const filamentType = expectStatus(await admin('/catalog/product-types', { method: 'POST', body: { name: typeName, isInput: true, isManufactured: false } }), 201).id;
+    const reference = (kind, name) => admin('/catalog/references', { method: 'POST', body: { kind, name: sku(name) } }).then(response => expectStatus(response, 201));
+    const [black, pla, brandA, brandB] = await Promise.all([reference('COR', 'PRETO'), reference('GRUPO', 'PLA'), reference('MARCA', 'A'), reference('MARCA', 'B')]);
+    const typed = async (name, typeId, extra = {}) => {
+      const product = await createProduct(name, unit.id);
+      expectStatus(await admin('/catalog/products/' + product.id, { method: 'PATCH', body: { name, typeId, ...extra } }), 200);
+      return product;
+    };
+    await typed('COR-PLA-A', filamentType, { colorId: black.id, groupId: pla.id, brandId: brandA.id });
+    await typed('COR-PLA-B', filamentType, { colorId: black.id, groupId: pla.id, brandId: brandB.id });
+    const piece = await typed('COR-PECA', printedType);
+    const options = expectStatus(await admin('/catalog/products/' + piece.id + '/recipe'), 200);
+    const offered = options.colors.find(row => row.colorId === black.id && row.groupId === pla.id);
+    assert.equal(offered.brands, 2);
+    const line = { typeId: filamentType, groupId: pla.id, colorId: black.id, unitId: unit.id, quantity: '30' };
+    const save = colorInputs => admin('/catalog/products/' + piece.id + '/recipe', { method: 'PUT', body: { wastePercent: '0', inputs: [], colorInputs } });
+    expectStatus(await save([line, line]), 400);
+    expectStatus(await save([{ ...line, typeId: printedType }]), 400);
+    expectStatus(await save([{ ...line, colorId: pla.id }]), 404);
+    expectStatus(await save([line]), 200);
+    const saved = expectStatus(await admin('/catalog/products/' + piece.id + '/recipe'), 200);
+    assert.deepEqual(saved.colorInputs.map(row => [row.colorId, row.groupId, row.quantity]), [[black.id, pla.id, '30']]);
+    const audit = await waitForAuditEvent({ action: 'Alterar ficha técnica' }, event => event.details.after?.['Insumos por cor']?.length === 1);
+    assert.equal(audit.details.after['Insumos por cor'][0], [typeName, pla.name, black.name].join(' · ') + ' × 30');
+    // Saving the same color again reuses it, and the product now counts as having a recipe.
+    expectStatus(await save([{ ...line, quantity: '25' }]), 200);
+    assert.equal(await db.colorInput.count({ where: { colorId: black.id } }), 1);
+    const listed = expectStatus(await admin('/catalog'), 200).products.find(row => row.id === piece.id);
+    assert.deepEqual([listed.hasRecipe, listed.deleteBlock], [true, 'O produto tem ficha técnica.']);
+    expectStatus(await admin('/catalog/product-types/' + filamentType, { method: 'PATCH', body: { name: typeName, isInput: false, isManufactured: false } }), 409);
+  });
+
   await t.test('orçamentos: acessos, custo oculto, aprovação gera a ordem e exclusão só do recusado', async () => {
     const [filamentType, printedType] = [2, 3].map(n => '00000000-0000-4000-8000-00000000000' + n);
     const typed = async (name, typeId) => {

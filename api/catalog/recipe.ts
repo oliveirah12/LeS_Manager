@@ -9,22 +9,27 @@ import { Audit, auditChange } from '../audit/recorder';
 import { Database, idField, nonnegative, parse, positive, serial } from '../shared';
 import { printerHourCost } from '../stock/cost';
 import { inBase, productInclude } from './catalog';
+import { colorKey, colorLabel, colorLabelSelect, colorMembers, colorOptions, ensureColorInput } from './colors';
 import { currentEnergyRate, printMinutesField } from './pricing';
 
 export const recipeFields = z.object({
   wastePercent: nonnegative.refine(value => value.lte(100) && value.decimalPlaces() <= 2, 'Informe a perda entre 0 e 100, com até 2 casas'),
   inputs: z.array(z.object({ inputId: idField, unitId: idField, quantity: positive })).max(100),
+  /** Lines that accept any brand of a color. Clients that do not send them keep none. */
+  colorInputs: z.array(z.object({ typeId: idField, groupId: idField.nullable(), colorId: idField, unitId: idField, quantity: positive })).max(50).default([]),
   printMinutes: printMinutesField.nullable().default(null),
   printerId: idField.nullable().default(null),
 });
 type Recipe = z.infer<typeof recipeFields>;
 const recipeAudit = {
   wastePercent: true, printMinutes: true, printerId: true, printer: { select: { name: true } }, recipe: { select: { quantity: true, input: { select: { sku: true } } } },
+  colorRecipe: { select: { quantity: true, colorInput: { select: colorLabelSelect } } },
 } as const;
 type AuditedRecipe = Prisma.ProductGetPayload<{ select: typeof recipeAudit }>;
 const recipeValues = (product: AuditedRecipe) => ({
   'Perda (%)': product.wastePercent.toFixed(),
   Insumos: product.recipe.map(item => item.input.sku + ' × ' + item.quantity.toFixed()).sort(),
+  'Insumos por cor': product.colorRecipe.map(item => colorLabel(item.colorInput) + ' × ' + item.quantity.toFixed()).sort(),
   'Tempo por peça (min)': product.printMinutes?.toFixed() ?? null, Impressora: product.printer?.name ?? null,
 });
 
@@ -55,20 +60,28 @@ export class RecipeService {
    * Without an id, it lists what a product not saved yet can use: an empty recipe and active inputs and printers.
    */
   async view(id: string | null, canSeeCost: boolean) {
-    const [product, candidates, printers, energyRate] = await Promise.all([
-      id ? this.db.product.findUnique({ where: { id }, select: { wastePercent: true, printMinutes: true, printerId: true, recipe: { select: { inputId: true, quantity: true } } } })
-        : { wastePercent: new Prisma.Decimal(0), printMinutes: null, printerId: null, recipe: [] },
+    const [product, candidates, printers, energyRate, offered] = await Promise.all([
+      id ? this.db.product.findUnique({ where: { id }, select: {
+        wastePercent: true, printMinutes: true, printerId: true, recipe: { select: { inputId: true, quantity: true } },
+        colorRecipe: { select: { quantity: true, colorInput: { select: colorLabelSelect } } },
+      } }) : { wastePercent: new Prisma.Decimal(0), printMinutes: null, printerId: null, recipe: [], colorRecipe: [] },
       this.db.product.findMany({
         where: id ? { id: { not: id }, OR: [{ active: true, type: { isInput: true } }, { usedInRecipes: { some: { productId: id } } }] } : { active: true, type: { isInput: true } },
-        select: { id: true, sku: true, name: true, active: true, currentCost: true, ...productInclude }, orderBy: { sku: 'asc' },
+        select: { id: true, sku: true, name: true, active: true, currentCost: true, typeId: true, groupId: true, colorId: true, ...productInclude }, orderBy: { sku: 'asc' },
       }),
       // An inactive printer leaves the list, but stays on the recipe that already uses it.
       this.db.printer.findMany({ where: id ? { OR: [{ active: true }, { products: { some: { id } } }] } : { active: true }, orderBy: { name: 'asc' } }),
       currentEnergyRate(this.db),
+      colorOptions(this.db),
     ]);
     if (!product) throw new NotFoundException('Produto não encontrado.');
+    // A color already in the recipe stays choosable even when no active brand fills it today.
+    const saved = product.colorRecipe.map(({ quantity, colorInput: { id: _id, type, group, color, ...key } }) => ({ ...key, quantity, label: colorLabel({ type, group, color }) }));
+    const colors = [...offered, ...saved.filter(row => !offered.some(option => colorKey(option) === colorKey(row)))
+      .map(({ quantity: _quantity, ...row }) => ({ ...row, brands: 0 }))];
     return {
       wastePercent: product.wastePercent, inputs: product.recipe, canSeeCost, printMinutes: product.printMinutes, printerId: product.printerId,
+      colorInputs: saved, colors,
       candidates: candidates.map(({ currentCost, ...item }) => canSeeCost ? { ...item, currentCost } : item),
       printers: printers.map(printer => ({
         id: printer.id, name: printer.name, active: printer.active,
@@ -112,12 +125,46 @@ export async function applyRecipe(tx: Prisma.TransactionClient, id: string, data
     if (!input.active) throw new BadRequestException('Insumo inativo: ' + input.sku + '.');
     return { inputId: input.id, quantity: inBase(unit, input.unit.familyId, item.quantity) };
   });
-  if (formsCycle(id, inputIds, edges)) throw new ConflictException('Esta ficha faria o produto consumir a si mesmo por meio de outro insumo.');
+  const colorRows = await colorLines(tx, data.colorInputs);
+  // Today's brands of each color count as inputs, so a product can neither fill its own color nor reach itself through one.
+  const memberIds = colorRows.length ? (await tx.product.findMany({ where: { OR: colorRows.map(row => colorMembers(row.color)) }, select: { id: true } })).map(row => row.id) : [];
+  if (memberIds.includes(id)) throw new BadRequestException('Um produto não pode consumir a si mesmo.');
+  if (formsCycle(id, [...inputIds, ...memberIds], edges)) throw new ConflictException('Esta ficha faria o produto consumir a si mesmo por meio de outro insumo.');
   const saved = await tx.product.update({
-    where: { id }, data: { wastePercent: data.wastePercent, printMinutes: data.printMinutes, printerId: data.printerId, recipe: { deleteMany: {}, create: rows } },
+    where: { id },
+    data: {
+      wastePercent: data.wastePercent, printMinutes: data.printMinutes, printerId: data.printerId, recipe: { deleteMany: {}, create: rows },
+      colorRecipe: { deleteMany: {}, create: colorRows.map(row => ({ colorInputId: row.color.id, quantity: row.quantity })) },
+    },
     select: recipeAudit,
   });
   return { before: recipeValues(product), after: recipeValues(saved), saved: { id, wastePercent: saved.wastePercent, printMinutes: saved.printMinutes, printerId: saved.printerId } };
+}
+
+/**
+ * Checks each color line and registers its color the first time. The type must be used as input, the color and the
+ * group must be registered as such, and the quantity is kept in the base unit of the chosen unit's family.
+ */
+async function colorLines(tx: Prisma.TransactionClient, lines: Recipe['colorInputs']) {
+  if (new Set(lines.map(colorKey)).size !== lines.length) throw new BadRequestException('Inclua cada cor apenas uma vez.');
+  if (!lines.length) return [];
+  const [types, references, units] = await Promise.all([
+    tx.productType.findMany({ where: { id: { in: lines.map(line => line.typeId) } } }),
+    tx.reference.findMany({ where: { id: { in: lines.flatMap(line => line.groupId ? [line.colorId, line.groupId] : [line.colorId]) } } }),
+    tx.unit.findMany({ where: { id: { in: lines.map(line => line.unitId) } } }),
+  ]);
+  const rows = [];
+  for (const line of lines) {
+    const type = types.find(row => row.id === line.typeId);
+    const color = references.find(row => row.id === line.colorId && row.kind === 'COR');
+    const group = line.groupId ? references.find(row => row.id === line.groupId && row.kind === 'GRUPO') : null;
+    const unit = units.find(row => row.id === line.unitId);
+    if (!type || !color || group === undefined || !unit) throw new NotFoundException('Tipo, grupo, cor ou unidade não encontrado.');
+    if (!type.isInput) throw new BadRequestException('O tipo ' + type.name + ' não é usado como insumo.');
+    const saved = await ensureColorInput(tx, { typeId: type.id, groupId: group?.id ?? null, colorId: color.id, familyId: unit.familyId });
+    rows.push({ color: saved, quantity: inBase(unit, saved.familyId, line.quantity) });
+  }
+  return rows;
 }
 
 @Controller('catalog')
