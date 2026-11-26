@@ -85,24 +85,45 @@ function scaled(text: string | null | undefined) {
 }
 const validMargin = (margin: bigint | null): margin is bigint => margin !== null && margin < 100n * priceScale && margin % (priceScale / 100n) === 0n;
 
-/** Same rule as salePricing in the API: cost ÷ (1 − margin), rounded up, with 4 places under R$ 1. */
-export function suggestedPrice(cost: string | null, marginPercent: string) {
+export type PricingCost = { mode: 'VALUE' | 'PERCENT'; base: 'COST' | 'SALE'; value: string };
+/**
+ * The cost before the sale percentages, scaled by 100 × 10^24, and the share of the price left after margin and sale
+ * percentages, scaled by 10^12. Null when a value cannot be read or no price can cover the margin.
+ */
+function pricingTerms(cost: string | null, marginPercent: string, costs: PricingCost[]) {
   const [unit, margin] = [scaled(cost), scaled(marginPercent)];
-  if (unit === null || unit <= 0n || !validMargin(margin)) return null;
-  const divisor = 100n * priceScale - margin;
-  const places = unit * 100n >= divisor ? 2 : 4;
+  const values = costs.map(row => ({ ...row, scaled: scaled(row.value) }));
+  if (unit === null || unit <= 0n || !validMargin(margin) || values.some(row => row.scaled === null)) return null;
+  const sum = (match: (row: PricingCost) => boolean) => values.filter(match).reduce((total, row) => total + row.scaled!, 0n);
+  const fixed = sum(row => row.mode === 'VALUE');
+  const costShare = sum(row => row.mode === 'PERCENT' && row.base === 'COST');
+  const saleShare = sum(row => row.mode === 'PERCENT' && row.base === 'SALE');
+  const total = (unit + fixed) * 100n * priceScale + unit * costShare;
+  const divisor = 100n * priceScale - margin - saleShare;
+  return divisor > 0n ? { total, divisor, margin, saleShare } : null;
+}
+
+/** Same rule as pricingBreakdown in the API: (cost + fixed + %cost) ÷ (1 − margin − Σ%sale), rounded up, with 4 places under R$ 1. */
+export function suggestedPrice(cost: string | null, marginPercent: string, costs: PricingCost[] = []) {
+  const terms = pricingTerms(cost, marginPercent, costs);
+  if (!terms) return null;
+  const bottom = terms.divisor * priceScale;
+  const places = terms.total >= bottom ? 2 : 4;
   const power = 10n ** BigInt(places);
-  const price = (unit * 100n * power + divisor - 1n) / divisor;
+  const price = (terms.total * power + bottom - 1n) / bottom;
   const fraction = (price % power).toString().padStart(places, '0').replace(/0+$/, '');
   return (price / power).toString() + (fraction ? '.' + fraction : '');
 }
 
 /** Real margin when it falls short of the desired one, cut to 2 places so it never looks better than it is. */
-export function marginShortfall(salePrice: string, cost: string | null, marginPercent: string) {
-  const [price, unit, margin] = [scaled(salePrice), scaled(cost), scaled(marginPercent)];
-  if (price === null || price <= 0n || unit === null || unit <= 0n || !validMargin(margin)) return null;
-  if ((price - unit) * 100n * priceScale >= margin * price) return null;
-  const hundredths = (price - unit) * 10000n / price;
+export function marginShortfall(salePrice: string, cost: string | null, marginPercent: string, costs: PricingCost[] = []) {
+  const price = scaled(salePrice);
+  const terms = pricingTerms(cost, marginPercent, costs);
+  if (price === null || price <= 0n || !terms) return null;
+  // What is left of the price after every cost, as 100 × price × 10^24, so it compares with the margin without rounding.
+  const left = 100n * price * priceScale - terms.total - price * terms.saleShare;
+  if (left >= terms.margin * price) return null;
+  const hundredths = left * 100n / (price * priceScale);
   const sign = hundredths < 0n ? '-' : '';
   const size = hundredths < 0n ? -hundredths : hundredths;
   return sign + (size / 100n) + '.' + (size % 100n).toString().padStart(2, '0');

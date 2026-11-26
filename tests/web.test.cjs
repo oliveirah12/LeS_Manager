@@ -95,6 +95,19 @@ test('the price preview matches the API rule exactly', () => {
   for (const [cost, margin] of [[null, '40'], ['0', '40'], ['60', '100'], ['60', '1.234'], ['60', 'x'], ['60', '']]) assert.equal(suggestedPrice(cost, margin), null);
 });
 
+test('the price preview with registered costs matches the API rule', () => {
+  const costs = [{ mode: 'VALUE', base: 'COST', value: '2.5' }, { mode: 'PERCENT', base: 'COST', value: '3.333' }, { mode: 'PERCENT', base: 'SALE', value: '12' }];
+  const exact = costs.map(row => ({ ...row, value: new Prisma.Decimal(row.value) }));
+  for (const [cost, margin] of [['60', '40'], ['20', '30'], ['0.0853', '40'], ['7.77', '12.34'], ['123456.789012345678', '0.01']]) {
+    const api = salePricing(null, new Prisma.Decimal(cost), new Prisma.Decimal(margin), exact).suggestedPrice.toFixed();
+    assert.equal(suggestedPrice(cost, margin, costs), api, cost + ' / ' + margin);
+    assert.equal(marginShortfall(api, cost, margin, costs), null, cost + ' / ' + margin);
+  }
+  assert.equal(suggestedPrice('60', '40', [{ mode: 'PERCENT', base: 'SALE', value: '60' }]), null);
+  assert.equal(marginShortfall('100', '60', '30', [{ mode: 'PERCENT', base: 'SALE', value: '10' }]), null);
+  assert.equal(marginShortfall('99.99', '60', '30', [{ mode: 'PERCENT', base: 'SALE', value: '10' }]), '29.99');
+});
+
 test('the margin warning shows the real margin without rounding it up', () => {
   assert.equal(marginShortfall('90', '60', '40'), '33.33');
   assert.equal(marginShortfall('100', '60', '40'), null);
